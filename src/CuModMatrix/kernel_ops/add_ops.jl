@@ -20,7 +20,13 @@ function k_add_scalar!(out, A, s, m)
     return
 end
 
-function add!(C::CuModArray, A::CuModArray, B::CuModArray; mod_N::Integer=-1, threads::Int=DEFAULT_THREADS)
+function add!(
+    C::CuModArray,
+    A::CuModArray,
+    B::CuModArray;
+    mod_N::Integer = -1,
+    threads::Int = DEFAULT_THREADS,
+)
     m = mod_N > 0 ? mod_N : C.N
     mT = convert(eltype(C.data), m)
     len = length(A.data)
@@ -29,7 +35,13 @@ function add!(C::CuModArray, A::CuModArray, B::CuModArray; mod_N::Integer=-1, th
     return C
 end
 
-function scalar_add!(C::CuModArray, A::CuModArray, s::Number, mod_N::Integer=-1; threads::Int=DEFAULT_THREADS)
+function scalar_add!(
+    C::CuModArray,
+    A::CuModArray,
+    s::Number,
+    mod_N::Integer = -1;
+    threads::Int = DEFAULT_THREADS,
+)
     m = mod_N > 0 ? mod_N : C.N
     mT = convert(eltype(C.data), m)
     sT = convert(eltype(C.data), s)
@@ -56,4 +68,3 @@ function +(s::Number, A::CuModArray)
     scalar_add!(C, A, s)
     return C
 end
-

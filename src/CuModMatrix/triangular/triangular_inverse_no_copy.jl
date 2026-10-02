@@ -18,10 +18,12 @@ NOTE: This only accepts square or wide matrices!
 function _recursive_upper_triangular_inverse_no_copy(
     A::CuArray,
     A_inv::CuArray,
-    row_lower::Int, row_upper::Int,
-    col_lower::Int, col_upper::Int,
+    row_lower::Int,
+    row_upper::Int,
+    col_lower::Int,
+    col_upper::Int,
     N::Int;
-    debug::Bool=false
+    debug::Bool = false,
 )
     if row_upper - row_lower < MAX_INVERSE_SIZE
 
@@ -40,7 +42,14 @@ function _recursive_upper_triangular_inverse_no_copy(
         end
 
         n_active = min(TILE_WIDTH, row_upper - row_lower + 1, col_upper - col_lower + 1)
-        @cuda threads=TILE_WIDTH blocks=1 backward_sub_kernel_32(A, A_all_inv, N, row_lower-1, col_lower-1, n_active)
+        @cuda threads=TILE_WIDTH blocks=1 backward_sub_kernel_32(
+            A,
+            A_all_inv,
+            N,
+            row_lower-1,
+            col_lower-1,
+            n_active,
+        )
 
         if debug
             println("A_all_inv:")
@@ -67,7 +76,7 @@ function _recursive_upper_triangular_inverse_no_copy(
 
     # See lower for an explanation of the split.
 
-    m = floor( (row_upper - row_lower + 1) / (2*TILE_WIDTH) + 1/2)
+    m = floor((row_upper - row_lower + 1) / (2*TILE_WIDTH) + 1/2)
     m = min(max(m, 1), m)
     row_mid = Int(row_lower - 1 + m * TILE_WIDTH)
     col_mid = row_mid
@@ -97,12 +106,19 @@ function _recursive_upper_triangular_inverse_no_copy(
         end
 
         n11 = min(TILE_WIDTH, row_mid - row_lower + 1, col_mid - col_lower + 1)
-        @cuda threads=TILE_WIDTH blocks=1 backward_sub_kernel_32(A, A_11_inv, N, row_lower-1, col_lower-1, n11)
+        @cuda threads=TILE_WIDTH blocks=1 backward_sub_kernel_32(
+            A,
+            A_11_inv,
+            N,
+            row_lower-1,
+            col_lower-1,
+            n11,
+        )
 
         if debug
             println("A_11_inv:")
             display(A_11_inv)
-            
+
             A_11 = @view A[row_lower:row_mid, col_lower:col_mid]
             println("A_11_inv * A_11:")
             tmp = A_11_inv * A_11
@@ -118,35 +134,50 @@ function _recursive_upper_triangular_inverse_no_copy(
             display(A_inv)
         end
 
-        A_22_inv = CUDA.zeros(eltype(A), max(col_upper - col_mid, TILE_WIDTH), max(row_upper - row_mid, TILE_WIDTH))
+        A_22_inv = CUDA.zeros(
+            eltype(A),
+            max(col_upper - col_mid, TILE_WIDTH),
+            max(row_upper - row_mid, TILE_WIDTH),
+        )
 
         if debug
             println("A_22:")
-            display(@view A[row_mid+1:row_mid+TILE_WIDTH, col_mid+1:col_mid+TILE_WIDTH])
+            display(
+                @view A[(row_mid+1):(row_mid+TILE_WIDTH), (col_mid+1):(col_mid+TILE_WIDTH)]
+            )
         end
 
         n22 = min(TILE_WIDTH, row_upper - row_mid, col_upper - col_mid)
-        @cuda threads=TILE_WIDTH blocks=1 backward_sub_kernel_32(A, A_22_inv, N, row_mid, col_mid, n22)
+        @cuda threads=TILE_WIDTH blocks=1 backward_sub_kernel_32(
+            A,
+            A_22_inv,
+            N,
+            row_mid,
+            col_mid,
+            n22,
+        )
 
         if debug
             println("A_22_inv:")
-            display(A_22_inv)   
+            display(A_22_inv)
             println("A_22_inv * A_22:")
-            A_22 = @view A[row_mid+1:row_mid+TILE_WIDTH, col_mid+1:col_mid+TILE_WIDTH]
+            A_22 =
+                @view A[(row_mid+1):(row_mid+TILE_WIDTH), (col_mid+1):(col_mid+TILE_WIDTH)]
             tmp = A_22_inv * A_22
             mod!(tmp, tmp, N)
             display(tmp)
             println("")
         end
 
-        A_inv[col_mid+1:col_upper, row_mid+1:row_upper] = A_22_inv[1:(col_upper - col_mid), 1:(row_upper - row_mid)]
+        A_inv[(col_mid+1):col_upper, (row_mid+1):row_upper] =
+            A_22_inv[1:(col_upper-col_mid), 1:(row_upper-row_mid)]
 
         if debug
             println("A_inv:")
             display(A_inv)
         end
 
-        A_12 = @view A[row_lower:row_mid, col_mid+1:col_upper]
+        A_12 = @view A[row_lower:row_mid, (col_mid+1):col_upper]
 
         if debug
             println("A_12:")
@@ -154,9 +185,13 @@ function _recursive_upper_triangular_inverse_no_copy(
         end
 
         tmp = _exact_mod_matmul_data(A_11_inv, A_12, N)
-        tmp2 = _exact_mod_matmul_data(tmp, A_22_inv[1:(col_upper - col_mid), 1:(row_upper - row_mid)], N)
+        tmp2 = _exact_mod_matmul_data(
+            tmp,
+            A_22_inv[1:(col_upper-col_mid), 1:(row_upper-row_mid)],
+            N,
+        )
         rscalar_sub!(tmp2, tmp2, N, N)
-        A_inv[col_lower:col_mid, row_mid+1:row_upper] = tmp2
+        A_inv[col_lower:col_mid, (row_mid+1):row_upper] = tmp2
 
         if debug
             println("-A_11_inv * A_12 * A_22_inv:")
@@ -165,26 +200,46 @@ function _recursive_upper_triangular_inverse_no_copy(
             println("A_inv:")
             display(A_inv)
         end
-        
+
         return
 
-    else 
+    else
 
         if debug
             println("Third branch: Recursive call!")
         end
 
         _recursive_upper_triangular_inverse_no_copy(
-            A, A_inv, row_lower, row_mid, col_lower, col_mid, N; debug=debug)
+            A,
+            A_inv,
+            row_lower,
+            row_mid,
+            col_lower,
+            col_mid,
+            N;
+            debug = debug,
+        )
         _recursive_upper_triangular_inverse_no_copy(
-            A, A_inv, row_mid+1, row_upper, col_mid+1, col_upper, N; debug=debug)
-        A_12 = @view A[row_lower:row_mid, col_mid+1:col_upper]
+            A,
+            A_inv,
+            row_mid+1,
+            row_upper,
+            col_mid+1,
+            col_upper,
+            N;
+            debug = debug,
+        )
+        A_12 = @view A[row_lower:row_mid, (col_mid+1):col_upper]
         A_11_inv = @view A_inv[col_lower:col_mid, row_lower:row_mid]
-        A_22_inv = @view A_inv[col_mid+1:col_upper, row_mid+1:row_upper]
+        A_22_inv = @view A_inv[(col_mid+1):col_upper, (row_mid+1):row_upper]
         tmp = _exact_mod_matmul_data(A_11_inv, A_12, N)
-        tmp2 = _exact_mod_matmul_data(tmp, A_22_inv[1:(col_upper - col_mid), 1:(row_upper - row_mid)], N)
+        tmp2 = _exact_mod_matmul_data(
+            tmp,
+            A_22_inv[1:(col_upper-col_mid), 1:(row_upper-row_mid)],
+            N,
+        )
         rscalar_sub!(tmp2, tmp2, N, N)
-        A_inv[col_lower:col_mid, row_mid+1:row_upper] = tmp2
+        A_inv[col_lower:col_mid, (row_mid+1):row_upper] = tmp2
 
         return
     end
@@ -195,7 +250,7 @@ end
 
 Computes the inverse of an upper triangular matrix.
 """
-function upper_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool=false)
+function upper_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
     rows, cols = size(A)
 
     if rows <= MAX_INVERSE_SIZE
@@ -210,10 +265,26 @@ function upper_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool=false)
 
     if rows <= cols #square or wide
         _recursive_upper_triangular_inverse_no_copy(
-            A.data, A_inv.data, 1, rows, 1, cols, A.N; debug=debug)
+            A.data,
+            A_inv.data,
+            1,
+            rows,
+            1,
+            cols,
+            A.N;
+            debug = debug,
+        )
     else #tall
         _recursive_upper_triangular_inverse_no_copy(
-            A.data, A_inv.data, 1, cols, 1, cols, A.N; debug=debug)
+            A.data,
+            A_inv.data,
+            1,
+            cols,
+            1,
+            cols,
+            A.N;
+            debug = debug,
+        )
     end
 
     if debug
@@ -247,10 +318,12 @@ NOTE: This only accepts square or tall matrices!
 function _recursive_lower_triangular_inverse_no_copy(
     A::CuArray,
     A_inv::CuArray,
-    row_lower::Int, row_upper::Int,
-    col_lower::Int, col_upper::Int,
+    row_lower::Int,
+    row_upper::Int,
+    col_lower::Int,
+    col_upper::Int,
     N::Int;
-    debug::Bool=false
+    debug::Bool = false,
 )
 
     if col_upper - col_lower < MAX_INVERSE_SIZE
@@ -270,7 +343,14 @@ function _recursive_lower_triangular_inverse_no_copy(
         end
 
         n_active = min(TILE_WIDTH, row_upper - row_lower + 1, col_upper - col_lower + 1)
-        @cuda threads=TILE_WIDTH blocks=1 forward_sub_kernel_32(A, A_all_inv, N, row_lower-1, col_lower-1, n_active)
+        @cuda threads=TILE_WIDTH blocks=1 forward_sub_kernel_32(
+            A,
+            A_all_inv,
+            N,
+            row_lower-1,
+            col_lower-1,
+            n_active,
+        )
 
         if debug
             println("A_all_inv:")
@@ -303,7 +383,7 @@ function _recursive_lower_triangular_inverse_no_copy(
     # To do this, we want a mid as close as possible to (lower + upper) / 2
     # Yet lower - mid + 1 should be a multiple of TILE_WIDTH.
 
-    # In other words, we want to find a coefficient k such that 
+    # In other words, we want to find a coefficient k such that
     # mid = lower - 1 + k * TILE_WIDTH
     # and mid is as close to (and ideally always larger or equal to) (lower + upper) / 2.
 
@@ -320,7 +400,7 @@ function _recursive_lower_triangular_inverse_no_copy(
 
     # Thus middle = (L - 1) + m * TILE_WIDTH
 
-    m = floor( (col_upper - col_lower + 1) / (2*TILE_WIDTH) + 1/2)
+    m = floor((col_upper - col_lower + 1) / (2*TILE_WIDTH) + 1/2)
     m = min(max(m, 1), m)
     col_mid = Int(col_lower - 1 + m * TILE_WIDTH)
     row_mid = col_mid
@@ -350,7 +430,14 @@ function _recursive_lower_triangular_inverse_no_copy(
         end
 
         n11 = min(TILE_WIDTH, row_mid - row_lower + 1, col_mid - col_lower + 1)
-        @cuda threads=TILE_WIDTH blocks=1 forward_sub_kernel_32(A, A_11_inv, N, row_lower-1, col_lower-1, n11)
+        @cuda threads=TILE_WIDTH blocks=1 forward_sub_kernel_32(
+            A,
+            A_11_inv,
+            N,
+            row_lower-1,
+            col_lower-1,
+            n11,
+        )
 
         if debug
             println("A_11_inv:")
@@ -371,28 +458,43 @@ function _recursive_lower_triangular_inverse_no_copy(
             display(A_inv)
         end
 
-        A_22_inv = CUDA.zeros(eltype(A), max(col_upper - col_mid, TILE_WIDTH), max(row_upper - row_mid, TILE_WIDTH))
+        A_22_inv = CUDA.zeros(
+            eltype(A),
+            max(col_upper - col_mid, TILE_WIDTH),
+            max(row_upper - row_mid, TILE_WIDTH),
+        )
 
         if debug
             println("A_22:")
-            display(@view A[row_mid+1:row_mid+TILE_WIDTH, col_mid+1:col_mid+TILE_WIDTH])
+            display(
+                @view A[(row_mid+1):(row_mid+TILE_WIDTH), (col_mid+1):(col_mid+TILE_WIDTH)]
+            )
         end
 
         n22 = min(TILE_WIDTH, row_upper - row_mid, col_upper - col_mid)
-        @cuda threads=TILE_WIDTH blocks=1 forward_sub_kernel_32(A, A_22_inv, N, row_mid, col_mid, n22)
+        @cuda threads=TILE_WIDTH blocks=1 forward_sub_kernel_32(
+            A,
+            A_22_inv,
+            N,
+            row_mid,
+            col_mid,
+            n22,
+        )
 
         if debug
             println("A_22_inv:")
-            display(A_22_inv)   
+            display(A_22_inv)
             println("A_22_inv * A_22:")
-            A_22 = @view A[row_mid+1:row_mid+TILE_WIDTH, col_mid+1:col_mid+TILE_WIDTH]
+            A_22 =
+                @view A[(row_mid+1):(row_mid+TILE_WIDTH), (col_mid+1):(col_mid+TILE_WIDTH)]
             tmp = A_22_inv * A_22
             mod!(tmp, tmp, N)
             display(tmp)
             println("")
         end
 
-        A_inv[col_mid+1:col_upper, row_mid+1:row_upper] = A_22_inv[1:(row_upper - row_mid), 1:(col_upper - col_mid)]
+        A_inv[(col_mid+1):col_upper, (row_mid+1):row_upper] =
+            A_22_inv[1:(row_upper-row_mid), 1:(col_upper-col_mid)]
         # A_inv[col_mid+1:col_upper, row_mid+1:row_upper] = A_22_inv[1:(col_upper - col_mid), 1:(row_upper - row_mid)]
 
         if debug
@@ -400,17 +502,21 @@ function _recursive_lower_triangular_inverse_no_copy(
             display(A_inv)
         end
 
-        A_21 = @view A[row_mid+1:row_upper, col_lower:col_mid]
+        A_21 = @view A[(row_mid+1):row_upper, col_lower:col_mid]
 
         if debug
             println("A_21:")
             display(A_21)
         end
 
-        tmp = _exact_mod_matmul_data(A_22_inv[1:(row_upper - row_mid), 1:(col_upper - col_mid)], A_21, N)
+        tmp = _exact_mod_matmul_data(
+            A_22_inv[1:(row_upper-row_mid), 1:(col_upper-col_mid)],
+            A_21,
+            N,
+        )
         tmp2 = _exact_mod_matmul_data(tmp, A_11_inv, N)
         rscalar_sub!(tmp2, tmp2, N, N)
-        A_inv[col_mid+1:col_upper, row_lower:row_mid] = tmp2
+        A_inv[(col_mid+1):col_upper, row_lower:row_mid] = tmp2
 
         if debug
             println("A_22_inv * A_21 * A_11_inv:")
@@ -419,26 +525,42 @@ function _recursive_lower_triangular_inverse_no_copy(
             println("A_inv:")
             display(A_inv)
         end
-        
+
         return
 
-    else 
+    else
 
         if debug
             println("Third branch: Recursive call!")
         end
 
         _recursive_lower_triangular_inverse_no_copy(
-            A, A_inv, row_lower, row_mid, col_lower, col_mid, N; debug=debug)
+            A,
+            A_inv,
+            row_lower,
+            row_mid,
+            col_lower,
+            col_mid,
+            N;
+            debug = debug,
+        )
         _recursive_lower_triangular_inverse_no_copy(
-            A, A_inv, row_mid+1, row_upper, col_mid+1, col_upper, N; debug=debug)
-        A_21 = @view A[row_mid+1:row_upper, col_lower:col_mid]
+            A,
+            A_inv,
+            row_mid+1,
+            row_upper,
+            col_mid+1,
+            col_upper,
+            N;
+            debug = debug,
+        )
+        A_21 = @view A[(row_mid+1):row_upper, col_lower:col_mid]
         A_11_inv = @view A_inv[col_lower:col_mid, row_lower:row_mid]
-        A_22_inv = @view A_inv[col_mid+1:col_upper, row_mid+1:row_upper]
+        A_22_inv = @view A_inv[(col_mid+1):col_upper, (row_mid+1):row_upper]
         tmp = _exact_mod_matmul_data(A_22_inv, A_21, N)
         tmp2 = _exact_mod_matmul_data(tmp, A_11_inv, N)
         rscalar_sub!(tmp2, tmp2, N, N)
-        A_inv[col_mid+1:col_upper, row_lower:row_mid] = tmp2
+        A_inv[(col_mid+1):col_upper, row_lower:row_mid] = tmp2
 
         return
     end
@@ -449,7 +571,7 @@ end
 
 Computes the inverse of an lower triangular matrix.
 """
-function lower_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool=false)
+function lower_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
     rows, cols = size(A)
 
     if cols <= MAX_INVERSE_SIZE
@@ -460,9 +582,21 @@ function lower_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool=false)
 
     if rows <= cols #square or wide
         _recursive_lower_triangular_inverse_no_copy(
-            A.data, A_inv.data, 1, rows, 1, cols, A.N; debug=debug)
+            A.data,
+            A_inv.data,
+            1,
+            rows,
+            1,
+            cols,
+            A.N;
+            debug = debug,
+        )
     else #tall
-        throw(InverseNotDefinedException("(Right) pseudoinverse not defined for tall lower triangular matrices"))
+        throw(
+            InverseNotDefinedException(
+                "(Right) pseudoinverse not defined for tall lower triangular matrices",
+            ),
+        )
         # _recursive_lower_triangular_inverse_no_copy(
         #     A.data, A_inv.data, 1, rows, 1, rows, A.N; debug=debug)
     end

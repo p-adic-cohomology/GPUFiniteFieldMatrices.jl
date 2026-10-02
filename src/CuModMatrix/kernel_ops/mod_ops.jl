@@ -10,7 +10,7 @@ function k_mod!(out, A, m)
     return
 end
 
-function mod!(C::CuModArray, A::CuModArray, m::Integer; threads::Int=DEFAULT_THREADS)
+function mod!(C::CuModArray, A::CuModArray, m::Integer; threads::Int = DEFAULT_THREADS)
     mT = convert(eltype(C.data), m)
     len = length(A.data)
     blocks = min(cld(len, threads), 65535)
@@ -18,7 +18,7 @@ function mod!(C::CuModArray, A::CuModArray, m::Integer; threads::Int=DEFAULT_THR
     return C
 end
 
-function mod!(C::CuArray, A::CuArray, m::Integer; threads::Int=DEFAULT_THREADS)
+function mod!(C::CuArray, A::CuArray, m::Integer; threads::Int = DEFAULT_THREADS)
     mT = convert(eltype(C), m)
     len = length(A)
     blocks = min(cld(len, threads), 65535)
@@ -31,4 +31,3 @@ function mod(A::CuModArray, m::Integer)
     mod!(C, A, m)
     return C
 end
-

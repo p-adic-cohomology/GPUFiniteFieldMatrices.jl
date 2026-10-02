@@ -45,7 +45,7 @@ function pluq_compose_segment!(perm::Vector{Int}, offset::Int, locperm::Vector{I
     lastidx = offset + length(locperm) - 1
     tmp = copy(perm[offset:lastidx])
     for i in eachindex(locperm)
-        perm[offset + i - 1] = tmp[locperm[i]]
+        perm[offset+i-1] = tmp[locperm[i]]
     end
     return perm
 end

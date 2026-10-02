@@ -1,8 +1,8 @@
 
-@inline function karatsuba_add_helper(a1,a2,b1,b2,N1,N2)
+@inline function karatsuba_add_helper(a1, a2, b1, b2, N1, N2)
 
     temp = (a1 + b1) % (2*N1)
-    temp = div(temp,N1)
+    temp = div(temp, N1)
     res2 = (temp + a2) % (2*N2)
     res2 = (res2 + b2) % (2*N2)
 
@@ -21,15 +21,10 @@ end
 Works even for multidimensional arrays because CuArrays support linear indexing
 
 """
-function karatsuba_add_kernel!(Kdata1,Kdata2,Adata1,Adata2,Bdata1,Bdata2,N1,N2)
+function karatsuba_add_kernel!(Kdata1, Kdata2, Adata1, Adata2, Bdata1, Bdata2, N1, N2)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
 
-    (res1, res2) = karatsuba_add_helper(Adata1[i], 
-                                        Adata2[i], 
-                                        Bdata1[i], 
-                                        Bdata2[i], 
-                                        N1, 
-                                        N2)
+    (res1, res2) = karatsuba_add_helper(Adata1[i], Adata2[i], Bdata1[i], Bdata2[i], N1, N2)
 
     # Kplan[i] = (Adata1[i] + Bdata1[i]) % (2*N1)
     # Kplan[i] = div(Kplan[i],N1)
@@ -49,7 +44,7 @@ function karatsuba_add_kernel!(Kdata1,Kdata2,Adata1,Adata2,Bdata1,Bdata2,N1,N2)
     return
 end
 
-@inline function karatsuba_scalar_multiply_helper(a1,a2,s,N1,N2)
+@inline function karatsuba_scalar_multiply_helper(a1, a2, s, N1, N2)
     res2 = (a1*s) % (N1^2)
     res2 = div(res2, N1)
     res1 = (a2*s) % N2
@@ -59,7 +54,7 @@ end
     (res1, res2)
 end
 
-function karatsuba_scalar_multiply_kernel!(Bdata1,Bdata2,Adata1,Adata2,s,N1,N2)
+function karatsuba_scalar_multiply_kernel!(Bdata1, Bdata2, Adata1, Adata2, s, N1, N2)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
 
     # Bdata2[i] = (Adata1[i]*s) % (N1^2)
@@ -67,16 +62,16 @@ function karatsuba_scalar_multiply_kernel!(Bdata1,Bdata2,Adata1,Adata2,s,N1,N2)
     # Bdata1[i] = (Adata2[i]*s) % N2
     # Bdata2[i] = (Bdata2[i] + Bdata1[i]) % N2
     # Bdata1[i] = (Adata1[i] * s) % N1
-    
-    (res1, res2) = karatsuba_scalar_multiply_helper(Adata1[i],Adata2[i],s,N1,N2)
-    
+
+    (res1, res2) = karatsuba_scalar_multiply_helper(Adata1[i], Adata2[i], s, N1, N2)
+
     Bdata1[i] = res1
     Bdata2[i] = res2
 
     nothing
 end
 
-@inline function karatsuba_negate_helper(a1,a2,N1,N2,M)
+@inline function karatsuba_negate_helper(a1, a2, N1, N2, M)
     res2 = 0.0 % (N2)
     res2 = (res2 + N1) % (2*N1)
     res2 = (res2 - a1) % (2*N1)
@@ -96,27 +91,23 @@ end
     (res1, res2)
 end
 
-function karatsuba_negate_kernel!(Kdata1,Kdata2,Adata1,Adata2,N1,N2,M)
+function karatsuba_negate_kernel!(Kdata1, Kdata2, Adata1, Adata2, N1, N2, M)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
 
-    res1, res2 = karatsuba_negate_helper(Adata1[i],
-                                         Adata2[i],
-                                         N1,
-                                         N2,
-                                         M)
+    res1, res2 = karatsuba_negate_helper(Adata1[i], Adata2[i], N1, N2, M)
     Kdata1[i] = res1
     Kdata2[i] = res2
 
     nothing
 end
 
-function karatsuba_sub_kernel!(Kdata1,Kdata2,Adata1,Adata2,Bdata1,Bdata2,N1,N2,M)
+function karatsuba_sub_kernel!(Kdata1, Kdata2, Adata1, Adata2, Bdata1, Bdata2, N1, N2, M)
 
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
 
-    bneg1, bneg2 = karatsuba_negate_helper(Bdata1[i],Bdata2[i],N1,N2,M)
-    
-    res1, res2 = karatsuba_add_helper(bneg1,bneg2,Adata1[i],Adata2[i],N1,N2)
+    bneg1, bneg2 = karatsuba_negate_helper(Bdata1[i], Bdata2[i], N1, N2, M)
+
+    res1, res2 = karatsuba_add_helper(bneg1, bneg2, Adata1[i], Adata2[i], N1, N2)
 
     Kdata1[i] = res1
     Kdata2[i] = res2
@@ -126,7 +117,7 @@ end
 
 # MARK - Matrix multiplicatino
 
-function karatsuba_matmul_kernel_1!(Aplan,Adata1,Adata2,Bplan,Bdata1,Bdata2,N1)
+function karatsuba_matmul_kernel_1!(Aplan, Adata1, Adata2, Bplan, Bdata1, Bdata2, N1)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
 
     if i <= length(Bplan)
@@ -138,12 +129,12 @@ function karatsuba_matmul_kernel_1!(Aplan,Adata1,Adata2,Bplan,Bdata1,Bdata2,N1)
     nothing
 end
 
-function karatsuba_matmul_kernel_2!(Cdata1,Cdata2,Bplan,N1,N2)
+function karatsuba_matmul_kernel_2!(Cdata1, Cdata2, Bplan, N1, N2)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
 
-    cc1 = mod(Cdata1[i],N1^2)
-    cc2 = mod(Cdata2[i],(4*N1)^2)
-    bp = mod(Bplan[i],N1)
+    cc1 = mod(Cdata1[i], N1^2)
+    cc2 = mod(Cdata2[i], (4*N1)^2)
+    bp = mod(Bplan[i], N1)
 
     cp = div(cc1, N1)
     cc2 = (cc2 - cc1) % ((4*N1)^2)

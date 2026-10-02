@@ -10,11 +10,11 @@ using CUDA, LinearAlgebra
 #     # Find dimensions and padded
 #     A_rows, A_cols = size(A)
 #     A_padded_rows = ceil(Int, A_rows / TILE_WIDTH) * TILE_WIDTH
-#     A_padded_cols = ceil(Int, A_cols / TILE_WIDTH) * TILE_WIDTH 
+#     A_padded_cols = ceil(Int, A_cols / TILE_WIDTH) * TILE_WIDTH
 
 #     # Create padded GPU CuArray
 #     d_A = CUDA.CuArray{Int}(undef, (A_padded_rows+TILE_WIDTH, A_padded_cols+TILE_WIDTH))
-    
+
 #     # Copy over matrix to GPU
 #     A_inds = CartesianIndices(A)
 #     d_A_inds = CartesianIndices((1:A_rows,1:A_cols))
@@ -138,7 +138,7 @@ end
 # """
 #     normalize(d_A::CUDA.CuArray,k::Int,A_rows::Int)
 
-# Normalizes the kth row with the given pivot. 
+# Normalizes the kth row with the given pivot.
 # We do this using the mult. inv. of the pivot.
 # """
 # function normalize(d_A, k, p_inv, P, A_rows)
@@ -172,14 +172,14 @@ end
 #
 #    CUDA.sync_threads()
 #
-#    # loop though 
+#    # loop though
 #    for i=k:A_rows/TILE_WIDTH
 #
 #        # Load a single elem from d_A[:,k] into some shared mem
 #
 #        CUDA.sync_threads()
 #
-#        
+#
 #
 #    end
 #
@@ -239,10 +239,10 @@ end
 
 #     CUDA.sync_threads()
 
-#     # We want to calculate, for row and col, 
+#     # We want to calculate, for row and col,
 #     # d_A[row,col] = d_A[row,col] - p_row_shared[tx]*mult[ty] mod P
 
-#     # TODO 
+#     # TODO
 
 #     result = d_A[k+row,k+col] - p_row_shared[col]*mult_shared[row]
 
@@ -252,8 +252,8 @@ end
 
 #     d_A[k+row,k+col] = result
 #     d_A[k+row,k] = 0
-    
+
 #     CUDA.sync_threads()
 
-#     return    
+#     return
 # end

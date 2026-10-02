@@ -5,7 +5,7 @@ end
 function _pack_square_batch(mats::AbstractVector{<:CuModMatrix}, n::Int, T::DataType)
     b = length(mats)
     A = CUDA.zeros(T, n, n, b)
-    for i in 1:b
+    for i = 1:b
         m = mats[i]
         if rows(m) != n || cols(m) != n
             throw(ArgumentError("all matrices must be $(n)x$(n)"))
@@ -27,7 +27,7 @@ function _tiny_pluq_batched_kernel!(A, pdev, qdev, rdev, n::Int32, N::Int32)
     if bid > size(A, 3) || threadIdx().x != 1
         return
     end
-    for t in 1:n
+    for t = 1:n
         pdev[t, bid] = Int32(t)
         qdev[t, bid] = Int32(t)
     end
@@ -89,7 +89,10 @@ function _tiny_pluq_batched_kernel!(A, pdev, qdev, rdev, n::Int32, N::Int32)
         while j <= n
             i2 = k + 1
             while i2 <= n
-                A[i2, j, bid] = _pluq_mod_t(A[i2, j, bid] - _pluq_mod_mul_t(A[i2, k, bid], A[k, j, bid], N), N)
+                A[i2, j, bid] = _pluq_mod_t(
+                    A[i2, j, bid] - _pluq_mod_mul_t(A[i2, k, bid], A[k, j, bid], N),
+                    N,
+                )
                 i2 += 1
             end
             j += 1
@@ -116,7 +119,7 @@ function _tiny_inverse_batched_kernel!(A, invA, ok, n::Int32, N::Int32)
         end
         j2 = Int32(1)
         while j2 <= n
-            aug[i, n + j2] = i == j2 ? one(eltype(A)) : zero(eltype(A))
+            aug[i, n+j2] = i == j2 ? one(eltype(A)) : zero(eltype(A))
             j2 += 1
         end
         i += 1
@@ -163,7 +166,8 @@ function _tiny_inverse_batched_kernel!(A, invA, ok, n::Int32, N::Int32)
                 if f != zero(eltype(A))
                     j5 = k
                     while j5 <= 2n
-                        aug[i4, j5] = _pluq_mod_t(aug[i4, j5] - _pluq_mod_mul_t(f, aug[k, j5], N), N)
+                        aug[i4, j5] =
+                            _pluq_mod_t(aug[i4, j5] - _pluq_mod_mul_t(f, aug[k, j5], N), N)
                         j5 += 1
                     end
                 end
@@ -178,7 +182,7 @@ function _tiny_inverse_batched_kernel!(A, invA, ok, n::Int32, N::Int32)
         while i6 <= n
             j6 = Int32(1)
             while j6 <= n
-                invA[i6, j6, bid] = aug[i6, n + j6]
+                invA[i6, j6, bid] = aug[i6, n+j6]
                 j6 += 1
             end
             i6 += 1
@@ -195,7 +199,11 @@ function _pluq_batched_tiny!(mats::AbstractVector{<:CuModMatrix}, n::Int)
     T = eltype(mats[1].data)
     for m in mats
         if m.N != N || eltype(m.data) != T
-            throw(CuModArrayModulusMismatchException("batch matrices must have same modulus and element type"))
+            throw(
+                CuModArrayModulusMismatchException(
+                    "batch matrices must have same modulus and element type",
+                ),
+            )
         end
     end
     A = _pack_square_batch(mats, n, T)
@@ -203,13 +211,20 @@ function _pluq_batched_tiny!(mats::AbstractVector{<:CuModMatrix}, n::Int)
     pdev = CUDA.zeros(Int32, n, b)
     qdev = CUDA.zeros(Int32, n, b)
     rdev = CUDA.zeros(Int32, b)
-    @cuda threads=32 blocks=b _tiny_pluq_batched_kernel!(A, pdev, qdev, rdev, Int32(n), Int32(N))
+    @cuda threads=32 blocks=b _tiny_pluq_batched_kernel!(
+        A,
+        pdev,
+        qdev,
+        rdev,
+        Int32(n),
+        Int32(N),
+    )
     _unpack_square_batch!(mats, A, n)
     p = Array(pdev)
     q = Array(qdev)
     r = Array(rdev)
     out = Vector{PLUQFactorization{T}}(undef, b)
-    for i in 1:b
+    for i = 1:b
         out[i] = PLUQFactorization(mats[i], Int.(p[:, i]), Int.(q[:, i]), Int(r[i]))
     end
     return out
@@ -226,22 +241,34 @@ function _inverse_batched_tiny(mats::AbstractVector{<:CuModMatrix}, n::Int)
             throw(CuModArraySizeMismatchException("all matrices must be $(n)x$(n)"))
         end
         if m.N != N || eltype(m.data) != T
-            throw(CuModArrayModulusMismatchException("batch matrices must have same modulus and element type"))
+            throw(
+                CuModArrayModulusMismatchException(
+                    "batch matrices must have same modulus and element type",
+                ),
+            )
         end
     end
     A = _pack_square_batch(mats, n, T)
     invA = CUDA.zeros(T, n, n, length(mats))
     ok = CUDA.zeros(Int32, length(mats))
-    @cuda threads=32 blocks=length(mats) _tiny_inverse_batched_kernel!(A, invA, ok, Int32(n), Int32(N))
+    @cuda threads=32 blocks=length(mats) _tiny_inverse_batched_kernel!(
+        A,
+        invA,
+        ok,
+        Int32(n),
+        Int32(N),
+    )
     okh = Array(ok)
     out = Vector{CuModMatrix{T}}(undef, length(mats))
     for i in eachindex(mats)
         if okh[i] != 1
-            throw(InverseNotDefinedException("matrix $(i) in batch is singular modulo $(N)"))
+            throw(
+                InverseNotDefinedException("matrix $(i) in batch is singular modulo $(N)"),
+            )
         end
         data = CUDA.zeros(T, size(mats[i].data, 1), size(mats[i].data, 2))
         data[1:n, 1:n] .= @view invA[:, :, i]
-        out[i] = CuModMatrix(data, N; new_size=(n, n))
+        out[i] = CuModMatrix(data, N; new_size = (n, n))
     end
     return out
 end
@@ -265,5 +292,7 @@ modulus. Variants are available for 4, 8, 16, and 32.
 """
 inverse_batched_4x4!(mats::AbstractVector{<:CuModMatrix}) = _inverse_batched_tiny(mats, 4)
 inverse_batched_8x8!(mats::AbstractVector{<:CuModMatrix}) = _inverse_batched_tiny(mats, 8)
-inverse_batched_16x16!(mats::AbstractVector{<:CuModMatrix}) = _inverse_batched_tiny(mats, 16)
-inverse_batched_32x32!(mats::AbstractVector{<:CuModMatrix}) = _inverse_batched_tiny(mats, 32)
+inverse_batched_16x16!(mats::AbstractVector{<:CuModMatrix}) =
+    _inverse_batched_tiny(mats, 16)
+inverse_batched_32x32!(mats::AbstractVector{<:CuModMatrix}) =
+    _inverse_batched_tiny(mats, 32)

@@ -109,7 +109,7 @@ function pluq_find_pivot_kernel!(A, pivot_slot, k::Int32, kend::Int32, N::Int32)
     step = Int(blockDim().x) >>> 1
     while step >= 1
         if ltid <= step
-            smins[ltid] = min(smins[ltid], smins[ltid + step])
+            smins[ltid] = min(smins[ltid], smins[ltid+step])
         end
         sync_threads()
         step >>>= 1
@@ -126,9 +126,9 @@ function pluq_find_pivot_warp_kernel!(A, pivot_slot, k::Int32, kend::Int32, N::I
     if lane > 32
         return
     end
-    for joff in 0:(span - 1)
+    for joff = 0:(span-1)
         row = k + lane - 1
-        pred = lane <= span && _pluq_mod_t(A[row, k + joff], N) != zero(eltype(A))
+        pred = lane <= span && _pluq_mod_t(A[row, k+joff], N) != zero(eltype(A))
         bits = CUDA.vote_ballot_sync(CUDA.FULL_MASK, pred)
         if bits != UInt32(0)
             if lane == 1
@@ -161,7 +161,7 @@ function pluq_find_pivot_warp_shfl_kernel!(A, pivot_slot, k::Int32, kend::Int32,
         row = k + lane - Int32(1)
         joff = Int32(0)
         while joff < span
-            if _pluq_mod_t(A[row, k + joff], N) != zero(eltype(A))
+            if _pluq_mod_t(A[row, k+joff], N) != zero(eltype(A))
                 cand = joff * span + lane
                 local_min = min(local_min, cand)
             end
@@ -265,7 +265,17 @@ the four kernel launches used by the reference basecase.
 time as the corresponding matrix swaps.  `rank_slot[1]` is the only value the
 blocked driver must read after the whole panel has completed.
 """
-function pluq_panel_fused_kernel!(A, p, q, dinv, rank_slot, k0::Int32, kend::Int32, n::Int32, N::Int32)
+function pluq_panel_fused_kernel!(
+    A,
+    p,
+    q,
+    dinv,
+    rank_slot,
+    k0::Int32,
+    kend::Int32,
+    n::Int32,
+    N::Int32,
+)
     tid = Int32(threadIdx().x)
     nt = Int32(blockDim().x)
     candidates = CuStaticSharedArray(Int32, 256)
@@ -286,7 +296,7 @@ function pluq_panel_fused_kernel!(A, p, q, dinv, rank_slot, k0::Int32, kend::Int
         while idx <= total
             joff = (idx - Int32(1)) ÷ span
             ioff = (idx - Int32(1)) % span
-            if _pluq_mod_t(A[k + ioff, k + joff], N) != zero(eltype(A))
+            if _pluq_mod_t(A[k+ioff, k+joff], N) != zero(eltype(A))
                 local_min = min(local_min, idx)
             end
             idx += nt
@@ -297,7 +307,8 @@ function pluq_panel_fused_kernel!(A, p, q, dinv, rank_slot, k0::Int32, kend::Int
         step = nt >>> 1
         while step >= Int32(1)
             if tid <= step
-                candidates[Int(tid)] = min(candidates[Int(tid)], candidates[Int(tid + step)])
+                candidates[Int(tid)] =
+                    min(candidates[Int(tid)], candidates[Int(tid + step)])
             end
             sync_threads()
             step >>>= 1
@@ -381,11 +392,29 @@ function pluq_panel_fused_kernel!(A, p, q, dinv, rank_slot, k0::Int32, kend::Int
     return
 end
 
-function pluq_panel_fused_gpu!(Adata::CuArray{T,2}, N::Int, pdev, qdev, dinv,
-                               rank_slot, rank_host, k0::Int, kend::Int,
-                               n::Int) where {T}
+function pluq_panel_fused_gpu!(
+    Adata::CuArray{T,2},
+    N::Int,
+    pdev,
+    qdev,
+    dinv,
+    rank_slot,
+    rank_host,
+    k0::Int,
+    kend::Int,
+    n::Int,
+) where {T}
     @cuda threads=256 blocks=1 pluq_panel_fused_kernel!(
-        Adata, pdev, qdev, dinv, rank_slot, Int32(k0), Int32(kend), Int32(n), Int32(N))
+        Adata,
+        pdev,
+        qdev,
+        dinv,
+        rank_slot,
+        Int32(k0),
+        Int32(kend),
+        Int32(n),
+        Int32(N),
+    )
     return _pluq_read_i32!(rank_host, rank_slot)
 end
 
@@ -396,7 +425,16 @@ Perform in-place PLUQ elimination on a block `[k0:kend, k0:kend]` of `Adata`
 using CUDA kernels for pivot search, swaps, scaling, and rank-1 updates.
 Returns the rank contributed by this block.
 """
-function pluq_basecase_gpu!(Adata::CuArray{T,2}, N::Int, p::Vector{Int}, q::Vector{Int}, k0::Int, kend::Int, n::Int; options::PLUQOptions=PLUQOptions()) where {T}
+function pluq_basecase_gpu!(
+    Adata::CuArray{T,2},
+    N::Int,
+    p::Vector{Int},
+    q::Vector{Int},
+    k0::Int,
+    kend::Int,
+    n::Int;
+    options::PLUQOptions = PLUQOptions(),
+) where {T}
     rank = 0
     n32 = Int32(n)
     N32 = Int32(N)
@@ -407,7 +445,7 @@ function pluq_basecase_gpu!(Adata::CuArray{T,2}, N::Int, p::Vector{Int}, q::Vect
     pivot_host = _pluq_host_i32_buffer()
     locp = options.lazy_q ? collect(1:maxspan) : Int[]
     locq = options.lazy_q ? collect(1:maxspan) : Int[]
-    for k in k0:kend
+    for k = k0:kend
         kk = Int32(k)
         kend32 = Int32(kend)
         span = kend - k + 1
@@ -415,13 +453,31 @@ function pluq_basecase_gpu!(Adata::CuArray{T,2}, N::Int, p::Vector{Int}, q::Vect
         fill!(pivot_slot, Int32(total + 1))
         if span <= 32
             if options.pivot_warp_kernel == :shfl
-                @cuda threads=32 blocks=1 pluq_find_pivot_warp_shfl_kernel!(Adata, pivot_slot, kk, kend32, N32)
+                @cuda threads=32 blocks=1 pluq_find_pivot_warp_shfl_kernel!(
+                    Adata,
+                    pivot_slot,
+                    kk,
+                    kend32,
+                    N32,
+                )
             else
-                @cuda threads=32 blocks=1 pluq_find_pivot_warp_kernel!(Adata, pivot_slot, kk, kend32, N32)
+                @cuda threads=32 blocks=1 pluq_find_pivot_warp_kernel!(
+                    Adata,
+                    pivot_slot,
+                    kk,
+                    kend32,
+                    N32,
+                )
             end
         else
             blocks = max(1, cld(total, threads))
-            @cuda threads=threads blocks=blocks pluq_find_pivot_kernel!(Adata, pivot_slot, kk, kend32, N32)
+            @cuda threads=threads blocks=blocks pluq_find_pivot_kernel!(
+                Adata,
+                pivot_slot,
+                kk,
+                kend32,
+                N32,
+            )
         end
         pivot_lin = _pluq_read_i32!(pivot_host, pivot_slot)
         if pivot_lin > total
@@ -433,7 +489,12 @@ function pluq_basecase_gpu!(Adata::CuArray{T,2}, N::Int, p::Vector{Int}, q::Vect
         prow = k + ioff
         pcol = k + joff
         if prow != k
-            @cuda threads=threads blocks=max(1, cld(n, threads)) pluq_swap_rows_kernel!(Adata, Int32(k), Int32(prow), n32)
+            @cuda threads=threads blocks=max(1, cld(n, threads)) pluq_swap_rows_kernel!(
+                Adata,
+                Int32(k),
+                Int32(prow),
+                n32,
+            )
             if options.lazy_q
                 lock = k - k0 + 1
                 locprow = prow - k0 + 1
@@ -443,7 +504,12 @@ function pluq_basecase_gpu!(Adata::CuArray{T,2}, N::Int, p::Vector{Int}, q::Vect
             end
         end
         if pcol != k
-            @cuda threads=threads blocks=max(1, cld(n, threads)) pluq_swap_cols_kernel!(Adata, Int32(k), Int32(pcol), n32)
+            @cuda threads=threads blocks=max(1, cld(n, threads)) pluq_swap_cols_kernel!(
+                Adata,
+                Int32(k),
+                Int32(pcol),
+                n32,
+            )
             if options.lazy_q
                 lock = k - k0 + 1
                 locpcol = pcol - k0 + 1
@@ -454,12 +520,22 @@ function pluq_basecase_gpu!(Adata::CuArray{T,2}, N::Int, p::Vector{Int}, q::Vect
         end
         # Normalize pivot row/column step in packed LU form.
         if k < kend
-            @cuda threads=threads blocks=max(1, cld(kend - k, threads)) pluq_scale_column_from_diag_kernel!(Adata, Int32(k), Int32(kend), N32)
+            @cuda threads=threads blocks=max(1, cld(kend - k, threads)) pluq_scale_column_from_diag_kernel!(
+                Adata,
+                Int32(k),
+                Int32(kend),
+                N32,
+            )
             tx = 16
             ty = 16
             bx = max(1, cld(kend - k, tx))
             by = max(1, cld(kend - k, ty))
-            @cuda threads=(tx, ty) blocks=(bx, by) pluq_rank1_update_kernel!(Adata, Int32(k), Int32(kend), N32)
+            @cuda threads=(tx, ty) blocks=(bx, by) pluq_rank1_update_kernel!(
+                Adata,
+                Int32(k),
+                Int32(kend),
+                N32,
+            )
         end
         rank += 1
     end

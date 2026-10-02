@@ -7,7 +7,7 @@
 # """
 # function rref_gpu_type(A::CuModMatrix, mod_N::Integer=-1)
 #     N = mod_N > 0 ? mod_N : A.N
-    
+
 #     A_rows, A_cols = size(A.data)
 
 #     d_A = CUDA.zeros(Int, (A_rows, A_cols))
@@ -19,7 +19,7 @@
 #     while row <= rows(A) && col <= cols(A)
 
 #         p = find_pivot_val(d_A, rows(A), row, col)
-        
+
 #         if p == 0
 #             col += 1
 #             continue
@@ -27,10 +27,10 @@
 
 #         # Find pivot row
 #         k = find_pivot_idx(d_A, rows(A), row, col) + row - 1
-        
+
 #         # Only swap if needed
 #         p_inv = mod_inv(p, N)
-#         if k != row   
+#         if k != row
 #             swap_and_mod_rref(d_A, k, row, p_inv, N)
 #         end
 
@@ -59,7 +59,7 @@
 # """
 # function lu_gpu_type(A::CuModMatrix, mod_N::Integer=-1)
 #     N = mod_N > 0 ? mod_N : A.N
-    
+
 #     A_rows, A_cols = size(A.data)
 
 #     d_A = CUDA.zeros(Int, (A_rows, A_cols))
@@ -73,7 +73,7 @@
 
 #     while row <= rows(A) && col <= cols(A)
 #         p = find_pivot_val(d_A, rows(A), row, col)
-        
+
 #         if p == 0
 #             col += 1
 #             continue
@@ -83,9 +83,9 @@
 
 #         p_inv = mod_inv(p, N)
 #         swap_and_mod_lu(d_A, d_L, k, row, p_inv, N, Perm)
-        
+
 #         normalize_lu_broadcast(d_A, d_L, A_rows, row, L_col, p_inv, p, N)
-        
+
 #         if row == rows(A) || col == cols(A)
 #             break
 #         end
@@ -96,7 +96,7 @@
 #         L_col += 1
 #         col += 1
 #     end
-    
+
 #     U = CuModMatrix(d_A, N; new_size=(rows(A), cols(A)))
 #     L = CuModMatrix(d_L, N; new_size=(rows(A), rows(A)))
 #     return (U, L, Perm)
@@ -118,7 +118,7 @@
 #             display(@view d_L[1:rows(A),1:rows(A)])
 #         end
 #     end
-    
+
 #     N = A.N
 #     A_padded_rows = size(A.data, 1)
 #     A_padded_cols = size(A.data, 2)
@@ -159,7 +159,7 @@
 #         end
 #         end
 #         # end
-        
+
 #         # println("Starting find_pivot_idx")
 #         # @time begin
 #         NVTX.@range "Find Pivot" begin
@@ -202,7 +202,7 @@
 #         end
 #         # println("d_A:")
 #         # display(@view d_A[1:rows(A),1:cols(A)])
-        
+
 #         # # @time begin
 #         NVTX.@range "Update Sub Matrix Row Shared" begin
 #             @cuda threads=(TILE_WIDTH) blocks=(ceil(Int, (cols(A)+1-col)/TILE_WIDTH)) update_sub_matrix_row_2dshared(d_A, row, col, N, rows(A))
@@ -215,7 +215,7 @@
 
 #         # println("d_A:")
 #         # display(@view d_A[1:rows(A),1:cols(A)])
-        
+
 #         # CUDA.synchronize()
 
 #         # println("Starting update_sub_matrix_col_shared_tiled")
@@ -233,7 +233,7 @@
 #         row += 1
 #         col += 1
 #     end
-    
+
 #     NVTX.@range "End PLUQ" begin
 #     U = CuModMatrix(d_A, N; new_size=(rows(A),cols(A)))
 #     L = CuModMatrix(d_L, N; new_size=(rows(A),rows(A)))
@@ -243,10 +243,10 @@
 #         return (U, L, Perm_rows, Perm_cols)
 #     else
 #         return (
-#             U, 
-#             L, 
-#             perm_array_to_matrix(Perm_rows, N, (rows(A), rows(A)), perm_stack=perm_stack), 
+#             U,
+#             L,
+#             perm_array_to_matrix(Perm_rows, N, (rows(A), rows(A)), perm_stack=perm_stack),
 #             perm_array_to_matrix(Perm_cols, N, (cols(A), cols(A)), perm_stack=perm_stack)
 #         )
 #     end
-# end 
+# end

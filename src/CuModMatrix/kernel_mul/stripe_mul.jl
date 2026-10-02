@@ -10,7 +10,7 @@ Given a type `type` that is supported by CUBLAS,
 find out how many columns we can include in a stripe
 (in the stripe multiplication algorithm)
 """
-function find_max_stripe_ops(type,N)
+function find_max_stripe_ops(type, N)
     if occursin("Float", string(type))
         bits_dict = Dict("64" => 53, "32" => 24, "16" => 11)
         bits_match = match(r"\d+", string(type))
@@ -37,14 +37,22 @@ Also does not check to see if the modulus of the varios matrices agree
 
 Since we are working mod N, `alpha` and `beta` must be integers
 """
-function unsafe_gemm!(transposeA::Bool,transposeB::Bool,alpha::Integer,A::CuModMatrix,B::CuModMatrix,beta::Integer,C::CuModMatrix)
+function unsafe_gemm!(
+    transposeA::Bool,
+    transposeB::Bool,
+    alpha::Integer,
+    A::CuModMatrix,
+    B::CuModMatrix,
+    beta::Integer,
+    C::CuModMatrix,
+)
 
     tAchar = transposeA ? 'Y' : 'N'
     tBchar = transposeB ? 'Y' : 'N'
 
     #TODO: convert alpha and beta to floats?
 
-    CUDA.CUBLAS.gemm!(tAchar,tBchar,alpha,A.data,B.data,beta,C.data)
+    CUDA.CUBLAS.gemm!(tAchar, tBchar, alpha, A.data, B.data, beta, C.data)
 
     mod!(C.data, C.data, C.N)
 end
@@ -77,13 +85,21 @@ end
 
 Matrix-vector multiplication based on stripes
 """
-#TODO: replayce CuVector{Float64} with padded custom type. 
+#TODO: replayce CuVector{Float64} with padded custom type.
 #the ".data" stuff won't work until then
-function stripe_mul!(z::CuModVector,A::CuModMatrix,x::CuModVector; M=nothing, R=nothing, N=nothing, maxopsOverride=true)
-#TODO: add new signature that takes in custom M and N (and can copy the old one into new one)
-# so we can update the modulus but use the old bound for coeffs.
+function stripe_mul!(
+    z::CuModVector,
+    A::CuModMatrix,
+    x::CuModVector;
+    M = nothing,
+    R = nothing,
+    N = nothing,
+    maxopsOverride = true,
+)
+    #TODO: add new signature that takes in custom M and N (and can copy the old one into new one)
+    # so we can update the modulus but use the old bound for coeffs.
 
-    if A.N != z.N || z.N != z.N 
+    if A.N != z.N || z.N != z.N
         throw(ArgumentError("Mismatched modulus in matmul"))
     elseif cols(A) != length(z)
         throw(DimensionMismatch(""))
@@ -96,17 +112,17 @@ function stripe_mul!(z::CuModVector,A::CuModMatrix,x::CuModVector; M=nothing, R=
     if R==nothing
         R = z.N
     end
-    
+
     if maxopsOverride == true
         if M == nothing
             if N == nothing
-                M = find_max_stripe_ops(eltype(A.data),R)
+                M = find_max_stripe_ops(eltype(A.data), R)
             else
-                M = find_max_stripe_ops(eltype(A.data),R)
+                M = find_max_stripe_ops(eltype(A.data), R)
             end
         end
     else
-        M = find_max_stripe_ops(eltype(A.data),R)
+        M = find_max_stripe_ops(eltype(A.data), R)
     end
 
     if N==nothing
@@ -114,7 +130,11 @@ function stripe_mul!(z::CuModVector,A::CuModMatrix,x::CuModVector; M=nothing, R=
     end
 
     if M < 1
-        throw(ArgumentError("cannot perform a single multiplication for modulus $(R) with datatype $(eltype(A.data))"))
+        throw(
+            ArgumentError(
+                "cannot perform a single multiplication for modulus $(R) with datatype $(eltype(A.data))",
+            ),
+        )
     end
 
     if eltype(A.data) == Float64
@@ -128,11 +148,11 @@ function stripe_mul!(z::CuModVector,A::CuModMatrix,x::CuModVector; M=nothing, R=
 
     summed_size = cols(A)#size(A,2)
 
-    num_stripes = div(summed_size,M) + 1
+    num_stripes = div(summed_size, M) + 1
 
 
     if num_stripes == 1
-        CUDA.CUBLAS.gemv!('N',one_ptr,A.data,x.data,zero_ptr,z.data)
+        CUDA.CUBLAS.gemv!('N', one_ptr, A.data, x.data, zero_ptr, z.data)
         mod!(z.data, z.data, N)
         return
     end
@@ -141,18 +161,18 @@ function stripe_mul!(z::CuModVector,A::CuModMatrix,x::CuModVector; M=nothing, R=
     i = 1
 
     range = 1:M
-    A_temp = @view A.data[:,range]
+    A_temp = @view A.data[:, range]
     x_temp = @view x.data[range]
-    CUDA.CUBLAS.gemv!('N',one_ptr,A_temp,x_temp,zero_ptr,z.data)
+    CUDA.CUBLAS.gemv!('N', one_ptr, A_temp, x_temp, zero_ptr, z.data)
     mod!(z.data, z.data, N)
 
     i += 1
 
     while i < num_stripes
-        range = M*(i-1)+1:M*i 
-        A_temp = @view A.data[:,range]
+        range = (M*(i-1)+1):(M*i)
+        A_temp = @view A.data[:, range]
         x_temp = @view x.data[range]
-        CUDA.CUBLAS.gemv!('N',one_ptr,A_temp,x_temp,one_ptr,z.data)
+        CUDA.CUBLAS.gemv!('N', one_ptr, A_temp, x_temp, one_ptr, z.data)
         mod!(z.data, z.data, N)
 
         i += 1
@@ -160,9 +180,9 @@ function stripe_mul!(z::CuModVector,A::CuModMatrix,x::CuModVector; M=nothing, R=
     # i == num_stripes
 
     range = (M*(i-1)+1):cols(A)
-    A_temp = @view A.data[:,range]
+    A_temp = @view A.data[:, range]
     x_temp = @view x.data[range]
-    CUDA.CUBLAS.gemv!('N',one_ptr,A_temp,x_temp,one_ptr,z.data)
+    CUDA.CUBLAS.gemv!('N', one_ptr, A_temp, x_temp, one_ptr, z.data)
     mod!(z.data, z.data, N)
 
 end
@@ -172,9 +192,15 @@ end
 
 Matrix multiplication mod N based on stripes.
 """
-function stripe_mul!(C::CuModMatrix,A::CuModMatrix,B::CuModMatrix; M=nothing, N=nothing)
+function stripe_mul!(
+    C::CuModMatrix,
+    A::CuModMatrix,
+    B::CuModMatrix;
+    M = nothing,
+    N = nothing,
+)
 
-    if A.N != B.N || B.N != C.N 
+    if A.N != B.N || B.N != C.N
         throw(ArgumentError("Mismatched modulus in matmul"))
     elseif cols(A) != rows(B)
         throw(DimensionMismatch(""))
@@ -191,26 +217,30 @@ function stripe_mul!(C::CuModMatrix,A::CuModMatrix,B::CuModMatrix; M=nothing, N=
 
     if M == nothing
         if N == nothing
-            M = find_max_stripe_ops(eltype(A.data),A.N)
+            M = find_max_stripe_ops(eltype(A.data), A.N)
         else
-            M = find_max_stripe_ops(eltype(A.data),N)
+            M = find_max_stripe_ops(eltype(A.data), N)
         end
     end
 
     if M < 1
-        throw(ArgumentError("cannot perform a single multiplication for modulus $(A.N) with datatype $(eltype(A.data))"))
+        throw(
+            ArgumentError(
+                "cannot perform a single multiplication for modulus $(A.N) with datatype $(eltype(A.data))",
+            ),
+        )
     end
-                       
+
     summed_size = cols(A)#size(A,2)
 
     if N == nothing
-        num_stripes = div(summed_size,M) + 1
+        num_stripes = div(summed_size, M) + 1
     else
         num_stripes = 1
     end
 
     if num_stripes == 1
-        mul!(C.data,A.data,B.data)
+        mul!(C.data, A.data, B.data)
         mod!(C.data, C.data, C.N)
         return
     end
@@ -218,18 +248,18 @@ function stripe_mul!(C::CuModMatrix,A::CuModMatrix,B::CuModMatrix; M=nothing, N=
     i = 1
 
     range = 1:M
-    A_temp = @view A.data[:,range]
-    B_temp = @view B.data[range,:]
-    CUDA.CUBLAS.gemm!('N','N',1,A_temp,B_temp,0,C.data)
+    A_temp = @view A.data[:, range]
+    B_temp = @view B.data[range, :]
+    CUDA.CUBLAS.gemm!('N', 'N', 1, A_temp, B_temp, 0, C.data)
     mod!(C.data, C.data, C.N)
 
     i += 1
 
     while i < num_stripes
-        range = M*(i-1)+1:M*i 
-        A_temp = @view A.data[:,range]
-        B_temp = @view B.data[range,:]
-        CUDA.CUBLAS.gemm!('N','N',1,A_temp,B_temp,1,C.data)
+        range = (M*(i-1)+1):(M*i)
+        A_temp = @view A.data[:, range]
+        B_temp = @view B.data[range, :]
+        CUDA.CUBLAS.gemm!('N', 'N', 1, A_temp, B_temp, 1, C.data)
         mod!(C.data, C.data, C.N)
 
         i += 1
@@ -237,9 +267,8 @@ function stripe_mul!(C::CuModMatrix,A::CuModMatrix,B::CuModMatrix; M=nothing, N=
     # i == num_stripes
 
     range = (M*(i-1)+1):cols(A)
-    A_temp = @view A.data[:,range]
-    B_temp = @view B.data[range,:]
-    CUDA.CUBLAS.gemm!('N','N',1,A_temp,B_temp,1,C.data)
+    A_temp = @view A.data[:, range]
+    B_temp = @view B.data[range, :]
+    CUDA.CUBLAS.gemm!('N', 'N', 1, A_temp, B_temp, 1, C.data)
     mod!(C.data, C.data, C.N)
 end
-
