@@ -63,7 +63,11 @@ function pluq_extract_L(F::PLUQFactorization)
     L = zeros(eltype(F.LU.data), n, n, F.LU.N)
     tx = 16
     ty = 16
-    @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_extract_l_kernel!(L.data, F.LU.data, n32)
+    @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_extract_l_kernel!(
+        L.data,
+        F.LU.data,
+        n32,
+    )
     return L
 end
 
@@ -84,6 +88,10 @@ function pluq_extract_U(F::PLUQFactorization)
     U = zeros(eltype(F.LU.data), n, n, F.LU.N)
     tx = 16
     ty = 16
-    @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_extract_u_kernel!(U.data, F.LU.data, n32)
+    @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_extract_u_kernel!(
+        U.data,
+        F.LU.data,
+        n32,
+    )
     return U
 end

@@ -8,32 +8,44 @@ INPUTS:
 * "P" -- array of tuples of integers, a permutation stack
 * "A" -- CuModMatrix, the matrix to permute
 """
-function apply_col_perm!(P::Array{Tuple{Int, Int}, 1}, A)
+function apply_col_perm!(P::Array{Tuple{Int,Int},1}, A)
     n = size(A.data, 1)
     P_gpu = CuArray(P)
 
-    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_col_perm_kernel!(A.data, P_gpu, size(A, 2))
+    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_col_perm_kernel!(
+        A.data,
+        P_gpu,
+        size(A, 2),
+    )
 
     return
 end
 
-function apply_col_inv_perm!(P::Array{Tuple{Int, Int}, 1}, A)
+function apply_col_inv_perm!(P::Array{Tuple{Int,Int},1}, A)
     n = size(A.data, 1)
     P_gpu = CuArray(reverse(P))
 
-    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_col_perm_kernel!(A.data, P_gpu, size(A, 2))
+    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_col_perm_kernel!(
+        A.data,
+        P_gpu,
+        size(A, 2),
+    )
 
     return
 end
 
-function apply_col_perm(P::Array{Tuple{Int, Int}, 1}, A)
+function apply_col_perm(P::Array{Tuple{Int,Int},1}, A)
     n = size(A.data, 1)
     P_gpu = CuArray(P)
     A_data_copy = copy(A.data)
 
-    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_col_perm_kernel!(A_data_copy, P_gpu, size(A, 2))
+    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_col_perm_kernel!(
+        A_data_copy,
+        P_gpu,
+        size(A, 2),
+    )
 
-    return CuModMatrix(A_data_copy, A.N; new_size=size(A))
+    return CuModMatrix(A_data_copy, A.N; new_size = size(A))
 end
 
 """
@@ -46,12 +58,16 @@ INPUTS:
 * "P" -- array of integers, a permutation
 * "A" -- CuModMatrix, the matrix to permute
 """
-function _apply_col_perm_kernel!(A::CuDeviceMatrix{T}, P::CuDeviceVector{Tuple{Int, Int}, 1}, n::Int) where {T}
+function _apply_col_perm_kernel!(
+    A::CuDeviceMatrix{T},
+    P::CuDeviceVector{Tuple{Int,Int},1},
+    n::Int,
+) where {T}
     tid = threadIdx().x
     bid = blockIdx().x
     row = (bid - 1) * TILE_WIDTH + tid
 
-    for i in 1:length(P)
+    for i = 1:length(P)
         col1, col2 = P[i]
         temp = A[row, col1]
         A[row, col1] = A[row, col2]
@@ -70,33 +86,45 @@ INPUTS:
 * "P" -- array of integers, a permutation
 * "A" -- CuModMatrix, the matrix to permute
 """
-function apply_row_perm!(P::Array{Tuple{Int, Int}, 1}, A::CuModMatrix)
+function apply_row_perm!(P::Array{Tuple{Int,Int},1}, A::CuModMatrix)
     n = size(A.data, 2)
     P_gpu = CuArray(P)
 
-    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_row_perm_kernel!(A.data, P_gpu, size(A, 1))
+    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_row_perm_kernel!(
+        A.data,
+        P_gpu,
+        size(A, 1),
+    )
 
     return
 end
 
-function apply_row_inv_perm!(P::Array{Tuple{Int, Int}, 1}, A)
+function apply_row_inv_perm!(P::Array{Tuple{Int,Int},1}, A)
     n = size(A.data, 2)
     P_gpu = CuArray(reverse(P))
 
-    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_row_perm_kernel!(A.data, P_gpu, size(A, 1))
+    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_row_perm_kernel!(
+        A.data,
+        P_gpu,
+        size(A, 1),
+    )
 
     return
 end
 
-function apply_row_perm(P::Array{Tuple{Int, Int}, 1}, A)
+function apply_row_perm(P::Array{Tuple{Int,Int},1}, A)
 
     n = size(A.data, 2)
     P_gpu = CuArray(P)
     A_data_copy = copy(A.data)
 
-    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_row_perm_kernel!(A_data_copy, P_gpu, size(A, 1))
+    @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_row_perm_kernel!(
+        A_data_copy,
+        P_gpu,
+        size(A, 1),
+    )
 
-    return CuModMatrix(A_data_copy, A.N; new_size=size(A))
+    return CuModMatrix(A_data_copy, A.N; new_size = size(A))
 end
 
 """
@@ -109,12 +137,16 @@ INPUTS:
 * "P" -- array of integers, a permutation
 * "A" -- CuModMatrix, the matrix to permute
 """
-function _apply_row_perm_kernel!(A::CuDeviceMatrix{T}, P::CuDeviceVector{Tuple{Int, Int}, 1}, n::Int) where {T}
+function _apply_row_perm_kernel!(
+    A::CuDeviceMatrix{T},
+    P::CuDeviceVector{Tuple{Int,Int},1},
+    n::Int,
+) where {T}
     tid = threadIdx().x
     bid = blockIdx().x
     col = (bid - 1) * TILE_WIDTH + tid
 
-    for i in 1:length(P)
+    for i = 1:length(P)
         row1, row2 = P[i]
         temp = A[row1, col]
         A[row1, col] = A[row2, col]
@@ -138,7 +170,12 @@ is at the position of i in the input array or stack of tuples.
 # Returns
 - A CuModMatrix representation of the permutation
 """
-function perm_array_to_matrix(perm::Vector, N::Integer, new_size::Tuple{Int,Int}; perm_stack::Bool=false)
+function perm_array_to_matrix(
+    perm::Vector,
+    N::Integer,
+    new_size::Tuple{Int,Int};
+    perm_stack::Bool = false,
+)
     rows, cols = length(perm), length(perm)
 
     if perm_stack
@@ -148,10 +185,10 @@ function perm_array_to_matrix(perm::Vector, N::Integer, new_size::Tuple{Int,Int}
         end
     else
         P = Base.zeros(Int, rows, cols)
-        for i in 1:rows
+        for i = 1:rows
             P[perm[i], i] = 1
         end
     end
 
-    return CuModMatrix(P, N; new_size=new_size)
+    return CuModMatrix(P, N; new_size = new_size)
 end

@@ -7,7 +7,14 @@ In-place tiled Schur update on trailing block:
 - `U12 = A[k0:kend, kend+1:n]`
 - `A22 = A[kend+1:n, kend+1:n]`
 """
-function pluq_schur_update_tiled_kernel!(A, k0::Int32, kend::Int32, n::Int32, N::Int32, transpose_u::Bool)
+function pluq_schur_update_tiled_kernel!(
+    A,
+    k0::Int32,
+    kend::Int32,
+    n::Int32,
+    N::Int32,
+    transpose_u::Bool,
+)
     tx = Int(threadIdx().x)
     ty = Int(threadIdx().y)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x + kend
@@ -57,7 +64,14 @@ function pluq_schur_update_tiled_kernel!(A, k0::Int32, kend::Int32, n::Int32, N:
     return
 end
 
-function pluq_schur_update_tiled_kernel_8!(A, k0::Int32, kend::Int32, n::Int32, N::Int32, transpose_u::Bool)
+function pluq_schur_update_tiled_kernel_8!(
+    A,
+    k0::Int32,
+    kend::Int32,
+    n::Int32,
+    N::Int32,
+    transpose_u::Bool,
+)
     tx = Int(threadIdx().x)
     ty = Int(threadIdx().y)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x + kend
@@ -107,7 +121,14 @@ function pluq_schur_update_tiled_kernel_8!(A, k0::Int32, kend::Int32, n::Int32, 
     return
 end
 
-function pluq_schur_update_tiled_kernel_32!(A, k0::Int32, kend::Int32, n::Int32, N::Int32, transpose_u::Bool)
+function pluq_schur_update_tiled_kernel_32!(
+    A,
+    k0::Int32,
+    kend::Int32,
+    n::Int32,
+    N::Int32,
+    transpose_u::Bool,
+)
     tx = Int(threadIdx().x)
     ty = Int(threadIdx().y)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x + kend
@@ -162,7 +183,14 @@ end
 
 Apply the Schur complement update `A22 -= L21 * U12` in place on the trailing block.
 """
-function pluq_schur_update_gpu!(Adata::CuArray{T,2}, N::Int, k0::Int, kend::Int, n::Int; options::PLUQOptions=PLUQOptions()) where {T}
+function pluq_schur_update_gpu!(
+    Adata::CuArray{T,2},
+    N::Int,
+    k0::Int,
+    kend::Int,
+    n::Int;
+    options::PLUQOptions = PLUQOptions(),
+) where {T}
     if kend >= n
         return
     end
@@ -175,11 +203,15 @@ function pluq_schur_update_gpu!(Adata::CuArray{T,2}, N::Int, k0::Int, kend::Int,
         # FP32/FP64 inputs; FAST_MATH is intentionally rejected because TF32
         # truncates integer mantissas.
         if CUDA.math_mode() == CUDA.FAST_MATH && T == Float32
-            throw(ArgumentError("PLUQ exact Schur updates require CUDA DEFAULT_MATH or PEDANTIC_MATH"))
+            throw(
+                ArgumentError(
+                    "PLUQ exact Schur updates require CUDA DEFAULT_MATH or PEDANTIC_MATH",
+                ),
+            )
         end
-        L21 = @view Adata[(kend + 1):n, k0:kend]
-        U12 = @view Adata[k0:kend, (kend + 1):n]
-        A22 = @view Adata[(kend + 1):n, (kend + 1):n]
+        L21 = @view Adata[(kend+1):n, k0:kend]
+        U12 = @view Adata[k0:kend, (kend+1):n]
+        A22 = @view Adata[(kend+1):n, (kend+1):n]
         mul!(A22, L21, U12, -one(T), one(T))
         A22 .= mod.(A22, T(N))
         return
@@ -199,11 +231,32 @@ function pluq_schur_update_gpu!(Adata::CuArray{T,2}, N::Int, k0::Int, kend::Int,
     ty = tile
     blocks = (max(1, cld(trailing, tx)), max(1, cld(trailing, ty)))
     if tile == 8
-        @cuda threads=(tx, ty) blocks=blocks pluq_schur_update_tiled_kernel_8!(Adata, Int32(k0), Int32(kend), Int32(n), Int32(N), options.schur_transpose_u)
+        @cuda threads=(tx, ty) blocks=blocks pluq_schur_update_tiled_kernel_8!(
+            Adata,
+            Int32(k0),
+            Int32(kend),
+            Int32(n),
+            Int32(N),
+            options.schur_transpose_u,
+        )
     elseif tile == 32
-        @cuda threads=(tx, ty) blocks=blocks pluq_schur_update_tiled_kernel_32!(Adata, Int32(k0), Int32(kend), Int32(n), Int32(N), options.schur_transpose_u)
+        @cuda threads=(tx, ty) blocks=blocks pluq_schur_update_tiled_kernel_32!(
+            Adata,
+            Int32(k0),
+            Int32(kend),
+            Int32(n),
+            Int32(N),
+            options.schur_transpose_u,
+        )
     else
-        @cuda threads=(16, 16) blocks=blocks pluq_schur_update_tiled_kernel!(Adata, Int32(k0), Int32(kend), Int32(n), Int32(N), options.schur_transpose_u)
+        @cuda threads=(16, 16) blocks=blocks pluq_schur_update_tiled_kernel!(
+            Adata,
+            Int32(k0),
+            Int32(kend),
+            Int32(n),
+            Int32(N),
+            options.schur_transpose_u,
+        )
     end
     return
 end
@@ -214,8 +267,14 @@ end
 Column-major tiled fallback for `A22 -= L21*U12` on an `m × n` matrix.  The
 x dimension indexes rows, so adjacent lanes read and write adjacent addresses.
 """
-function pluq_schur_update_rect_tiled_kernel!(A, k0::Int32, kend::Int32,
-                                              m::Int32, n::Int32, N::Int32)
+function pluq_schur_update_rect_tiled_kernel!(
+    A,
+    k0::Int32,
+    kend::Int32,
+    m::Int32,
+    n::Int32,
+    N::Int32,
+)
     tx = Int(threadIdx().x)
     ty = Int(threadIdx().y)
     i = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x + kend
@@ -245,23 +304,41 @@ function pluq_schur_update_rect_tiled_kernel!(A, k0::Int32, kend::Int32,
 end
 
 """Apply a blocked Schur update to the rectangular trailing matrix."""
-function pluq_schur_update_rect_gpu!(Adata::CuArray{T,2}, N::Int, k0::Int,
-                                     kend::Int, m::Int, n::Int;
-                                     options::PLUQOptions=PLUQOptions()) where {T}
+function pluq_schur_update_rect_gpu!(
+    Adata::CuArray{T,2},
+    N::Int,
+    k0::Int,
+    kend::Int,
+    m::Int,
+    n::Int;
+    options::PLUQOptions = PLUQOptions(),
+) where {T}
     (kend >= m || kend >= n) && return
     panel_width = kend - k0 + 1
     if find_max_ops(T, N) >= panel_width
-        CUDA.math_mode() == CUDA.FAST_MATH && T == Float32 &&
-            throw(ArgumentError("PLUQ exact Schur updates require CUDA DEFAULT_MATH or PEDANTIC_MATH"))
-        L21 = @view Adata[(kend + 1):m, k0:kend]
-        U12 = @view Adata[k0:kend, (kend + 1):n]
-        A22 = @view Adata[(kend + 1):m, (kend + 1):n]
+        CUDA.math_mode() == CUDA.FAST_MATH &&
+            T == Float32 &&
+            throw(
+                ArgumentError(
+                    "PLUQ exact Schur updates require CUDA DEFAULT_MATH or PEDANTIC_MATH",
+                ),
+            )
+        L21 = @view Adata[(kend+1):m, k0:kend]
+        U12 = @view Adata[k0:kend, (kend+1):n]
+        A22 = @view Adata[(kend+1):m, (kend+1):n]
         mul!(A22, L21, U12, -one(T), one(T))
         A22 .= mod.(A22, T(N))
         return
     end
     tx = 16
     ty = 16
-    @cuda threads=(tx, ty) blocks=(max(1, cld(m - kend, tx)), max(1, cld(n - kend, ty))) pluq_schur_update_rect_tiled_kernel!(Adata, Int32(k0), Int32(kend), Int32(m), Int32(n), Int32(N))
+    @cuda threads=(tx, ty) blocks=(max(1, cld(m - kend, tx)), max(1, cld(n - kend, ty))) pluq_schur_update_rect_tiled_kernel!(
+        Adata,
+        Int32(k0),
+        Int32(kend),
+        Int32(m),
+        Int32(n),
+        Int32(N),
+    )
     return
 end

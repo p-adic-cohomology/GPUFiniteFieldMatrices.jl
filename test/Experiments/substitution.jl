@@ -5,8 +5,8 @@
 
 # """
 # function forward_sub_kernel(
-#     A::CuDeviceMatrix{T1}, 
-#     A_inv::CuDeviceMatrix{T2}, 
+#     A::CuDeviceMatrix{T1},
+#     A_inv::CuDeviceMatrix{T2},
 #     N::Int
 # ) where {T1, T2}
 
@@ -19,7 +19,7 @@
 #         for k in 1:(row-1)
 #             sum = mod(sum + A[row, k] * A_inv[k, col], N)
 #         end
-        
+
 #         rhs = (row == col) ? 1 : 0
 #         diag_inv = mod_inv(A[row, row], N)
 #         A_inv[row, col] = mod(diag_inv * (rhs - sum + N), N)
@@ -67,8 +67,8 @@
 
 # """
 # function backward_sub_kernel(
-#     A::CuDeviceMatrix{T1}, 
-#     A_inv::CuDeviceMatrix{T2}, 
+#     A::CuDeviceMatrix{T1},
+#     A_inv::CuDeviceMatrix{T2},
 #     N::Int
 # ) where {T1, T2}
 #     bid = blockIdx().x

@@ -1,14 +1,14 @@
 function _rect_id(::Type{T}, n::Int) where {T}
     M = zeros(T, n, n)
-    for i in 1:n
+    for i = 1:n
         M[i, i] = one(T)
     end
     return M
 end
 
-function _random_full_row_rank(m::Int, n::Int, p::Int; max_tries::Int=64)
-    for _ in 1:max_tries
-        Ahost = rand(0:(p - 1), m, n)
+function _random_full_row_rank(m::Int, n::Int, p::Int; max_tries::Int = 64)
+    for _ = 1:max_tries
+        Ahost = rand(0:(p-1), m, n)
         A = CuModMatrix(Ahost, p)
         try
             X = right_inverse_new(A)
@@ -19,9 +19,9 @@ function _random_full_row_rank(m::Int, n::Int, p::Int; max_tries::Int=64)
     error("failed to sample full-row-rank matrix of size $(m)x$(n)")
 end
 
-function _random_full_col_rank(m::Int, n::Int, p::Int; max_tries::Int=64)
-    for _ in 1:max_tries
-        Ahost = rand(0:(p - 1), m, n)
+function _random_full_col_rank(m::Int, n::Int, p::Int; max_tries::Int = 64)
+    for _ = 1:max_tries
+        Ahost = rand(0:(p-1), m, n)
         A = CuModMatrix(Ahost, p)
         try
             X = left_inverse_new(A)

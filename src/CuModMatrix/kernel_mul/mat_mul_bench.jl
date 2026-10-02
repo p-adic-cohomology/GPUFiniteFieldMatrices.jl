@@ -9,7 +9,7 @@ function mat_mul_benchmark_sizes(sizes, P)
 
     # Print out GPU information
     gpu_info()
-    
+
     # Primer and sanity check
     DEFAULT_SIZE = 5000
     A = rand(1:(P-1), DEFAULT_SIZE, DEFAULT_SIZE)
@@ -22,11 +22,11 @@ function mat_mul_benchmark_sizes(sizes, P)
     for size in sizes
 
         println(@benchmark begin
-            A = rand(1:($P-1), $size[1,1], $size[1,2])
+            A = rand(1:($P-1), $size[1, 1], $size[1, 2])
         end)
 
         println(@benchmark begin
-            B = rand(1:($P-1), $size[2,1], $size[2,2])
+            B = rand(1:($P-1), $size[2, 1], $size[2, 2])
         end)
 
         println(@benchmark begin
@@ -45,7 +45,7 @@ function mat_mul_benchmark_types(types, P)
 
     # Print out GPU information
     gpu_info()
-    
+
     # Primer and sanity check
     DEFAULT_SIZE = 5000
     A = rand(1:(P-1), DEFAULT_SIZE, DEFAULT_SIZE)
@@ -81,7 +81,7 @@ function mat_mul_benchmark_regimes(regimes, P)
 
     # Print out GPU information
     gpu_info()
-    
+
     # Primer and sanity check
     DEFAULT_SIZE = 5000
     A = rand(1:(P-1), DEFAULT_SIZE, DEFAULT_SIZE)
@@ -117,7 +117,7 @@ function mat_mul_benchmark_all(regimes, types, sizes, P)
 
     # Print out GPU information
     gpu_info()
-    
+
     # Primer and sanity check
     DEFAULT_SIZE = 1000
     A = rand(1:(9-1), DEFAULT_SIZE, DEFAULT_SIZE)
@@ -129,52 +129,50 @@ function mat_mul_benchmark_all(regimes, types, sizes, P)
 
     for (regime, type, size, P) in IterTools.product(regimes, types, sizes, P)
 
-        println(
-"""
-Beginning Test for:
-    Regime: $regime
-    Type $type
-    Size: $size
-    N: $P
-"""
-        )
+        println("""
+                Beginning Test for:
+                    Regime: $regime
+                    Type $type
+                    Size: $size
+                    N: $P
+                """)
 
         try
 
-        suite[regime, type, size, P] = BenchmarkGroup()
+            suite[regime, type, size, P] = BenchmarkGroup()
 
-        # suite[regime, type, size, P]["allocA"] = @benchmark begin
-        #     A = rand(1:($P-1), $size[1,1], $size[1,2])
-        # end
+            # suite[regime, type, size, P]["allocA"] = @benchmark begin
+            #     A = rand(1:($P-1), $size[1,1], $size[1,2])
+            # end
 
-        # println("Alloc A done")
+            # println("Alloc A done")
 
-        # suite[regime, type, size, P]["allocB"] = @benchmark begin
-        #     B = rand(1:($P-1), $size[2,1], $size[2,2])
-        # end
+            # suite[regime, type, size, P]["allocB"] = @benchmark begin
+            #     B = rand(1:($P-1), $size[2,1], $size[2,2])
+            # end
 
-        # println("Alloc B done")
+            # println("Alloc B done")
 
-        A = rand(1:(P-1), size[1,1], size[1,2])
-        B = rand(1:(P-1), size[2,1], size[2,2])
+            A = rand(1:(P-1), size[1, 1], size[1, 2])
+            B = rand(1:(P-1), size[2, 1], size[2, 2])
 
-        println("Allocs done")
+            println("Allocs done")
 
-        suite[regime, type, size, P]["gpu"] = @benchmark begin
-            C = CUDA.@sync mat_mul_gpu($A, $B, $P, $regime, $type)
-        end
+            suite[regime, type, size, P]["gpu"] = @benchmark begin
+                C = CUDA.@sync mat_mul_gpu($A, $B, $P, $regime, $type)
+            end
 
-        println("GPU done")
+            println("GPU done")
 
-        suite[regime, type, size, P]["cpu"] = @benchmark begin
-            C = CUDA.@sync mat_mul_cpu($A, $B, $P)
-        end
+            suite[regime, type, size, P]["cpu"] = @benchmark begin
+                C = CUDA.@sync mat_mul_cpu($A, $B, $P)
+            end
 
-        println("CPU done")
+            println("CPU done")
 
         catch
-            
-        println("An error had occurred!")
+
+            println("An error had occurred!")
 
         end
 
@@ -192,13 +190,13 @@ Beginning Test for:
     f = serialize("suite.dat", suite)
 
     return suite
-end 
+end
 
 """
 Run program once to remove compilation time
 """
 function mat_mul_primer(A, B, P)
-    
+
     C = mat_mul_gpu(A, B, P)
     C_ref = A * B
     C_ref = mod.(C_ref, P)

@@ -6,10 +6,10 @@ function float_entries!(dest::Matrix{Float64}, src)
     res = dest
     A = src
 
-    for i in 1:size(A,1)
-        for j in 1:size(A,2)
-            lifted = Int64(lift(ZZ, A[i,j]))
-            res[i,j] = convert(Float64, lifted)
+    for i = 1:size(A, 1)
+        for j = 1:size(A, 2)
+            lifted = Int64(lift(ZZ, A[i, j]))
+            res[i, j] = convert(Float64, lifted)
         end
     end
 
@@ -21,34 +21,34 @@ function compute_inverse_from_nemo_lu(rank::Int, P::Perm, L, U)
     if rank != nrows(U)
         return false, nothing
     end
-    
+
     # Get the modulus from the base ring
     N = Int(characteristic(base_ring(L)))
-    
+
     # Convert matrices to regular matrices first
-    
+
     # Convert to float matrices
     L_float = zeros(Float64, size(L)...)
     U_float = zeros(Float64, size(U)...)
     float_entries!(L_float, L)
     float_entries!(U_float, U)
-    
+
     # Create CuModMatrix versions
-    L_gpu = CuModMatrix(L_float, N; new_size=size(L_float))
-    U_gpu = CuModMatrix(U_float, N; new_size=size(U_float))
-    
+    L_gpu = CuModMatrix(L_float, N; new_size = size(L_float))
+    U_gpu = CuModMatrix(U_float, N; new_size = size(U_float))
+
     # Compute inverses using triangular inverse functions
     U_inv = upper_triangular_inverse(U_gpu)
     L_inv = lower_triangular_inverse(L_gpu)
-    
+
     # Convert permutation to array format
     # P_arr = Array(P.d)
     # length_P = length(P_arr)
     # P_gpu = perm_array_to_matrix(P_arr, N, (length_P, length_P))
-    
+
     # Apply permutations and multiply to get final inverse
     A_inv = U_inv * L_inv
-    
+
     return true, A_inv
 end
 

@@ -31,7 +31,7 @@ end
 # Aqua quality gate — CPU-runnable, so it runs unconditionally (outside the
 # CUDA.functional() guard below).
 @testset "Aqua" begin
-    Aqua.test_all(GPUFiniteFieldMatrices; stale_deps=false, deps_compat=false)
+    Aqua.test_all(GPUFiniteFieldMatrices; stale_deps = false, deps_compat = false)
 end
 
 include("CuModMatrix/basic_operations_test.jl")
@@ -56,7 +56,9 @@ include("CuModMatrix/inverse/runtests.jl")
     # `CuRef` is owned by CUDACore but re-exported through CUDA's CUBLAS
     # submodule; accessing it via CUBLAS is a re-export false positive.
     @test check_all_qualified_accesses_via_owners(
-        GPUFiniteFieldMatrices; ignore=(:CuRef,)) === nothing
+        GPUFiniteFieldMatrices;
+        ignore = (:CuRef,),
+    ) === nothing
 
     # The ignored names are non-public internals that the GPU code genuinely
     # needs and for which there is no public alternative:
@@ -64,7 +66,8 @@ include("CuModMatrix/inverse/runtests.jl")
     #   CuRef, gemm!, gemv!, gemv_batched! – CUDA.CUBLAS low-level BLAS entry points
     @test check_all_qualified_accesses_are_public(
         GPUFiniteFieldMatrices;
-        ignore=(:CHOLMOD, :CuRef, :gemm!, :gemv!, :gemv_batched!)) === nothing
+        ignore = (:CHOLMOD, :CuRef, :gemm!, :gemv!, :gemv_batched!),
+    ) === nothing
 end
 
 if CUDA.functional()

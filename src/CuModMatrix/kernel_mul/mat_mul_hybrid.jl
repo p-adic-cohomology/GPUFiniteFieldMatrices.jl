@@ -1,6 +1,6 @@
 const global TILE_WIDTH = 32
 
-function mat_mul_gpu(A, B, N, REGIME="⊡", type=Float64, tile_width=25)
+function mat_mul_gpu(A, B, N, REGIME = "⊡", type = Float64, tile_width = 25)
     """
     Hybrid matmul algorithm that incorporates three different regimes:
 
@@ -20,14 +20,12 @@ function mat_mul_gpu(A, B, N, REGIME="⊡", type=Float64, tile_width=25)
     """
 
     A_rows, A_cols = size(A)
-    B_rows,B_cols = size(B)
+    B_rows, B_cols = size(B)
 
     if A_cols != B_rows
-        throw(CuModArraySizeMismatchException(
-            "Matrix dimensions do not match.
+        throw(CuModArraySizeMismatchException("Matrix dimensions do not match.
             A has $A_rows rows and $A_cols cols, 
-            B has $B_rows rows and $B_cols cols."
-        ))
+            B has $B_rows rows and $B_cols cols."))
     end
 
     A_padded_rows = ceil(Int, A_rows / TILE_WIDTH) * TILE_WIDTH
@@ -36,9 +34,9 @@ function mat_mul_gpu(A, B, N, REGIME="⊡", type=Float64, tile_width=25)
 
     # Define indices for moving to CUDA Arrays
     Ainds = CartesianIndices(A)
-    d_Ainds = CartesianIndices((1:A_rows,1:A_cols))
+    d_Ainds = CartesianIndices((1:A_rows, 1:A_cols))
     Binds = CartesianIndices(B)
-    d_Binds = CartesianIndices((1:B_rows,1:B_cols))
+    d_Binds = CartesianIndices((1:B_rows, 1:B_cols))
 
     # Define CUDA arrays of appropriate size
     t = eltype(A)
@@ -72,22 +70,28 @@ function mat_mul_gpu(A, B, N, REGIME="⊡", type=Float64, tile_width=25)
 
     # Compute based on regime
     if REGIME == "⊡"
-        return mat_mul_plain(d_A,d_B,N)[1:A_rows, 1:B_cols]
+        return mat_mul_plain(d_A, d_B, N)[1:A_rows, 1:B_cols]
 
     elseif REGIME == "⊟"
         println("running the algorithm")
-        @cuda threads=(TILE_WIDTH,TILE_WIDTH) blocks=(div(B_padded_cols,TILE_WIDTH),div(A_padded_rows,TILE_WIDTH)) mat_mul_no_ops(d_A,d_B,d_C,N,A_padded_rows,type)
+        @cuda threads=(TILE_WIDTH, TILE_WIDTH) blocks=(
+            div(B_padded_cols, TILE_WIDTH),
+            div(A_padded_rows, TILE_WIDTH),
+        ) mat_mul_no_ops(d_A, d_B, d_C, N, A_padded_rows, type)
         return d_C[1:A_rows, 1:B_cols]
 
     elseif REGIME == "⊞"
-        @cuda threads=(TILE_WIDTH,TILE_WIDTH) blocks=(div(B_padded_cols,TILE_WIDTH),div(A_padded_rows,TILE_WIDTH)) mat_mul_ops(d_A,d_B,d_C,N,A_padded_rows,type,MAX_OPS)
+        @cuda threads=(TILE_WIDTH, TILE_WIDTH) blocks=(
+            div(B_padded_cols, TILE_WIDTH),
+            div(A_padded_rows, TILE_WIDTH),
+        ) mat_mul_ops(d_A, d_B, d_C, N, A_padded_rows, type, MAX_OPS)
         return d_C[1:A_rows, 1:B_cols]
 
     else
         error("Input regime is invalid.")
     end
 
-    return 
+    return
 end
 
 # """
@@ -109,7 +113,7 @@ end
 
 #     elseif occursin("Int", string(type))
 #         bits = int(match(r"\d+", string(type)).match)
-    
+
 #     else
 #         error("The input type is neither Int, UInt, nor Float.")
 #     end

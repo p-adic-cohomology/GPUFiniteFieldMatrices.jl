@@ -10,7 +10,13 @@ function k_div_scalar!(out, A, s_inv, m)
     return
 end
 
-function div!(C::CuModArray, A::CuModArray, s::Integer, mod_N::Integer=-1; threads::Int=DEFAULT_THREADS)
+function div!(
+    C::CuModArray,
+    A::CuModArray,
+    s::Integer,
+    mod_N::Integer = -1;
+    threads::Int = DEFAULT_THREADS,
+)
     m = mod_N > 0 ? mod_N : C.N
     s_inv = mod_inv(s, m)
     mT = convert(eltype(C.data), m)
@@ -26,4 +32,3 @@ function /(A::CuModArray, s::Integer)
     div!(C, A, s)
     return C
 end
-

@@ -30,7 +30,7 @@ function pluq_find_pivot_rect_kernel!(A, pivot_slot, k::Int32, m::Int32, n::Int3
     step = Int(blockDim().x) >>> 1
     while step >= 1
         if ltid <= step
-            smins[ltid] = min(smins[ltid], smins[ltid + step])
+            smins[ltid] = min(smins[ltid], smins[ltid+step])
         end
         sync_threads()
         step >>>= 1
@@ -41,7 +41,14 @@ function pluq_find_pivot_rect_kernel!(A, pivot_slot, k::Int32, m::Int32, n::Int3
     return
 end
 
-function pluq_find_pivot_rect_warp_kernel!(A, pivot_slot, k::Int32, m::Int32, n::Int32, N::Int32)
+function pluq_find_pivot_rect_warp_kernel!(
+    A,
+    pivot_slot,
+    k::Int32,
+    m::Int32,
+    n::Int32,
+    N::Int32,
+)
     lane = Int(threadIdx().x)
     if lane > 32
         return
@@ -51,7 +58,7 @@ function pluq_find_pivot_rect_warp_kernel!(A, pivot_slot, k::Int32, m::Int32, n:
     joff = Int32(0)
     while joff < span_c
         row = k + Int32(lane - 1)
-        pred = Int32(lane) <= span_r && _pluq_mod_t(A[row, k + joff], N) != zero(eltype(A))
+        pred = Int32(lane) <= span_r && _pluq_mod_t(A[row, k+joff], N) != zero(eltype(A))
         bits = CUDA.vote_ballot_sync(CUDA.FULL_MASK, pred)
         if bits != UInt32(0)
             if lane == 1
@@ -65,7 +72,14 @@ function pluq_find_pivot_rect_warp_kernel!(A, pivot_slot, k::Int32, m::Int32, n:
     return
 end
 
-function pluq_find_pivot_rect_warp_shfl_kernel!(A, pivot_slot, k::Int32, m::Int32, n::Int32, N::Int32)
+function pluq_find_pivot_rect_warp_shfl_kernel!(
+    A,
+    pivot_slot,
+    k::Int32,
+    m::Int32,
+    n::Int32,
+    N::Int32,
+)
     lane = Int32(threadIdx().x)
     if lane > Int32(32)
         return
@@ -77,7 +91,7 @@ function pluq_find_pivot_rect_warp_shfl_kernel!(A, pivot_slot, k::Int32, m::Int3
         row = k + lane - Int32(1)
         joff = Int32(0)
         while joff < span_c
-            if _pluq_mod_t(A[row, k + joff], N) != zero(eltype(A))
+            if _pluq_mod_t(A[row, k+joff], N) != zero(eltype(A))
                 cand = joff * span_r + lane
                 local_min = min(local_min, cand)
             end
@@ -147,7 +161,13 @@ Returns `(p, q, rank)` where:
 - `q` is column permutation vector (length `n`)
 - `rank` is computed rank over `GF(N)`.
 """
-function pluq_rectangular_rank_reference_gpu!(Adata::CuArray{T,2}, N::Int, m::Int, n::Int; options::PLUQOptions=PLUQOptions()) where {T}
+function pluq_rectangular_rank_reference_gpu!(
+    Adata::CuArray{T,2},
+    N::Int,
+    m::Int,
+    n::Int;
+    options::PLUQOptions = PLUQOptions(),
+) where {T}
     rmax = min(m, n)
     p = collect(1:m)
     q = collect(1:n)
@@ -160,7 +180,7 @@ function pluq_rectangular_rank_reference_gpu!(Adata::CuArray{T,2}, N::Int, m::In
     n32 = Int32(n)
     pivot_slot = CUDA.fill(Int32(max(1, m * n + 1)), 1)
     pivot_host = _pluq_host_i32_buffer()
-    for k in 1:rmax
+    for k = 1:rmax
         span_r = m - k + 1
         span_c = n - k + 1
         total = span_r * span_c
@@ -169,12 +189,33 @@ function pluq_rectangular_rank_reference_gpu!(Adata::CuArray{T,2}, N::Int, m::In
         k32 = Int32(k)
         if span_r <= 32
             if options.pivot_warp_kernel == :shfl
-                @cuda threads=32 blocks=1 pluq_find_pivot_rect_warp_shfl_kernel!(Adata, pivot_slot, k32, m32, n32, N32)
+                @cuda threads=32 blocks=1 pluq_find_pivot_rect_warp_shfl_kernel!(
+                    Adata,
+                    pivot_slot,
+                    k32,
+                    m32,
+                    n32,
+                    N32,
+                )
             else
-                @cuda threads=32 blocks=1 pluq_find_pivot_rect_warp_kernel!(Adata, pivot_slot, k32, m32, n32, N32)
+                @cuda threads=32 blocks=1 pluq_find_pivot_rect_warp_kernel!(
+                    Adata,
+                    pivot_slot,
+                    k32,
+                    m32,
+                    n32,
+                    N32,
+                )
             end
         else
-            @cuda threads=threads blocks=blocks pluq_find_pivot_rect_kernel!(Adata, pivot_slot, k32, m32, n32, N32)
+            @cuda threads=threads blocks=blocks pluq_find_pivot_rect_kernel!(
+                Adata,
+                pivot_slot,
+                k32,
+                m32,
+                n32,
+                N32,
+            )
         end
         pivlin = _pluq_read_i32!(pivot_host, pivot_slot)
         if pivlin > total
@@ -185,7 +226,12 @@ function pluq_rectangular_rank_reference_gpu!(Adata::CuArray{T,2}, N::Int, m::In
         prow = k + ioff
         pcol = k + joff
         if prow != k
-            @cuda threads=threads blocks=max(1, cld(n, threads)) pluq_swap_rows_kernel!(Adata, k32, Int32(prow), n32)
+            @cuda threads=threads blocks=max(1, cld(n, threads)) pluq_swap_rows_kernel!(
+                Adata,
+                k32,
+                Int32(prow),
+                n32,
+            )
             if options.lazy_q
                 lp[k], lp[prow] = lp[prow], lp[k]
             else
@@ -193,7 +239,12 @@ function pluq_rectangular_rank_reference_gpu!(Adata::CuArray{T,2}, N::Int, m::In
             end
         end
         if pcol != k
-            @cuda threads=threads blocks=max(1, cld(m, threads)) pluq_swap_cols_kernel!(Adata, k32, Int32(pcol), m32)
+            @cuda threads=threads blocks=max(1, cld(m, threads)) pluq_swap_cols_kernel!(
+                Adata,
+                k32,
+                Int32(pcol),
+                m32,
+            )
             if options.lazy_q
                 lq[k], lq[pcol] = lq[pcol], lq[k]
             else
@@ -201,14 +252,25 @@ function pluq_rectangular_rank_reference_gpu!(Adata::CuArray{T,2}, N::Int, m::In
             end
         end
         if k < m
-            @cuda threads=threads blocks=max(1, cld(m - k, threads)) pluq_scale_column_rect_from_diag_kernel!(Adata, k32, m32, N32)
+            @cuda threads=threads blocks=max(1, cld(m - k, threads)) pluq_scale_column_rect_from_diag_kernel!(
+                Adata,
+                k32,
+                m32,
+                N32,
+            )
         end
         if k < n
             tx = 16
             ty = 16
             bx = max(1, cld(m - k, tx))
             by = max(1, cld(n - k, ty))
-            @cuda threads=(tx, ty) blocks=(bx, by) pluq_rank1_update_rect_kernel!(Adata, k32, m32, n32, N32)
+            @cuda threads=(tx, ty) blocks=(bx, by) pluq_rank1_update_rect_kernel!(
+                Adata,
+                k32,
+                m32,
+                n32,
+                N32,
+            )
         end
         rank += 1
     end
@@ -228,9 +290,18 @@ which is coalesced in Julia's column-major storage.  If a column is exhausted,
 the panel reports its partial rank; the public wrapper restores the original
 matrix and uses the complete-pivot reference path for that exceptional case.
 """
-function pluq_rect_panel_fused_kernel!(A, p, q, dinv, rank_slot,
-                                       k0::Int32, kend::Int32,
-                                       m::Int32, n::Int32, N::Int32)
+function pluq_rect_panel_fused_kernel!(
+    A,
+    p,
+    q,
+    dinv,
+    rank_slot,
+    k0::Int32,
+    kend::Int32,
+    m::Int32,
+    n::Int32,
+    N::Int32,
+)
     tid = Int32(threadIdx().x)
     nt = Int32(blockDim().x)
     candidates = CuStaticSharedArray(Int32, 256)
@@ -259,7 +330,8 @@ function pluq_rect_panel_fused_kernel!(A, p, q, dinv, rank_slot,
         step = nt >>> 1
         while step >= Int32(1)
             if tid <= step
-                candidates[Int(tid)] = min(candidates[Int(tid)], candidates[Int(tid + step)])
+                candidates[Int(tid)] =
+                    min(candidates[Int(tid)], candidates[Int(tid + step)])
             end
             sync_threads()
             step >>>= 1
@@ -338,7 +410,8 @@ function pluq_rect_panel_fused_kernel!(A, p, q, dinv, rank_slot,
             ioff = (idx - Int32(1)) % width + Int32(1)
             row = k + ioff
             col = k + joff
-            A[row, col] = _pluq_mod_t(A[row, col] - _pluq_mod_mul_t(A[row, k], A[k, col], N), N)
+            A[row, col] =
+                _pluq_mod_t(A[row, col] - _pluq_mod_mul_t(A[row, k], A[k, col], N), N)
             idx += nt
         end
         sync_threads()
@@ -347,18 +420,43 @@ function pluq_rect_panel_fused_kernel!(A, p, q, dinv, rank_slot,
     return
 end
 
-function pluq_rect_panel_fused_gpu!(Adata::CuArray{T,2}, N::Int, pdev, qdev,
-                                    dinv, rank_slot, rank_host, k0::Int,
-                                    kend::Int, m::Int, n::Int) where {T}
+function pluq_rect_panel_fused_gpu!(
+    Adata::CuArray{T,2},
+    N::Int,
+    pdev,
+    qdev,
+    dinv,
+    rank_slot,
+    rank_host,
+    k0::Int,
+    kend::Int,
+    m::Int,
+    n::Int,
+) where {T}
     @cuda threads=256 blocks=1 pluq_rect_panel_fused_kernel!(
-        Adata, pdev, qdev, dinv, rank_slot, Int32(k0), Int32(kend), Int32(m), Int32(n), Int32(N))
+        Adata,
+        pdev,
+        qdev,
+        dinv,
+        rank_slot,
+        Int32(k0),
+        Int32(kend),
+        Int32(m),
+        Int32(n),
+        Int32(N),
+    )
     return _pluq_read_i32!(rank_host, rank_slot)
 end
 
 
 """Blocked rank-revealing PLUQ for a wide matrix in column-major storage."""
-function pluq_rectangular_rank_gpu!(Adata::CuArray{T,2}, N::Int, m::Int, n::Int;
-                                    options::PLUQOptions=PLUQOptions()) where {T}
+function pluq_rectangular_rank_gpu!(
+    Adata::CuArray{T,2},
+    N::Int,
+    m::Int,
+    n::Int;
+    options::PLUQOptions = PLUQOptions(),
+) where {T}
     rmax = min(m, n)
     pdev = CuArray(Int32.(1:m))
     qdev = CuArray(Int32.(1:n))
@@ -370,9 +468,19 @@ function pluq_rectangular_rank_gpu!(Adata::CuArray{T,2}, N::Int, m::Int, n::Int;
     while start <= rmax
         kend = min(start + options.blocksize - 1, rmax)
         panel_width = kend - start + 1
-        panel_rank = pluq_rect_panel_fused_gpu!(Adata, N, pdev, qdev, dinv,
-                                                rank_slot, rank_host, start,
-                                                kend, m, n)
+        panel_rank = pluq_rect_panel_fused_gpu!(
+            Adata,
+            N,
+            pdev,
+            qdev,
+            dinv,
+            rank_slot,
+            rank_host,
+            start,
+            kend,
+            m,
+            n,
+        )
         if panel_rank < panel_width
             # The panel has touched its local Schur block, so completing a
             # pivot outside that panel would require replaying its trailing
@@ -381,10 +489,9 @@ function pluq_rectangular_rank_gpu!(Adata::CuArray{T,2}, N::Int, m::Int, n::Int;
             return Int.(Array(pdev)), Int.(Array(qdev)), rank + panel_rank
         end
         rank += panel_rank
-        pluq_trsm_left_lower_unit_gpu!(Adata, N, start, kend, n, options=options)
-        pluq_trsm_right_upper_gpu!(Adata, N, start, kend, m, options=options,
-                                   dinv=dinv)
-        pluq_schur_update_rect_gpu!(Adata, N, start, kend, m, n, options=options)
+        pluq_trsm_left_lower_unit_gpu!(Adata, N, start, kend, n, options = options)
+        pluq_trsm_right_upper_gpu!(Adata, N, start, kend, m, options = options, dinv = dinv)
+        pluq_schur_update_rect_gpu!(Adata, N, start, kend, m, n, options = options)
         start = kend + 1
     end
     return Int.(Array(pdev)), Int.(Array(qdev)), rank

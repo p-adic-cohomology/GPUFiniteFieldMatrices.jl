@@ -18,7 +18,7 @@ function k_mul_scalar!(A, s, m)
     return
 end
 
-function launch_mul_scalar!(A, s, m; threads::Int=DEFAULT_THREADS)
+function launch_mul_scalar!(A, s, m; threads::Int = DEFAULT_THREADS)
     len = length(A)
     blocks = min(cld(len, threads), 65535)
     @cuda threads=threads blocks=blocks k_mul_scalar!(A, s, m)
@@ -26,22 +26,30 @@ function launch_mul_scalar!(A, s, m; threads::Int=DEFAULT_THREADS)
 end
 
 mul_scalar_broadcast!(A, s, m) = (A .= mod.(A .* s, m); nothing)
-mul_scalar_gpu!(A, s, m; threads=DEFAULT_THREADS) = (launch_mul_scalar!(A, s, m; threads=threads); nothing)
+mul_scalar_gpu!(A, s, m; threads = DEFAULT_THREADS) =
+    (launch_mul_scalar!(A, s, m; threads = threads); nothing)
 
-function bench_mul(specs; threads::Int=DEFAULT_THREADS, seconds::Float64=0.25, csv_path::AbstractString="mul_bench_results.csv")
+function bench_mul(
+    specs;
+    threads::Int = DEFAULT_THREADS,
+    seconds::Float64 = 0.25,
+    csv_path::AbstractString = "mul_bench_results.csv",
+)
     rows = Any[]
     for (nr, nc, mod_in, T) in specs
         println("\n=== MUL: $(nr)x$(nc), mod=$(mod_in), T=$(T) ===")
 
-        A_cpu = T.(rand(0:10^6, nr, nc))
+        A_cpu = T.(rand(0:(10^6), nr, nc))
         A1 = CuArray(A_cpu)
         A2 = CuArray(A_cpu)
 
         m = convert(T, mod_in)
         s = convert(T, 7)
 
-        mul_scalar_broadcast!(A1, s, m); CUDA.synchronize()
-        mul_scalar_gpu!(A2, s, m; threads=threads); CUDA.synchronize()
+        mul_scalar_broadcast!(A1, s, m)
+        CUDA.synchronize()
+        mul_scalar_gpu!(A2, s, m; threads = threads)
+        CUDA.synchronize()
 
         t_scalar_b = @belapsed begin
             mul_scalar_broadcast!($A1, $s, $m)
@@ -49,26 +57,33 @@ function bench_mul(specs; threads::Int=DEFAULT_THREADS, seconds::Float64=0.25, c
         end seconds=seconds
 
         t_scalar_k = @belapsed begin
-            mul_scalar_gpu!($A2, $s, $m; threads=$threads)
+            mul_scalar_gpu!($A2, $s, $m; threads = $threads)
             CUDA.synchronize()
         end seconds=seconds
 
         speedup_scalar = 100 * (t_scalar_b / t_scalar_k - 1)
         push!(rows, (nr, nc, string(T), mod_in, "scalar", "broadcast", 1e3*t_scalar_b, ""))
-        push!(rows, (nr, nc, string(T), mod_in, "scalar", "kernel", 1e3*t_scalar_k, speedup_scalar))
+        push!(
+            rows,
+            (nr, nc, string(T), mod_in, "scalar", "kernel", 1e3*t_scalar_k, speedup_scalar),
+        )
     end
 
-    headers = ["nrows","ncols","dtype","modulus","variant","method","time (ms)","speedup (%)"]
-    print_and_save_table(rows, headers; csv_path=csv_path, title="MUL")
+    headers = [
+        "nrows",
+        "ncols",
+        "dtype",
+        "modulus",
+        "variant",
+        "method",
+        "time (ms)",
+        "speedup (%)",
+    ]
+    print_and_save_table(rows, headers; csv_path = csv_path, title = "MUL")
     return nothing
 end
 
-specs = [
-    (3200, 3200, 13, Float16),
-    (3200, 3200, 13, Float32),
-    (3200, 3200, 13, Float64),
-]
+specs = [(3200, 3200, 13, Float16), (3200, 3200, 13, Float32), (3200, 3200, 13, Float64)]
 
-bench_mul(specs; threads=256, seconds=0.25, csv_path="mul_bench_results.csv")
+bench_mul(specs; threads = 256, seconds = 0.25, csv_path = "mul_bench_results.csv")
 nothing
-

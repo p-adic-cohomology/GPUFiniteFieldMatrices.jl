@@ -2,10 +2,10 @@ using Random
 
 function _tiny_invertible_host(n::Int, p::Int, ::Type{T}, rng) where {T}
     A = Matrix{T}(I, n, n)
-    for i in 1:n
-        for j in 1:n
+    for i = 1:n
+        for j = 1:n
             if i != j
-                A[i, j] = T(rand(rng, 0:(p - 1)))
+                A[i, j] = T(rand(rng, 0:(p-1)))
             end
         end
     end
@@ -25,10 +25,10 @@ function test_batched_tiny_kernels()
     for n in (4, 8, 16, 32)
         mats = CuModMatrix[]
         origs = CuModMatrix[]
-        for _ in 1:4
+        for _ = 1:4
             H = _tiny_invertible_host(n, p, Float32, rng)
-            push!(mats, CuModMatrix(H, p; elem_type=Float32))
-            push!(origs, CuModMatrix(copy(H), p; elem_type=Float32))
+            push!(mats, CuModMatrix(H, p; elem_type = Float32))
+            push!(origs, CuModMatrix(copy(H), p; elem_type = Float32))
         end
         Fs = if n == 4
             GPUFiniteFieldMatrices.pluq_batched_4x4!(mats)
@@ -46,8 +46,15 @@ function test_batched_tiny_kernels()
         end
 
         mats2 = CuModMatrix[]
-        for _ in 1:4
-            push!(mats2, CuModMatrix(_tiny_invertible_host(n, p, Float32, rng), p; elem_type=Float32))
+        for _ = 1:4
+            push!(
+                mats2,
+                CuModMatrix(
+                    _tiny_invertible_host(n, p, Float32, rng),
+                    p;
+                    elem_type = Float32,
+                ),
+            )
         end
         invs = if n == 4
             GPUFiniteFieldMatrices.inverse_batched_4x4!(mats2)
@@ -65,15 +72,23 @@ function test_batched_tiny_kernels()
 
         S = Matrix{Float32}(I, n, n)
         S[2, :] .= S[1, :]
-        singular = [CuModMatrix(S, p; elem_type=Float32)]
+        singular = [CuModMatrix(S, p; elem_type = Float32)]
         if n == 4
-            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException GPUFiniteFieldMatrices.inverse_batched_4x4!(singular)
+            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException GPUFiniteFieldMatrices.inverse_batched_4x4!(
+                singular,
+            )
         elseif n == 8
-            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException GPUFiniteFieldMatrices.inverse_batched_8x8!(singular)
+            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException GPUFiniteFieldMatrices.inverse_batched_8x8!(
+                singular,
+            )
         elseif n == 16
-            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException GPUFiniteFieldMatrices.inverse_batched_16x16!(singular)
+            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException GPUFiniteFieldMatrices.inverse_batched_16x16!(
+                singular,
+            )
         else
-            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException GPUFiniteFieldMatrices.inverse_batched_32x32!(singular)
+            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException GPUFiniteFieldMatrices.inverse_batched_32x32!(
+                singular,
+            )
         end
     end
 end

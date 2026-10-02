@@ -7,9 +7,9 @@ Counts the total number of floating point operations, including mod.
 According to GFlops, Julia's mod operation takes only 1 flop.
 This is adjustable through the variable MOD_OPS.
 """
-function count_flops(A,B)
+function count_flops(A, B)
     MOD_OPS = 1
-    
+
     m, n = size(A)
     n, k = size(B)
 
@@ -23,7 +23,7 @@ end
 
 Counts the total number of floating point operations, excluding mod.
 """
-function count_Flops(A,B,TILE_WIDTH,MAX_OPS)
+function count_Flops(A, B, TILE_WIDTH, MAX_OPS)
     MOD_OPS = 1
 
     m, n = size(A)
@@ -36,14 +36,16 @@ function count_Flops(A,B,TILE_WIDTH,MAX_OPS)
     if MAX_OPS >= n
         # Then the algorithm only mods once, at the end
         return m * k * (2n - 1 + MOD_OPS)
-    # If MAX_OPS is larger than each tile
+        # If MAX_OPS is larger than each tile
     elseif MAX_OPS >= TILE_WIDTH
         # Then we mod at the end of the tile
         return m * k * (2n - 1 + (floor(n/TILE_WIDTH)+1) * MOD_OPS)
-    # Otherwise MAX_OPS can happen multiple times a tile
+        # Otherwise MAX_OPS can happen multiple times a tile
     else
         # So each element, in each tile (there are floor(n,TILE_WIDTH)+1 tiles)
         # is modded floor(TILE_WDITH,MAX_OPS) number of times.
-        return m * k * (2n - 1 + (floor(n/TILE_WIDTH)+1) * MOD_OPS * (floor(TILE_WIDTH,MAX_OPS)+1))
+        return m *
+               k *
+               (2n - 1 + (floor(n/TILE_WIDTH)+1) * MOD_OPS * (floor(TILE_WIDTH, MAX_OPS)+1))
     end
 end

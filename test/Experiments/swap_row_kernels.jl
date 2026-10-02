@@ -24,7 +24,7 @@ function swap_rows_runthrough(matrix, row1, row2, ncols)
     return nothing
 end
 
-function benchmark_swap_rows(matrix_size=(10, 1024*16), row1=1, row2=2)
+function benchmark_swap_rows(matrix_size = (10, 1024*16), row1 = 1, row2 = 2)
 
     matrix = CuArray(rand(Float64, matrix_size...))
     ncols = matrix_size[2]
@@ -33,8 +33,18 @@ function benchmark_swap_rows(matrix_size=(10, 1024*16), row1=1, row2=2)
     @cuda blocks=cld(ncols, 32) threads=32 swap_rows_basic(matrix, row1, row2, ncols)
     @cuda blocks=cld(ncols, 32) threads=32 swap_rows_runthrough(matrix, row1, row2, ncols)
     # benchmark the kernels
-    @btime @cuda blocks=cld($ncols, 32) threads=32 swap_rows_basic($matrix, $row1, $row2, $ncols)
-    @btime @cuda blocks=cld($ncols, 32) threads=32 swap_rows_runthrough($matrix, $row1, $row2, $ncols)
+    @btime @cuda blocks=cld($ncols, 32) threads=32 swap_rows_basic(
+        $matrix,
+        $row1,
+        $row2,
+        $ncols,
+    )
+    @btime @cuda blocks=cld($ncols, 32) threads=32 swap_rows_runthrough(
+        $matrix,
+        $row1,
+        $row2,
+        $ncols,
+    )
     @btime $matrix[$row1, :] = $matrix[$row2, :]
 
 end

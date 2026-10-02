@@ -43,10 +43,7 @@ Kernel to perform PLUQ factorization on a CuModMatrix.
 - `Perm_rows`: The array of row permutation tuples.
 - `Perm_cols`: The array of column permutation tuples.
 """
-function pluq_gpu_kernel(
-    A::CuModMatrix;
-    debug::Bool = false
-)
+function pluq_gpu_kernel(A::CuModMatrix; debug::Bool = false)
 
     function _print_plup_debug(stage)
         if debug
@@ -57,26 +54,26 @@ function pluq_gpu_kernel(
             println("row: ", row)
             println("col: ", col)
             println()
-            
+
             println("d_A:")
-            display(@view d_A[1:rows,1:cols])
+            display(@view d_A[1:rows, 1:cols])
             println("d_L:")
-            display(@view d_L[1:rows,1:rows])
+            display(@view d_L[1:rows, 1:rows])
             println()
         end
     end
 
     # NVTX.@range "Init PLUQ d_A, d_L, Perm_rows, Perm_cols" begin
-        N = A.N
+    N = A.N
 
-        A_padded_rows = size(A.data, 1)
-        A_padded_cols = size(A.data, 2)
+    A_padded_rows = size(A.data, 1)
+    A_padded_cols = size(A.data, 2)
 
-        d_A = copy(A.data)
-        d_L = CUDA.zeros(eltype(A.data), (A_padded_rows, A_padded_rows))
+    d_A = copy(A.data)
+    d_L = CUDA.zeros(eltype(A.data), (A_padded_rows, A_padded_rows))
 
-        Perm_rows = Array{Tuple{Int,Int}}(undef, 0)
-        Perm_cols = Array{Tuple{Int,Int}}(undef, 0)
+    Perm_rows = Array{Tuple{Int,Int}}(undef, 0)
+    Perm_cols = Array{Tuple{Int,Int}}(undef, 0)
     # end
 
     rows, cols = size(A.data)
@@ -94,18 +91,18 @@ function pluq_gpu_kernel(
         _print_plup_debug("Iteration $row, $col start")
 
         # NVTX.@range "Find pivot col" begin
-            while true
-                pivot_val, pivot_idx = find_pivot(d_A, rows, row, col, Perm_cols, Perm_col_idx)
+        while true
+            pivot_val, pivot_idx = find_pivot(d_A, rows, row, col, Perm_cols, Perm_col_idx)
 
-                if pivot_val > 0
+            if pivot_val > 0
+                break
+            else
+                col += 1
+                if col > cols
                     break
-                else
-                    col += 1
-                    if col > cols
-                        break
-                    end
                 end
             end
+        end
         # end
 
         if col > cols
@@ -113,23 +110,35 @@ function pluq_gpu_kernel(
         end
 
         # NVTX.@range "Mod Inverse" begin
-            pivot_val_inv = mod_inv(pivot_val, N)
+        pivot_val_inv = mod_inv(pivot_val, N)
         # end
 
         # NVTX.@range "Swap and mod" begin
-            swap_and_mod(d_A, d_L, row, pivot_idx+row-1, pivot_val_inv, rows, cols, N, Perm_rows)
+        swap_and_mod(
+            d_A,
+            d_L,
+            row,
+            pivot_idx+row-1,
+            pivot_val_inv,
+            rows,
+            cols,
+            N,
+            Perm_rows,
+        )
         # end
 
         _print_plup_debug("Iteration $row, $col swapped and modded")
 
         # NVTX.@range "Move and zero out" begin
-            move_and_zero_out(d_A, d_L, rows, row, col, pivot_val_inv, pivot_val, N)
+        move_and_zero_out(d_A, d_L, rows, row, col, pivot_val_inv, pivot_val, N)
         # end
 
         _print_plup_debug("Iteration $row, $col moved and zeroed out")
 
         # NVTX.@range "Update sub matrix" begin
-            @cuda blocks=cld(cols - col + 1, TILE_WIDTH) threads=TILE_WIDTH shmem=TILE_WIDTH*sizeof(DEFAULT_TYPE) update_sub_matrix_kernel(d_A, d_L, row, col, N, rows)
+        @cuda blocks=cld(cols - col + 1, TILE_WIDTH) threads=TILE_WIDTH shmem=TILE_WIDTH*sizeof(
+            DEFAULT_TYPE,
+        ) update_sub_matrix_kernel(d_A, d_L, row, col, N, rows)
         # end
 
         _print_plup_debug("Iteration $row, $col updated sub matrix")
@@ -142,16 +151,16 @@ function pluq_gpu_kernel(
     end
 
     # NVTX.@range "End PLUQ" begin
-        U = CuModMatrix(d_A, N; new_size=(rows,cols))
-        L = CuModMatrix(d_L, N; new_size=(rows,rows))
+    U = CuModMatrix(d_A, N; new_size = (rows, cols))
+    L = CuModMatrix(d_L, N; new_size = (rows, rows))
     # end
 
     return (
-        U, 
+        U,
         L,
         Perm_rows,
-        Perm_cols
-        # perm_array_to_matrix(Perm_rows, N, (rows, rows); perm_stack=true), 
+        Perm_cols,
+        # perm_array_to_matrix(Perm_rows, N, (rows, rows); perm_stack=true),
         # perm_array_to_matrix(Perm_cols, N, (cols, cols); perm_stack=true)
     )
 end
@@ -176,24 +185,21 @@ Perm_cols. In this case, we return -1, -1.
 - `pivot_val`: The pivot value.
 - `pivot_idx`: The index of the pivot value.
 """
-function find_pivot(
-    d_A,
-    A_rows, 
-    row,
-    col,
-    Perm_cols,
-    Perm_col_idx
-)
+function find_pivot(d_A, A_rows, row, col, Perm_cols, Perm_col_idx)
 
-    col_view = @view d_A[row:A_rows,col]
+    col_view = @view d_A[row:A_rows, col]
     pivot_val, pivot_idx = findmax(col_view)
 
     if pivot_val == 0
         # NVTX.@range "Swap cols" begin
-            @cuda blocks=cld(A_rows, TILE_WIDTH) threads=TILE_WIDTH swap_cols(d_A, col, Perm_col_idx)
+        @cuda blocks=cld(A_rows, TILE_WIDTH) threads=TILE_WIDTH swap_cols(
+            d_A,
+            col,
+            Perm_col_idx,
+        )
         # end
         # NVTX.@range "Update Perm_cols" begin
-            push!(Perm_cols, (col, Perm_col_idx))
+        push!(Perm_cols, (col, Perm_col_idx))
         # end
         return -1, -1
     end
@@ -247,17 +253,24 @@ with cld(ncols, 32) blocks in total.
 function swap_and_mod(d_A, d_L, row, prow, p_inv, nrows, ncols, N, Perm_rows)
 
     # NVTX.@range "Swap d_A rows and mod" begin
-        @cuda blocks=cld(ncols, TILE_WIDTH) threads=TILE_WIDTH swap_rows_and_mod(d_A, prow, row, ncols, p_inv, N)
+    @cuda blocks=cld(ncols, TILE_WIDTH) threads=TILE_WIDTH swap_rows_and_mod(
+        d_A,
+        prow,
+        row,
+        ncols,
+        p_inv,
+        N,
+    )
     # end
 
     # NVTX.@range "Swap d_L rows" begin
-        @cuda blocks=cld(nrows, TILE_WIDTH) threads=TILE_WIDTH swap_rows(d_L, row, prow, nrows)
+    @cuda blocks=cld(nrows, TILE_WIDTH) threads=TILE_WIDTH swap_rows(d_L, row, prow, nrows)
     # end
 
     # NVTX.@range "Update Perm_rows" begin
-        if row != prow
-            push!(Perm_rows, (row, prow))
-        end 
+    if row != prow
+        push!(Perm_rows, (row, prow))
+    end
     # end
 
     return nothing
@@ -340,11 +353,16 @@ with cld(A_rows - row + 1, 32) blocks in total.
 function move_and_zero_out(d_A, d_L, A_rows, row, col, p_inv, p, N)
 
     # NVTX.@range "Set d_L diag to p" begin
-        @cuda blocks=1 threads=1 set_elem_kernel(d_L, row, col, p)
+    @cuda blocks=1 threads=1 set_elem_kernel(d_L, row, col, p)
     # end
 
     # NVTX.@range "Move col and zero out" begin
-        @cuda blocks=cld(A_rows - row + 1, TILE_WIDTH) threads=TILE_WIDTH move_col_and_zero_out(d_A, d_L, row, col)
+    @cuda blocks=cld(A_rows - row + 1, TILE_WIDTH) threads=TILE_WIDTH move_col_and_zero_out(
+        d_A,
+        d_L,
+        row,
+        col,
+    )
     # end
 
     return nothing
@@ -420,20 +438,24 @@ function update_sub_matrix_kernel(d_A, d_L, p_row, p_col, N, num_rows)
 
     shared_pivot_row = CUDA.CuStaticSharedArray(DEFAULT_TYPE, TILE_WIDTH)
 
-    @inbounds shared_pivot_row[tx] = d_A[p_row, p_col + t_shift]
+    @inbounds shared_pivot_row[tx] = d_A[p_row, p_col+t_shift]
 
     CUDA.sync_threads()
-    
+
     # while row_idx <= num_rows + TILE_WIDTH - p_row + 1
     while row_idx <= num_rows
 
         multiplier = N - d_L[row_idx, p_col]
 
         @unroll for col_idx = 1:TILE_WIDTH
-            @inbounds d_A[row_idx, col_idx + b_shift + p_col] = mod(d_A[row_idx, col_idx + b_shift + p_col] + multiplier * shared_pivot_row[col_idx], N)
+            @inbounds d_A[row_idx, col_idx+b_shift+p_col] = mod(
+                d_A[row_idx, col_idx+b_shift+p_col] +
+                multiplier * shared_pivot_row[col_idx],
+                N,
+            )
         end
 
-        row_idx += TILE_WIDTH  
+        row_idx += TILE_WIDTH
     end
 
     return

@@ -20,11 +20,12 @@ Create an `InverseBenchSpec` from tuple fields where `dtype` is one of
 `:FP32`, `:FP64`, `Float32`, or `Float64`.
 """
 function make_spec(rows::Int, cols::Int, p::Int, dtype)
-    et = dtype == :FP32 ? Float32 :
-         dtype == :FP64 ? Float64 :
-         dtype == Float32 ? Float32 :
-         dtype == Float64 ? Float64 :
-         throw(ArgumentError("dtype must be :FP32, :FP64, Float32, or Float64"))
+    et =
+        dtype == :FP32 ? Float32 :
+        dtype == :FP64 ? Float64 :
+        dtype == Float32 ? Float32 :
+        dtype == Float64 ? Float64 :
+        throw(ArgumentError("dtype must be :FP32, :FP64, Float32, or Float64"))
     return InverseBenchSpec(rows, cols, p, et)
 end
 
@@ -49,8 +50,8 @@ function nemo_inverse_matrix(A_cpu::AbstractMatrix, p::Int)
     A_nemo = Nemo.matrix(R, [R(Int(mod(x, p))) for x in A_cpu])
     Ainv_nemo = inv(A_nemo)
     out = Matrix{Int}(undef, n, n)
-    for j in 1:n
-        for i in 1:n
+    for j = 1:n
+        for i = 1:n
             out[i, j] = Int(lift(ZZ, Ainv_nemo[i, j]))
         end
     end
@@ -62,33 +63,41 @@ end
 
 Generate an invertible `CuModMatrix` matching `spec`.
 """
-function random_invertible_cumod(spec::InverseBenchSpec; max_tries::Int=64, rng=Random.default_rng())
-    for _ in 1:max_tries
-        Ahost = rand(rng, 0:(spec.p - 1), spec.rows, spec.cols)
+function random_invertible_cumod(
+    spec::InverseBenchSpec;
+    max_tries::Int = 64,
+    rng = Random.default_rng(),
+)
+    for _ = 1:max_tries
+        Ahost = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
         Atyped = Matrix{spec.elem_type}(Ahost)
-        A = CuModMatrix(Atyped, spec.p; elem_type=spec.elem_type)
+        A = CuModMatrix(Atyped, spec.p; elem_type = spec.elem_type)
         if GPUFiniteFieldMatrices.is_invertible_new(A)
             return A
         end
     end
-    throw(ErrorException("failed to sample invertible matrix for spec $(spec.rows)x$(spec.cols), p=$(spec.p)"))
+    throw(
+        ErrorException(
+            "failed to sample invertible matrix for spec $(spec.rows)x$(spec.cols), p=$(spec.p)",
+        ),
+    )
 end
 
 function random_one_sided_invertible_cumod(
     spec::InverseBenchSpec;
-    max_tries::Int=64,
-    rng=Random.default_rng(),
-    rectangular_requires_full_rank::Bool=false
+    max_tries::Int = 64,
+    rng = Random.default_rng(),
+    rectangular_requires_full_rank::Bool = false,
 )
     if spec.rows != spec.cols && !rectangular_requires_full_rank
-        Ahost = rand(rng, 0:(spec.p - 1), spec.rows, spec.cols)
+        Ahost = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
         Atyped = Matrix{spec.elem_type}(Ahost)
-        return CuModMatrix(Atyped, spec.p; elem_type=spec.elem_type)
+        return CuModMatrix(Atyped, spec.p; elem_type = spec.elem_type)
     end
-    for _ in 1:max_tries
-        Ahost = rand(rng, 0:(spec.p - 1), spec.rows, spec.cols)
+    for _ = 1:max_tries
+        Ahost = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
         Atyped = Matrix{spec.elem_type}(Ahost)
-        A = CuModMatrix(Atyped, spec.p; elem_type=spec.elem_type)
+        A = CuModMatrix(Atyped, spec.p; elem_type = spec.elem_type)
         ok = if spec.rows == spec.cols
             GPUFiniteFieldMatrices.is_invertible_new(A)
         elseif spec.rows < spec.cols
@@ -108,7 +117,11 @@ function random_one_sided_invertible_cumod(
         end
         ok && return A
     end
-    throw(ErrorException("failed to sample one-sided invertible matrix for spec $(spec.rows)x$(spec.cols), p=$(spec.p)"))
+    throw(
+        ErrorException(
+            "failed to sample one-sided invertible matrix for spec $(spec.rows)x$(spec.cols), p=$(spec.p)",
+        ),
+    )
 end
 
 """
@@ -116,9 +129,9 @@ end
 
 Warm up the GPU by running both current and old inverse once.
 """
-function prime_gpu!(; p::Int=101, elem_type::DataType=Float32, n::Int=100)
+function prime_gpu!(; p::Int = 101, elem_type::DataType = Float32, n::Int = 100)
     Ih = Matrix{elem_type}(I, n, n)
-    A = CuModMatrix(Ih, p; elem_type=elem_type)
+    A = CuModMatrix(Ih, p; elem_type = elem_type)
     CUDA.@sync GPUFiniteFieldMatrices.inverse_new(A)
     CUDA.@sync GPUFiniteFieldMatrices.inverse(A)
     return nothing
@@ -159,10 +172,10 @@ function nemo_is_invertible_with_inverse(A_cpu::AbstractMatrix, p::Int)
     A_nemo = Nemo.matrix(R, [R(Int(mod(x, p))) for x in A_cpu])
     side = n <= m ? :right : :left
     elapsed = @elapsed begin
-        Nemo.is_invertible_with_inverse(A_nemo, side=side)
+        Nemo.is_invertible_with_inverse(A_nemo, side = side)
     end
-    invflag, invmat = Nemo.is_invertible_with_inverse(A_nemo, side=side)
-    return (elapsed=elapsed, invertible=invflag, inverse=invmat, side=side)
+    invflag, invmat = Nemo.is_invertible_with_inverse(A_nemo, side = side)
+    return (elapsed = elapsed, invertible = invflag, inverse = invmat, side = side)
 end
 
 """
@@ -173,15 +186,15 @@ over a list of tuple specs `(rows, cols, p, dtype)`.
 """
 function benchmark_inverse_suite(
     spec_tuples::Vector{<:Tuple};
-    trials::Int=5,
-    warmup::Bool=true,
-    check_against_nemo::Bool=false,
-    make_plot::Bool=true,
-    plot_path::String="test/Experiments/inv_benchmark.png",
-    batch_count::Int=4,
-    benchmark_mode::Symbol=:throughput,
-    compare_old::Bool=false,
-    verbose::Bool=true
+    trials::Int = 5,
+    warmup::Bool = true,
+    check_against_nemo::Bool = false,
+    make_plot::Bool = true,
+    plot_path::String = "test/Experiments/inv_benchmark.png",
+    batch_count::Int = 4,
+    benchmark_mode::Symbol = :throughput,
+    compare_old::Bool = false,
+    verbose::Bool = true,
 )
     if benchmark_mode != :throughput && benchmark_mode != :latency
         throw(ArgumentError("benchmark_mode must be :throughput or :latency"))
@@ -192,30 +205,44 @@ function benchmark_inverse_suite(
     end
     results = NamedTuple[]
     for spec in specs
-        local_batch = benchmark_mode == :latency ? 1 : ((max(spec.rows, spec.cols) >= 1024) ? 1 : max(1, batch_count))
-        batch = [random_one_sided_invertible_cumod(spec) for _ in 1:local_batch]
+        local_batch =
+            benchmark_mode == :latency ? 1 :
+            ((max(spec.rows, spec.cols) >= 1024) ? 1 : max(1, batch_count))
+        batch = [random_one_sided_invertible_cumod(spec) for _ = 1:local_batch]
         A = batch[1]
         A_cpu_batch = [mod.(round.(Int, Array(B)), spec.p) for B in batch]
         A_cpu = mod.(round.(Int, Array(A)), spec.p)
-        nemo_inv = check_against_nemo && spec.rows == spec.cols ? nemo_inverse_matrix(A_cpu, spec.p) : nothing
+        nemo_inv =
+            check_against_nemo && spec.rows == spec.cols ?
+            nemo_inverse_matrix(A_cpu, spec.p) : nothing
         new_times = Float64[]
         old_times = Float64[]
         nemo_times = Float64[]
-        for _ in 1:trials
+        for _ = 1:trials
             t_new = try
                 _time_gpu_batch(B -> GPUFiniteFieldMatrices.inverse_new_batch(B), batch)
             catch
                 NaN
             end
             t_old = try
-                (compare_old && spec.rows == spec.cols) ? _time_gpu_call(() -> GPUFiniteFieldMatrices.inverse(A)) : NaN
+                (compare_old && spec.rows == spec.cols) ?
+                _time_gpu_call(() -> GPUFiniteFieldMatrices.inverse(A)) : NaN
             catch
                 NaN
             end
             t_nemo = try
                 benchmark_mode == :throughput ?
-                    _time_cpu_batch(B -> spec.rows == spec.cols ? nemo_inverse_matrix(B, spec.p) : nemo_is_invertible_with_inverse(B, spec.p), A_cpu_batch) :
-                    _time_cpu_call(() -> spec.rows == spec.cols ? nemo_inverse_matrix(A_cpu, spec.p) : nemo_is_invertible_with_inverse(A_cpu, spec.p))
+                _time_cpu_batch(
+                    B ->
+                        spec.rows == spec.cols ? nemo_inverse_matrix(B, spec.p) :
+                        nemo_is_invertible_with_inverse(B, spec.p),
+                    A_cpu_batch,
+                ) :
+                _time_cpu_call(
+                    () ->
+                        spec.rows == spec.cols ? nemo_inverse_matrix(A_cpu, spec.p) :
+                        nemo_is_invertible_with_inverse(A_cpu, spec.p),
+                )
             catch
                 NaN
             end
@@ -229,7 +256,8 @@ function benchmark_inverse_suite(
             nothing
         end
         Ainv_old = try
-            (compare_old && spec.rows == spec.cols) ? GPUFiniteFieldMatrices.inverse(A) : nothing
+            (compare_old && spec.rows == spec.cols) ?
+            GPUFiniteFieldMatrices.inverse(A) : nothing
         catch
             nothing
         end
@@ -250,23 +278,32 @@ function benchmark_inverse_suite(
             end
         end
         row = (
-            rows=spec.rows,
-            cols=spec.cols,
-            p=spec.p,
-            elem_type=spec.elem_type,
-            new_mean=mean(new_times),
-            old_mean=(compare_old && spec.rows == spec.cols) ? mean(old_times) : NaN,
-            nemo_mean=mean(nemo_times),
-            new_median=median(new_times),
-            old_median=(compare_old && spec.rows == spec.cols) ? median(old_times) : NaN,
-            nemo_median=median(nemo_times),
-            new_ok=new_ok,
-            old_ok=old_ok
+            rows = spec.rows,
+            cols = spec.cols,
+            p = spec.p,
+            elem_type = spec.elem_type,
+            new_mean = mean(new_times),
+            old_mean = (compare_old && spec.rows == spec.cols) ? mean(old_times) : NaN,
+            nemo_mean = mean(nemo_times),
+            new_median = median(new_times),
+            old_median = (compare_old && spec.rows == spec.cols) ? median(old_times) : NaN,
+            nemo_median = median(nemo_times),
+            new_ok = new_ok,
+            old_ok = old_ok,
         )
         push!(results, row)
         if verbose
-            @printf("mode=%s spec=(%d,%d,p=%d,%s)  new=%.6f s  old=%.6f s  nemo=%.6f s\n",
-                string(benchmark_mode), spec.rows, spec.cols, spec.p, string(spec.elem_type), row.new_mean, row.old_mean, row.nemo_mean)
+            @printf(
+                "mode=%s spec=(%d,%d,p=%d,%s)  new=%.6f s  old=%.6f s  nemo=%.6f s\n",
+                string(benchmark_mode),
+                spec.rows,
+                spec.cols,
+                spec.p,
+                string(spec.elem_type),
+                row.new_mean,
+                row.old_mean,
+                row.nemo_mean
+            )
         end
     end
     if make_plot
@@ -277,19 +314,36 @@ function benchmark_inverse_suite(
             y_old = [r.old_mean for r in results]
             y_nemo = [r.nemo_mean for r in results]
             plt = plot(
-                x, y_new;
-                label="inverse_new (GPU)",
-                color=:blue,
-                marker=:circle,
-                linewidth=2,
-                xlabel="matrix size (rows)",
-                ylabel="time (s)",
-                title="Inverse benchmark: new vs old vs Nemo"
+                x,
+                y_new;
+                label = "inverse_new (GPU)",
+                color = :blue,
+                marker = :circle,
+                linewidth = 2,
+                xlabel = "matrix size (rows)",
+                ylabel = "time (s)",
+                title = "Inverse benchmark: new vs old vs Nemo",
             )
             if compare_old
-                plot!(plt, x, y_old; label="inverse old (GPU square-only)", color=:red, marker=:square, linewidth=2)
+                plot!(
+                    plt,
+                    x,
+                    y_old;
+                    label = "inverse old (GPU square-only)",
+                    color = :red,
+                    marker = :square,
+                    linewidth = 2,
+                )
             end
-            plot!(plt, x, y_nemo; label="Nemo (CPU)", color=:green, marker=:diamond, linewidth=2)
+            plot!(
+                plt,
+                x,
+                y_nemo;
+                label = "Nemo (CPU)",
+                color = :green,
+                marker = :diamond,
+                linewidth = 2,
+            )
             savefig(plt, plot_path)
             if verbose
                 println("saved plot to $(plot_path)")
@@ -306,7 +360,12 @@ end
 
 Run a default benchmark grid and return row-wise results.
 """
-function run_default_inverse_benchmark(; check_against_nemo::Bool=false, trials::Int=5, warmup::Bool=true, make_plot::Bool=true)
+function run_default_inverse_benchmark(;
+    check_against_nemo::Bool = false,
+    trials::Int = 5,
+    warmup::Bool = true,
+    make_plot::Bool = true,
+)
     specs = [
         (8, 8, 101, :FP32),
         (8, 8, 101, :FP64),
@@ -323,15 +382,22 @@ function run_default_inverse_benchmark(; check_against_nemo::Bool=false, trials:
     ]
     return benchmark_inverse_suite(
         specs;
-        trials=trials,
-        warmup=warmup,
-        check_against_nemo=check_against_nemo,
-        make_plot=make_plot,
-        compare_old=false
+        trials = trials,
+        warmup = warmup,
+        check_against_nemo = check_against_nemo,
+        make_plot = make_plot,
+        compare_old = false,
     )
 end
 
-function run_fastest_vs_nemo_benchmark(; check_against_nemo::Bool=false, trials::Int=5, warmup::Bool=true, make_plot::Bool=true, batch_count::Int=4, benchmark_mode::Symbol=:throughput)
+function run_fastest_vs_nemo_benchmark(;
+    check_against_nemo::Bool = false,
+    trials::Int = 5,
+    warmup::Bool = true,
+    make_plot::Bool = true,
+    batch_count::Int = 4,
+    benchmark_mode::Symbol = :throughput,
+)
     specs = [
         (16, 16, 101, :FP32),
         (16, 16, 101, :FP64),
@@ -354,48 +420,57 @@ function run_fastest_vs_nemo_benchmark(; check_against_nemo::Bool=false, trials:
     ]
     return benchmark_inverse_suite(
         specs;
-        trials=trials,
-        warmup=warmup,
-        check_against_nemo=check_against_nemo,
-        make_plot=make_plot,
-        batch_count=batch_count,
-        benchmark_mode=benchmark_mode,
-        compare_old=false
+        trials = trials,
+        warmup = warmup,
+        check_against_nemo = check_against_nemo,
+        make_plot = make_plot,
+        batch_count = batch_count,
+        benchmark_mode = benchmark_mode,
+        compare_old = false,
     )
 end
 
-function run_tiny_batched_kernel_benchmark(; trials::Int=10, warmup::Bool=true, p::Int=101, elem_type::DataType=Float32, batch_size::Int=64)
-    warmup && prime_gpu!(p=p, elem_type=elem_type, n=32)
+function run_tiny_batched_kernel_benchmark(;
+    trials::Int = 10,
+    warmup::Bool = true,
+    p::Int = 101,
+    elem_type::DataType = Float32,
+    batch_size::Int = 64,
+)
+    warmup && prime_gpu!(p = p, elem_type = elem_type, n = 32)
     ns = (4, 8, 16, 32)
     rng = Random.MersenneTwister(23)
     rows = NamedTuple[]
     for n in ns
         mats = CuModMatrix[]
-        for _ in 1:batch_size
+        for _ = 1:batch_size
             A = Matrix{elem_type}(I, n, n)
-            for i in 1:n
-                for j in 1:n
+            for i = 1:n
+                for j = 1:n
                     if i != j
-                        A[i, j] = elem_type(rand(rng, 0:(p - 1)))
+                        A[i, j] = elem_type(rand(rng, 0:(p-1)))
                     end
                 end
             end
-            push!(mats, CuModMatrix(A, p; elem_type=elem_type))
+            push!(mats, CuModMatrix(A, p; elem_type = elem_type))
         end
         t_fast = Float64[]
         t_generic = Float64[]
-        for _ in 1:trials
-            t1 = _time_gpu_batch(B -> begin
-                if n == 4
-                    GPUFiniteFieldMatrices.inverse_batched_4x4!(B)
-                elseif n == 8
-                    GPUFiniteFieldMatrices.inverse_batched_8x8!(B)
-                elseif n == 16
-                    GPUFiniteFieldMatrices.inverse_batched_16x16!(B)
-                else
-                    GPUFiniteFieldMatrices.inverse_batched_32x32!(B)
-                end
-            end, mats)
+        for _ = 1:trials
+            t1 = _time_gpu_batch(
+                B -> begin
+                    if n == 4
+                        GPUFiniteFieldMatrices.inverse_batched_4x4!(B)
+                    elseif n == 8
+                        GPUFiniteFieldMatrices.inverse_batched_8x8!(B)
+                    elseif n == 16
+                        GPUFiniteFieldMatrices.inverse_batched_16x16!(B)
+                    else
+                        GPUFiniteFieldMatrices.inverse_batched_32x32!(B)
+                    end
+                end,
+                mats,
+            )
             t2 = _time_gpu_batch(B -> begin
                 for A in B
                     GPUFiniteFieldMatrices.inverse_new(A)
@@ -404,13 +479,16 @@ function run_tiny_batched_kernel_benchmark(; trials::Int=10, warmup::Bool=true, 
             push!(t_fast, t1)
             push!(t_generic, t2)
         end
-        push!(rows, (
-            n=n,
-            elem_type=elem_type,
-            fast_mean=mean(t_fast),
-            generic_mean=mean(t_generic),
-            speedup=mean(t_generic) / mean(t_fast),
-        ))
+        push!(
+            rows,
+            (
+                n = n,
+                elem_type = elem_type,
+                fast_mean = mean(t_fast),
+                generic_mean = mean(t_generic),
+                speedup = mean(t_generic) / mean(t_fast),
+            ),
+        )
     end
     return rows
 end

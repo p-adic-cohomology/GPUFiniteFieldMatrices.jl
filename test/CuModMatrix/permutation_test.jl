@@ -10,7 +10,7 @@ function test_permutations()
 
     @test size(A_gpu) == (3, 3)
 
-    P = [(2,3)]
+    P = [(2, 3)]
 
     GPUFiniteFieldMatrices.apply_col_perm!(P, A_gpu)
 
@@ -55,6 +55,3 @@ function test_permutations()
     ]
 
 end
-
-
-    

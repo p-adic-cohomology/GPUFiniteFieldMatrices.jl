@@ -121,7 +121,7 @@
 
 #         if debug
 #             println("A_22_inv:")
-#             display(A_22_inv)   
+#             display(A_22_inv)
 #             println("A_22 * A_22_inv:")
 #             display(mod.(A_22 * A_22_inv, N))
 #             @assert Array(mod.(A_22 * A_22_inv, N))[1:(row_upper - row_mid), 1:(col_upper - col_mid)] ≈ Array(Matrix{eltype(A)}(I, row_upper - row_mid, col_upper - col_mid))
@@ -147,10 +147,10 @@
 #             println("A_inv:")
 #             display(A_inv)
 #         end
-        
+
 #         return
 
-#     else 
+#     else
 
 #         if debug
 #             println("Third branch: Recursive call!")
@@ -311,7 +311,7 @@
 
 #         if debug
 #             println("A_22_inv:")
-#             display(A_22_inv)   
+#             display(A_22_inv)
 #             println("A_22 * A_22_inv:")
 #             display(mod.(A_22 * A_22_inv, N))
 #             @assert Array(mod.(A_22 * A_22_inv, N))[1:(row_upper - row_mid), 1:(col_upper - col_mid)] ≈ Array(Matrix{eltype(A)}(I, row_upper - row_mid, col_upper - col_mid))
@@ -336,10 +336,10 @@
 #             println("A_inv:")
 #             display(A_inv)
 #         end
-        
+
 #         return
 
-#     else 
+#     else
 
 #         if debug
 #             println("Third branch: Recursive call!")

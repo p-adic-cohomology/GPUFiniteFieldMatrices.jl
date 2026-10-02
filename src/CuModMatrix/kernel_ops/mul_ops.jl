@@ -20,7 +20,13 @@ function k_mul_matrix!(out, A, B, m)
     return
 end
 
-function mul_elementwise!(C::CuModArray, A::CuModArray, B::CuModArray, mod_N::Integer=-1; threads::Int=DEFAULT_THREADS)
+function mul_elementwise!(
+    C::CuModArray,
+    A::CuModArray,
+    B::CuModArray,
+    mod_N::Integer = -1;
+    threads::Int = DEFAULT_THREADS,
+)
     m = mod_N > 0 ? mod_N : C.N
     mT = convert(eltype(C.data), m)
     len = length(A.data)
@@ -29,7 +35,13 @@ function mul_elementwise!(C::CuModArray, A::CuModArray, B::CuModArray, mod_N::In
     return C
 end
 
-function LinearAlgebra.mul!(C::CuModArray, A::CuModArray, s::Number, mod_N::Integer=-1; threads::Int=DEFAULT_THREADS)
+function LinearAlgebra.mul!(
+    C::CuModArray,
+    A::CuModArray,
+    s::Number,
+    mod_N::Integer = -1;
+    threads::Int = DEFAULT_THREADS,
+)
     m = mod_N > 0 ? mod_N : C.N
     mT = convert(eltype(C.data), m)
     sT = convert(eltype(C.data), s)

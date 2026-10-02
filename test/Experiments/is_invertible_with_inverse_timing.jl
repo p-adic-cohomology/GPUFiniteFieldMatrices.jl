@@ -13,10 +13,10 @@ struct MatrixSpec
     cols::Int
 end
 
-function random_matrix_from_spec(spec::MatrixSpec; rng::AbstractRNG=Random.default_rng())
-    A = rand(rng, 0:spec.p-1, spec.rows, spec.cols)
+function random_matrix_from_spec(spec::MatrixSpec; rng::AbstractRNG = Random.default_rng())
+    A = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
     A_typed = Matrix{spec.elem_type}(A)
-    return CuModMatrix(A_typed, spec.p; elem_type=spec.elem_type)
+    return CuModMatrix(A_typed, spec.p; elem_type = spec.elem_type)
 end
 
 function _append_time!(times::Dict{Symbol,Vector{Float64}}, key::Symbol, value::Float64)
@@ -36,7 +36,7 @@ function _timed_find_pivot(
     col,
     Perm_cols,
     Perm_col_idx,
-    times::Dict{Symbol,Vector{Float64}}
+    times::Dict{Symbol,Vector{Float64}},
 )
     t_findmax = CUDA.@elapsed begin
         col_view = @view d_A[row:A_rows, col]
@@ -49,7 +49,11 @@ function _timed_find_pivot(
 
     if pivot_val == 0
         t_swap_cols = CUDA.@elapsed begin
-            @cuda blocks=cld(A_rows, GFFM.TILE_WIDTH) threads=GFFM.TILE_WIDTH GFFM.swap_cols(d_A, col, Perm_col_idx)
+            @cuda blocks=cld(A_rows, GFFM.TILE_WIDTH) threads=GFFM.TILE_WIDTH GFFM.swap_cols(
+                d_A,
+                col,
+                Perm_col_idx,
+            )
         end
         _append_time!(times, :pivot_swap_cols, t_swap_cols)
 
@@ -64,7 +68,7 @@ function _timed_find_pivot(
     return pivot_val, pivot_idx
 end
 
-function pluq_gpu_kernel_timed(A::CuModMatrix; debug::Bool=false)
+function pluq_gpu_kernel_timed(A::CuModMatrix; debug::Bool = false)
     times = Dict{Symbol,Vector{Float64}}()
 
     function _print_plup_debug(stage)
@@ -117,7 +121,15 @@ function pluq_gpu_kernel_timed(A::CuModMatrix; debug::Bool=false)
 
             t_find_pivot_col = CUDA.@elapsed begin
                 while true
-                    pivot_val, pivot_idx = _timed_find_pivot(d_A, rows, row, col, Perm_cols, Perm_col_idx, times)
+                    pivot_val, pivot_idx = _timed_find_pivot(
+                        d_A,
+                        rows,
+                        row,
+                        col,
+                        Perm_cols,
+                        Perm_col_idx,
+                        times,
+                    )
                     if pivot_val > 0
                         break
                     end
@@ -137,21 +149,42 @@ function pluq_gpu_kernel_timed(A::CuModMatrix; debug::Bool=false)
                 pivot_val_inv = GFFM.mod_inv(pivot_val, N)
 
                 t_swap_and_mod = CUDA.@elapsed begin
-                    GFFM.swap_and_mod(d_A, d_L, row, pivot_idx + row - 1, pivot_val_inv, rows, cols, N, Perm_rows)
+                    GFFM.swap_and_mod(
+                        d_A,
+                        d_L,
+                        row,
+                        pivot_idx + row - 1,
+                        pivot_val_inv,
+                        rows,
+                        cols,
+                        N,
+                        Perm_rows,
+                    )
                 end
                 _append_time!(times, :swap_and_mod, t_swap_and_mod)
 
                 _print_plup_debug("Iteration $row, $col swapped and modded")
 
                 t_move_zero = CUDA.@elapsed begin
-                    GFFM.move_and_zero_out(d_A, d_L, rows, row, col, pivot_val_inv, pivot_val, N)
+                    GFFM.move_and_zero_out(
+                        d_A,
+                        d_L,
+                        rows,
+                        row,
+                        col,
+                        pivot_val_inv,
+                        pivot_val,
+                        N,
+                    )
                 end
                 _append_time!(times, :move_and_zero_out, t_move_zero)
 
                 _print_plup_debug("Iteration $row, $col moved and zeroed out")
 
                 t_update_sub = CUDA.@elapsed begin
-                    @cuda blocks=cld(cols - col + 1, GFFM.TILE_WIDTH) threads=GFFM.TILE_WIDTH shmem=GFFM.TILE_WIDTH*sizeof(GFFM.DEFAULT_TYPE) GFFM.update_sub_matrix_kernel(d_A, d_L, row, col, N, rows)
+                    @cuda blocks=cld(cols - col + 1, GFFM.TILE_WIDTH) threads=GFFM.TILE_WIDTH shmem=GFFM.TILE_WIDTH*sizeof(
+                        GFFM.DEFAULT_TYPE,
+                    ) GFFM.update_sub_matrix_kernel(d_A, d_L, row, col, N, rows)
                 end
                 _append_time!(times, :update_sub_matrix, t_update_sub)
 
@@ -174,13 +207,13 @@ function pluq_gpu_kernel_timed(A::CuModMatrix; debug::Bool=false)
     end
 
     t_finalize = CUDA.@elapsed begin
-        U = CuModMatrix(d_A, N; new_size=(rows, cols))
-        L = CuModMatrix(d_L, N; new_size=(rows, rows))
+        U = CuModMatrix(d_A, N; new_size = (rows, cols))
+        L = CuModMatrix(d_L, N; new_size = (rows, rows))
     end
     _append_time!(times, :finalize, t_finalize)
 
-    U = CuModMatrix(d_A, N; new_size=(rows, cols))
-    L = CuModMatrix(d_L, N; new_size=(rows, rows))
+    U = CuModMatrix(d_A, N; new_size = (rows, cols))
+    L = CuModMatrix(d_L, N; new_size = (rows, rows))
 
     return U, L, Perm_rows, Perm_cols, times
 end
@@ -190,51 +223,49 @@ function summarize_times(times::Dict{Symbol,Vector{Float64}})
     for (op, vals) in times
         if !isempty(vals)
             q = quantile(vals, [0.25, 0.5, 0.75])
-            summary[op] = (
-                n=length(vals),
-                mean=mean(vals),
-                median=q[2],
-                q1=q[1],
-                q3=q[3]
-            )
+            summary[op] =
+                (n = length(vals), mean = mean(vals), median = q[2], q1 = q[1], q3 = q[3])
         end
     end
     return summary
 end
 
-function merge_time_dicts!(acc::Dict{Symbol,Vector{Float64}}, src::Dict{Symbol,Vector{Float64}})
+function merge_time_dicts!(
+    acc::Dict{Symbol,Vector{Float64}},
+    src::Dict{Symbol,Vector{Float64}},
+)
     for (k, v) in src
         append!(get!(acc, k, Float64[]), v)
     end
     return acc
 end
 
-function is_invertible_with_inverse_timed(A::CuModMatrix; debug::Bool=false)
+function is_invertible_with_inverse_timed(A::CuModMatrix; debug::Bool = false)
     if debug
         println("A")
         display(A)
     end
 
     CUDA.@time begin
-        U, L, P, Q, pluq_times = pluq_gpu_kernel_timed(A, debug=debug)
+        U, L, P, Q, pluq_times = pluq_gpu_kernel_timed(A, debug = debug)
 
         CUDA.@time begin
             invertible = GFFM._is_invertible(U)
             if !invertible
                 return (
-                    invertible=false,
-                    pluq_times=summarize_times(pluq_times),
-                    pluq_raw=pluq_times
+                    invertible = false,
+                    pluq_times = summarize_times(pluq_times),
+                    pluq_raw = pluq_times,
                 )
             end
         end
 
         CUDA.@time begin
-            U_inv = upper_triangular_inverse_no_copy(U; debug=debug)
+            U_inv = upper_triangular_inverse_no_copy(U; debug = debug)
         end
 
         CUDA.@time begin
-            L_inv = lower_triangular_inverse_no_copy(L; debug=debug)
+            L_inv = lower_triangular_inverse_no_copy(L; debug = debug)
         end
 
         if debug
@@ -277,9 +308,9 @@ function is_invertible_with_inverse_timed(A::CuModMatrix; debug::Bool=false)
         end
 
         return (
-            invertible=true,
-            pluq_times=summarize_times(pluq_times),
-            pluq_raw=pluq_times
+            invertible = true,
+            pluq_times = summarize_times(pluq_times),
+            pluq_raw = pluq_times,
         )
     end
 end
@@ -293,19 +324,19 @@ function nemo_is_invertible_with_inverse_timed(A::CuModMatrix)
     A_nemo = NemoMod.matrix(R, [R(x) for x in A_cpu])
 
     elapsed = @elapsed begin
-        invertible, _ = NemoMod.is_invertible_with_inverse(A_nemo, side=:right)
+        invertible, _ = NemoMod.is_invertible_with_inverse(A_nemo, side = :right)
     end
-    invertible, _ = NemoMod.is_invertible_with_inverse(A_nemo, side=:right)
+    invertible, _ = NemoMod.is_invertible_with_inverse(A_nemo, side = :right)
 
-    return (elapsed=elapsed, invertible=invertible, size=(nrows, ncols))
+    return (elapsed = elapsed, invertible = invertible, size = (nrows, ncols))
 end
 
 function run_is_invertible_with_inverse_experiment(
     specs::Vector{MatrixSpec};
-    samples_per_spec::Int=1,
-    seed::Int=1234,
-    debug::Bool=false,
-    time_nemo::Bool=true
+    samples_per_spec::Int = 1,
+    seed::Int = 1234,
+    debug::Bool = false,
+    time_nemo::Bool = true,
 )
     rng = Random.MersenneTwister(seed)
     results = Vector{NamedTuple}()
@@ -313,9 +344,10 @@ function run_is_invertible_with_inverse_experiment(
     nemo_times = Float64[]
 
     for spec in specs
-        for sample_id in 1:samples_per_spec
-            A = random_matrix_from_spec(spec; rng=rng)
-            gpu_elapsed = @elapsed metadata = is_invertible_with_inverse_timed(A; debug=debug)
+        for sample_id = 1:samples_per_spec
+            A = random_matrix_from_spec(spec; rng = rng)
+            gpu_elapsed =
+                @elapsed metadata = is_invertible_with_inverse_timed(A; debug = debug)
             merge_time_dicts!(all_pluq_times, metadata.pluq_raw)
             nemo_result = nothing
 
@@ -324,39 +356,46 @@ function run_is_invertible_with_inverse_experiment(
                 push!(nemo_times, nemo_result.elapsed)
             end
 
-            push!(results, (
-                spec=spec,
-                sample_id=sample_id,
-                invertible=metadata.invertible,
-                gpu_elapsed=gpu_elapsed,
-                pluq_summary=metadata.pluq_times,
-                nemo=nemo_result
-            ))
+            push!(
+                results,
+                (
+                    spec = spec,
+                    sample_id = sample_id,
+                    invertible = metadata.invertible,
+                    gpu_elapsed = gpu_elapsed,
+                    pluq_summary = metadata.pluq_times,
+                    nemo = nemo_result,
+                ),
+            )
         end
     end
 
-    nemo_summary = isempty(nemo_times) ? nothing : (
-        n=length(nemo_times),
-        mean=mean(nemo_times),
-        median=median(nemo_times),
-        q1=quantile(nemo_times, 0.25),
-        q3=quantile(nemo_times, 0.75)
-    )
+    nemo_summary =
+        isempty(nemo_times) ? nothing :
+        (
+            n = length(nemo_times),
+            mean = mean(nemo_times),
+            median = median(nemo_times),
+            q1 = quantile(nemo_times, 0.25),
+            q3 = quantile(nemo_times, 0.75),
+        )
 
     return (
-        results=results,
-        pluq_summary=summarize_times(all_pluq_times),
-        pluq_raw=all_pluq_times,
-        nemo_summary=nemo_summary,
-        nemo_raw=nemo_times
+        results = results,
+        pluq_summary = summarize_times(all_pluq_times),
+        pluq_raw = all_pluq_times,
+        nemo_summary = nemo_summary,
+        nemo_raw = nemo_times,
     )
 end
 
 function _print_summary_times(summary::Dict{Symbol,NamedTuple}, title::String)
     println(title)
-    for op in sort!(collect(keys(summary)); by=string)
+    for op in sort!(collect(keys(summary)); by = string)
         s = summary[op]
-        println("  $(op): n=$(s.n), mean=$(s.mean), median=$(s.median), q1=$(s.q1), q3=$(s.q3)")
+        println(
+            "  $(op): n=$(s.n), mean=$(s.mean), median=$(s.median), q1=$(s.q1), q3=$(s.q3)",
+        )
     end
     println()
     return nothing
@@ -372,7 +411,9 @@ function _print_per_sample_backend_times(results::Vector{NamedTuple})
         spec_str = _spec_string(r.spec)
         gpu_text = "GPU=$(r.gpu_elapsed)"
         nemo_text = r.nemo === nothing ? "CPU Nemo=n/a" : "CPU Nemo=$(r.nemo.elapsed)"
-        println("  sample=$(r.sample_id), matrix=[$(spec_str)], $(gpu_text), $(nemo_text), invertible=$(r.invertible)")
+        println(
+            "  sample=$(r.sample_id), matrix=[$(spec_str)], $(gpu_text), $(nemo_text), invertible=$(r.invertible)",
+        )
     end
     println()
     return nothing
@@ -393,7 +434,12 @@ function _ensure_nemo_loaded(time_nemo::Bool)
     end
 end
 
-function run_default_is_invertible_with_inverse_experiment(; samples_per_spec::Int=1, seed::Int=1234, debug::Bool=false, time_nemo::Bool=true)
+function run_default_is_invertible_with_inverse_experiment(;
+    samples_per_spec::Int = 1,
+    seed::Int = 1234,
+    debug::Bool = false,
+    time_nemo::Bool = true,
+)
     specs = MatrixSpec[
         MatrixSpec(Int64, 101, 64, 64),
         MatrixSpec(Int64, 101, 96, 96),
@@ -404,10 +450,10 @@ function run_default_is_invertible_with_inverse_experiment(; samples_per_spec::I
 
     out = run_is_invertible_with_inverse_experiment(
         specs;
-        samples_per_spec=samples_per_spec,
-        seed=seed,
-        debug=debug,
-        time_nemo=effective_time_nemo
+        samples_per_spec = samples_per_spec,
+        seed = seed,
+        debug = debug,
+        time_nemo = effective_time_nemo,
     )
 
     _print_per_sample_backend_times(out.results)
@@ -445,7 +491,13 @@ function run_include_experiment_succinct()
         MatrixSpec(Int, 11, 10000, 10000),
     ]
     effective_time_nemo = _ensure_nemo_loaded(true)
-    out = run_is_invertible_with_inverse_experiment(specs; samples_per_spec=1, seed=1234, debug=false, time_nemo=effective_time_nemo)
+    out = run_is_invertible_with_inverse_experiment(
+        specs;
+        samples_per_spec = 1,
+        seed = 1234,
+        debug = false,
+        time_nemo = effective_time_nemo,
+    )
     println("samples=$(length(out.results))")
     _print_per_sample_backend_times(out.results)
     _print_summary_times(out.pluq_summary, "PLUQ operation times (seconds)")

@@ -46,27 +46,40 @@ struct PLUQOptions
     check_prime::Bool
 end
 
-function PLUQOptions(options::PLUQOptions;
-    blocksize::Int=options.blocksize,
-    basecase::Int=options.basecase,
-    pivot_policy::Symbol=options.pivot_policy,
-    lazy_q::Bool=options.lazy_q,
-    nftb::Int=options.nftb,
-    pivot_warp_kernel::Symbol=options.pivot_warp_kernel,
-    trsm_mode::Symbol=options.trsm_mode,
-    trsm_warp_threshold::Int=options.trsm_warp_threshold,
-    schur_tile::Int=options.schur_tile,
-    schur_transpose_u::Bool=options.schur_transpose_u,
-    mod_backend::Symbol=options.mod_backend,
-    inverse_strategy::Symbol=options.inverse_strategy,
-    autotune::Bool=options.autotune,
-    batch_streams::Int=options.batch_streams,
-    check_prime::Bool=options.check_prime,
+function PLUQOptions(
+    options::PLUQOptions;
+    blocksize::Int = options.blocksize,
+    basecase::Int = options.basecase,
+    pivot_policy::Symbol = options.pivot_policy,
+    lazy_q::Bool = options.lazy_q,
+    nftb::Int = options.nftb,
+    pivot_warp_kernel::Symbol = options.pivot_warp_kernel,
+    trsm_mode::Symbol = options.trsm_mode,
+    trsm_warp_threshold::Int = options.trsm_warp_threshold,
+    schur_tile::Int = options.schur_tile,
+    schur_transpose_u::Bool = options.schur_transpose_u,
+    mod_backend::Symbol = options.mod_backend,
+    inverse_strategy::Symbol = options.inverse_strategy,
+    autotune::Bool = options.autotune,
+    batch_streams::Int = options.batch_streams,
+    check_prime::Bool = options.check_prime,
 )
     return PLUQOptions(;
-        blocksize, basecase, pivot_policy, lazy_q, nftb, pivot_warp_kernel,
-        trsm_mode, trsm_warp_threshold, schur_tile, schur_transpose_u,
-        mod_backend, inverse_strategy, autotune, batch_streams, check_prime,
+        blocksize,
+        basecase,
+        pivot_policy,
+        lazy_q,
+        nftb,
+        pivot_warp_kernel,
+        trsm_mode,
+        trsm_warp_threshold,
+        schur_tile,
+        schur_transpose_u,
+        mod_backend,
+        inverse_strategy,
+        autotune,
+        batch_streams,
+        check_prime,
     )
 end
 
@@ -76,24 +89,32 @@ end
 Construct `PLUQOptions` with validated positive block sizes.
 """
 function PLUQOptions(;
-    blocksize::Int=64,
-    basecase::Int=32,
-    pivot_policy::Symbol=:first_nonzero,
-    lazy_q::Bool=true,
-    nftb::Int=8,
-    pivot_warp_kernel::Symbol=:ballot,
-    trsm_mode::Symbol=:auto,
-    trsm_warp_threshold::Int=32,
-    schur_tile::Int=16,
-    schur_transpose_u::Bool=false,
-    mod_backend::Symbol=:auto,
-    inverse_strategy::Symbol=:pluq,
-    autotune::Bool=false,
-    batch_streams::Int=1,
-    check_prime::Bool=false
+    blocksize::Int = 64,
+    basecase::Int = 32,
+    pivot_policy::Symbol = :first_nonzero,
+    lazy_q::Bool = true,
+    nftb::Int = 8,
+    pivot_warp_kernel::Symbol = :ballot,
+    trsm_mode::Symbol = :auto,
+    trsm_warp_threshold::Int = 32,
+    schur_tile::Int = 16,
+    schur_transpose_u::Bool = false,
+    mod_backend::Symbol = :auto,
+    inverse_strategy::Symbol = :pluq,
+    autotune::Bool = false,
+    batch_streams::Int = 1,
+    check_prime::Bool = false,
 )
-    if blocksize < 1 || basecase < 1 || nftb < 1 || trsm_warp_threshold < 1 || batch_streams < 1
-        throw(ArgumentError("blocksize, basecase, nftb, trsm_warp_threshold, and batch_streams must be positive"))
+    if blocksize < 1 ||
+       basecase < 1 ||
+       nftb < 1 ||
+       trsm_warp_threshold < 1 ||
+       batch_streams < 1
+        throw(
+            ArgumentError(
+                "blocksize, basecase, nftb, trsm_warp_threshold, and batch_streams must be positive",
+            ),
+        )
     end
     if !(pivot_warp_kernel in (:ballot, :shfl))
         throw(ArgumentError("pivot_warp_kernel must be :ballot or :shfl"))
