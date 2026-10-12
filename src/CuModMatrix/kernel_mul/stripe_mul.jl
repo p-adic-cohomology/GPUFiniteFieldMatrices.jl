@@ -6,7 +6,7 @@
 """
     find_max_stripe_ops(type,N)
 
-Given a type `type` that is supported by CUBLAS, 
+Given a type `type` that is supported by cuBLAS,
 find out how many columns we can include in a stripe
 (in the stripe multiplication algorithm)
 """
@@ -16,7 +16,7 @@ function find_max_stripe_ops(type, N)
         bits_match = match(r"\d+", string(type))
         bits = get(bits_dict, bits_match.match, -1)
     else
-        throw(ArgumentError("The input type is not supported for CUBLAS gemm"))
+        throw(ArgumentError("The input type is not supported for cuBLAS gemm"))
     end
 
     if bits == -1
@@ -52,7 +52,7 @@ function unsafe_gemm!(
 
     #TODO: convert alpha and beta to floats?
 
-    CUDA.CUBLAS.gemm!(tAchar, tBchar, alpha, A.data, B.data, beta, C.data)
+    _CUDA_BLAS.gemm!(tAchar, tBchar, alpha, A.data, B.data, beta, C.data)
 
     mod!(C.data, C.data, C.N)
 end
@@ -61,22 +61,22 @@ const _cublas_scalar_cache_f64 = IdDict{Task,Tuple}()
 const _cublas_scalar_cache_f32 = IdDict{Task,Tuple}()
 
 """
-returns (0, 1) as pointers that can be used with low-level CUBLAS APIs
+returns (0, 1) as pointers that can be used with low-level cuBLAS APIs
 """
 @inline function cublas_scalars_f64()
     t = current_task()
     get!(_cublas_scalar_cache_f64, t) do
-        (CUDA.CUBLAS.CuRef(Float64(0.0)), CUDA.CUBLAS.CuRef(Float64(1.0)))
+        (CuRef(Float64(0.0)), CuRef(Float64(1.0)))
     end
 end
 
 """
-returns (0, 1) as pointers that can be used with low-level CUBLAS APIs
+returns (0, 1) as pointers that can be used with low-level cuBLAS APIs
 """
 @inline function cublas_scalars_f32()
     t = current_task()
     get!(_cublas_scalar_cache_f32, t) do
-        (CUDA.CUBLAS.CuRef(Float32(0.0)), CUDA.CUBLAS.CuRef(Float32(1.0)))
+        (CuRef(Float32(0.0)), CuRef(Float32(1.0)))
     end
 end
 
@@ -104,7 +104,7 @@ function stripe_mul!(
     elseif cols(A) != length(z)
         throw(DimensionMismatch(""))
     elseif eltype(A.data) ∉ [Float64, Float32, Float16, ComplexF32, ComplexF64]
-        throw(ArgumentError("Element type $(eltype(A.data)) unsupported by CUBLAS"))
+        throw(ArgumentError("Element type $(eltype(A.data)) unsupported by cuBLAS"))
     elseif eltype(A.data) != eltype(z.data) || eltype(z.data) != eltype(x.data)
         throw(ArgumentError("Mismatched element types in matmul"))
     end # possibly also enforce that the eltypes are the same
@@ -142,8 +142,8 @@ function stripe_mul!(
     elseif eltype(A.data) == Float32
         (zero_ptr, one_ptr) = cublas_scalars_f32()
     else
-        zero_ptr = CUDA.CUBLAS.CuRef(eltype(A.data)(0.0))
-        one_ptr = CUDA.CUBLAS.CuRef(eltype(A.data)(1.0))
+        zero_ptr = CuRef(eltype(A.data)(0.0))
+        one_ptr = CuRef(eltype(A.data)(1.0))
     end
 
     summed_size = cols(A)#size(A,2)
@@ -152,7 +152,7 @@ function stripe_mul!(
 
 
     if num_stripes == 1
-        CUDA.CUBLAS.gemv!('N', one_ptr, A.data, x.data, zero_ptr, z.data)
+        _CUDA_BLAS.gemv!('N', one_ptr, A.data, x.data, zero_ptr, z.data)
         mod!(z.data, z.data, N)
         return
     end
@@ -163,7 +163,7 @@ function stripe_mul!(
     range = 1:M
     A_temp = @view A.data[:, range]
     x_temp = @view x.data[range]
-    CUDA.CUBLAS.gemv!('N', one_ptr, A_temp, x_temp, zero_ptr, z.data)
+    _CUDA_BLAS.gemv!('N', one_ptr, A_temp, x_temp, zero_ptr, z.data)
     mod!(z.data, z.data, N)
 
     i += 1
@@ -172,7 +172,7 @@ function stripe_mul!(
         range = (M*(i-1)+1):(M*i)
         A_temp = @view A.data[:, range]
         x_temp = @view x.data[range]
-        CUDA.CUBLAS.gemv!('N', one_ptr, A_temp, x_temp, one_ptr, z.data)
+        _CUDA_BLAS.gemv!('N', one_ptr, A_temp, x_temp, one_ptr, z.data)
         mod!(z.data, z.data, N)
 
         i += 1
@@ -182,7 +182,7 @@ function stripe_mul!(
     range = (M*(i-1)+1):cols(A)
     A_temp = @view A.data[:, range]
     x_temp = @view x.data[range]
-    CUDA.CUBLAS.gemv!('N', one_ptr, A_temp, x_temp, one_ptr, z.data)
+    _CUDA_BLAS.gemv!('N', one_ptr, A_temp, x_temp, one_ptr, z.data)
     mod!(z.data, z.data, N)
 
 end
@@ -205,7 +205,7 @@ function stripe_mul!(
     elseif cols(A) != rows(B)
         throw(DimensionMismatch(""))
     elseif eltype(A.data) ∉ [Float64, Float32, Float16, ComplexF32, ComplexF64]
-        throw(ArgumentError("Element type $(eltype(A.data)) unsupported by CUBLAS"))
+        throw(ArgumentError("Element type $(eltype(A.data)) unsupported by cuBLAS"))
     elseif eltype(A.data) != eltype(B.data) || eltype(B.data) != eltype(C.data)
         throw(ArgumentError("Mismatched element types in matmul"))
     end # possibly also enforce that the eltypes are the same
@@ -250,7 +250,7 @@ function stripe_mul!(
     range = 1:M
     A_temp = @view A.data[:, range]
     B_temp = @view B.data[range, :]
-    CUDA.CUBLAS.gemm!('N', 'N', 1, A_temp, B_temp, 0, C.data)
+    _CUDA_BLAS.gemm!('N', 'N', 1, A_temp, B_temp, 0, C.data)
     mod!(C.data, C.data, C.N)
 
     i += 1
@@ -259,7 +259,7 @@ function stripe_mul!(
         range = (M*(i-1)+1):(M*i)
         A_temp = @view A.data[:, range]
         B_temp = @view B.data[range, :]
-        CUDA.CUBLAS.gemm!('N', 'N', 1, A_temp, B_temp, 1, C.data)
+        _CUDA_BLAS.gemm!('N', 'N', 1, A_temp, B_temp, 1, C.data)
         mod!(C.data, C.data, C.N)
 
         i += 1
@@ -269,6 +269,6 @@ function stripe_mul!(
     range = (M*(i-1)+1):cols(A)
     A_temp = @view A.data[:, range]
     B_temp = @view B.data[range, :]
-    CUDA.CUBLAS.gemm!('N', 'N', 1, A_temp, B_temp, 1, C.data)
+    _CUDA_BLAS.gemm!('N', 'N', 1, A_temp, B_temp, 1, C.data)
     mod!(C.data, C.data, C.N)
 end
