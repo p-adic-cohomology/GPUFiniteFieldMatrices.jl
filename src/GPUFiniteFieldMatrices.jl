@@ -13,9 +13,6 @@ using CUDA:
 using LinearAlgebra: LinearAlgebra, I, mul!, rank
 using SparseArrays: SparseArrays
 using IterTools: IterTools
-using BenchmarkTools: BenchmarkTools
-using CSV: CSV
-using DelimitedFiles: DelimitedFiles
 
 # This check keeps return types predictable so the functions below stay fast.
 using DispatchDoctor: @stable

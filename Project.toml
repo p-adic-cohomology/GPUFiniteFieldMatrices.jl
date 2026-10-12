@@ -3,10 +3,7 @@ uuid = "465031f1-b347-4f72-85f6-baf667cdf853"
 version = "0.3.2"
 
 [deps]
-BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
-CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
-DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 DispatchDoctor = "8d63f2c5-f18a-4cf2-ba9d-b3f60fc568c8"
 IterTools = "c8e1da08-722c-5040-9ed9-7db0dc04731e"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -14,9 +11,6 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Unroll = "36e64239-2ab9-4580-84fb-56737a503d36"
 
 [compat]
-BenchmarkTools = "1.5.0"
-CSV = "0.10.15"
-DelimitedFiles = "1.9.1"
 DispatchDoctor = "0.4.28"
 SparseArrays = "1.12.0"
 Unroll = "0.1.0"
