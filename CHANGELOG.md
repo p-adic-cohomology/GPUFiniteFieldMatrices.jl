@@ -26,10 +26,16 @@ This change prepares the 0.4.0 API break. No compatibility aliases are kept.
 | Package-local rmul!(A, s), lmul!(s, A) | LinearAlgebra.rmul!(A, s), LinearAlgebra.lmul!(s, A) | Methods now extend LinearAlgebra's generics. |
 | negate!(B, A, mod_N) | neg!(B, A, mod_N) | Signature and behavior are unchanged. |
 | add!, sub!, zero! | unchanged | These names remain available as qualified public functions. |
+| KMatMul!(C, A, B) | LinearAlgebra.mul!(C, A, B) | Extends LinearAlgebra's multiplication method. |
+| KMatMul_gemv!(C, A, x) | karatsuba_gemv!(C, A, x) | Name only; behavior is unchanged. |
+| Karatsubacopy(A) | Base.copy(A) | Copy semantics are unchanged. |
+| MatToKMat(...) | to_karatsuba(...) | Conversion helper; all overloads are renamed. |
+| KMatToMat(T, K) | from_karatsuba(T, K) | Conversion helper; argument order is unchanged. |
 
-The public declarations export the everyday array, PLUQ, inverse, batch, and
-elementwise-operation names. Advanced operations remain available through
-qualified access, including similar_with_modulus, inverse_pluq, the fixed-size
-batch kernels, triangular inverses, low-level multiplication helpers, and
-TILE_WIDTH. The helper pluq_check_identity remains internal. Base.inv,
-Base.copy, and LinearAlgebra methods are available through their owning modules.
+The public declarations export the everyday array, PLUQ, inverse, batch,
+elementwise-operation, and Karatsuba conversion names. Advanced operations
+remain available through qualified access, including karatsuba_gemv!,
+similar_with_modulus, inverse_pluq, the fixed-size batch kernels, triangular
+inverses, low-level multiplication helpers, and TILE_WIDTH. The helper
+pluq_check_identity remains internal. Base.inv, Base.copy, and LinearAlgebra
+methods are available through their owning modules.

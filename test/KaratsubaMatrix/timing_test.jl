@@ -35,10 +35,22 @@ function test_timings()
     result = @btimed CUDA.@sync GPUFiniteFieldMatrices.scalar_multiply!($C, $A, 2)
     @test result[:time] < 0.01
 
-    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.KMatMul!($C, $A, $B, $plan1, $plan1)
+    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.LinearAlgebra.mul!(
+        $C,
+        $A,
+        $B,
+        $plan1,
+        $plan1,
+    )
     @test result[:time] < 1
 
-    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.KMatMul!($z, $A, $x, $plan2, $plan1)
+    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.LinearAlgebra.mul!(
+        $z,
+        $A,
+        $x,
+        $plan2,
+        $plan1,
+    )
     @test result[:time] < 0.01
 
     A1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A_data1, 11^2)
@@ -65,10 +77,22 @@ function test_timings()
     result = @btimed CUDA.@sync GPUFiniteFieldMatrices.scalar_multiply!($C, $A, 2)
     @test result[:time] < 0.025
 
-    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.KMatMul!($C, $A, $B, $plan1, $plan1)
+    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.LinearAlgebra.mul!(
+        $C,
+        $A,
+        $B,
+        $plan1,
+        $plan1,
+    )
     @test result[:time] < 4
 
-    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.KMatMul!($z, $A, $x, $plan2, $plan1)
+    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.LinearAlgebra.mul!(
+        $z,
+        $A,
+        $x,
+        $plan2,
+        $plan1,
+    )
     @test result[:time] < 0.01
 
     CUDA.@sync println("Done testing timing.")

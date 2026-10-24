@@ -104,13 +104,13 @@ access, for example GPUFiniteFieldMatrices.similar_with_modulus(A, 103).
 
 #### Karatsuba matrices
 
-```julia
-using GPUFiniteFieldMatrices
+Convert a `CuModMatrix` to the split representation with `to_karatsuba(A, M)` and
+convert it back with `from_karatsuba(Float64, K)`. Initialized Karatsuba products
+extend `LinearAlgebra.mul!`; the specialized matrix-vector path is available
+through qualified access as `GPUFiniteFieldMatrices.karatsuba_gemv!`.
 
-A = KaratsubaMatrix([1 2; 3 4], [0 1; 1 0])
-B = KaratsubaMatrix([2 1; 0 3], [1 0; 2 1])
-A * B
-```
+The `*` operator and matrix-matrix keyword paths remain unsupported; these
+renames change the API spellings without changing those behaviors.
 
 ## License
 
