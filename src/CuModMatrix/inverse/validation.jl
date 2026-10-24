@@ -26,7 +26,7 @@ Check the PLUQ identity on GPU:
 `P*A*Q == L*U (mod N)`.
 Returns `true` if the identity holds.
 """
-function pluq_check_identity(F::PLUQFactorization, Aorig::CuModMatrix)
+function pluq_check_identity(F::PLUQ, Aorig::CuModMatrix)
     n = rows(Aorig)
     N = Aorig.N
     pdev = CuArray(Int32.(F.p))
@@ -41,8 +41,8 @@ function pluq_check_identity(F::PLUQFactorization, Aorig::CuModMatrix)
         qdev,
         Int32(n),
     )
-    L = pluq_extract_L(F)
-    U = pluq_extract_U(F)
+    L = F.L
+    U = F.U
     LU = zeros(eltype(Aorig.data), n, n, N)
     mul!(LU, L, U)
     D = zeros(eltype(Aorig.data), n, n, N)

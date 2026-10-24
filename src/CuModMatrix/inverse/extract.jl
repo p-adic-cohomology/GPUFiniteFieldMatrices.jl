@@ -53,11 +53,11 @@ function pluq_apply_paq_kernel!(PAQ, A, p, q, n::Int32)
 end
 
 """
-    pluq_extract_L(F)
+    F.L
 
 Materialize explicit `L` on GPU from packed `F.LU`.
 """
-function pluq_extract_L(F::PLUQFactorization)
+function _pluq_extract_L(F::PLUQ)
     n = rows(F.LU)
     n32 = Int32(n)
     L = zeros(eltype(F.LU.data), n, n, F.LU.N)
@@ -72,17 +72,17 @@ function pluq_extract_L(F::PLUQFactorization)
 end
 
 """
-    pluq_extract_U(F)
+    F.U
 
 Materialize explicit `U` on GPU from packed `F.LU`.
 
 Example:
 ```julia
-F = pluq_new(A)
-U = pluq_extract_U(F)
+F = pluq(A)
+U = F.U
 ```
 """
-function pluq_extract_U(F::PLUQFactorization)
+function _pluq_extract_U(F::PLUQ)
     n = rows(F.LU)
     n32 = Int32(n)
     U = zeros(eltype(F.LU.data), n, n, F.LU.N)

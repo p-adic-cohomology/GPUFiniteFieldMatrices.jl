@@ -41,13 +41,13 @@ function test_timings()
     result = @btimed CUDA.@sync GPUFiniteFieldMatrices.KMatMul!($z, $A, $x, $plan2, $plan1)
     @test result[:time] < 0.01
 
-    A1 = GPUFiniteFieldMatrices.CuModMatrix(A_data1, 11^2, elem_type = Float64)
-    B1 = GPUFiniteFieldMatrices.CuModMatrix(B_data1, 11^2, elem_type = Float64)
-    x1 = GPUFiniteFieldMatrices.CuModVector(x_data1, 11^2, elem_type = Float64)
+    A1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A_data1, 11^2)
+    B1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(B_data1, 11^2)
+    x1 = GPUFiniteFieldMatrices.CuModVector{Float64}(x_data1, 11^2)
 
-    A2 = GPUFiniteFieldMatrices.CuModMatrix(A_data2, 11^2, elem_type = Float64)
-    B2 = GPUFiniteFieldMatrices.CuModMatrix(B_data2, 11^2, elem_type = Float64)
-    x2 = GPUFiniteFieldMatrices.CuModVector(x_data2, 11^2, elem_type = Float64)
+    A2 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A_data2, 11^2)
+    B2 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(B_data2, 11^2)
+    x2 = GPUFiniteFieldMatrices.CuModVector{Float64}(x_data2, 11^2)
 
     A = GPUFiniteFieldMatrices.KaratsubaMatrix(A1, A2, 11, 11, 11^2)
     B = GPUFiniteFieldMatrices.KaratsubaMatrix(B1, B2, 11, 11, 11^2)

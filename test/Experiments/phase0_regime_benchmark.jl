@@ -222,8 +222,8 @@ function run_phase0_regime_benchmark(;
     rng = Random.MersenneTwister(seed)
     if warmup
         A0 = CuModMatrix(Matrix{Float32}(I, 32, 32), 11)
-        CUDA.@sync pluq_new(A0)
-        CUDA.@sync inverse_new(A0)
+        CUDA.@sync pluq(A0)
+        CUDA.@sync inv(A0)
     end
     rows = NamedTuple[]
     if verbose
@@ -242,16 +242,11 @@ function run_phase0_regime_benchmark(;
             batch = CuModMatrix[]
             for _ = 1:local_batch
                 A = if shape == :square
-                    CuModMatrix(
-                        _phase0_bench_square_host(reg.square_n, p, T, rng),
-                        p;
-                        elem_type = T,
-                    )
+                    CuModMatrix{T}(_phase0_bench_square_host(reg.square_n, p, T, rng), p)
                 else
-                    CuModMatrix(
+                    CuModMatrix{T}(
                         _phase0_bench_rect_host(reg.rect_m, reg.rect_n, p, T, rng),
-                        p;
-                        elem_type = T,
+                        p,
                     )
                 end
                 push!(batch, A)
@@ -260,10 +255,7 @@ function run_phase0_regime_benchmark(;
             t_inv = Float64[]
             for _ = 1:trials
                 try
-                    push!(
-                        t_pluq,
-                        _time_gpu_batched(A -> pluq_new(A, options = options), batch),
-                    )
+                    push!(t_pluq, _time_gpu_batched(A -> pluq(A, options = options), batch))
                 catch err
                     if debug_errors
                         println(
@@ -278,10 +270,7 @@ function run_phase0_regime_benchmark(;
                         try
                             push!(
                                 t_inv,
-                                _time_gpu_batched(
-                                    A -> inverse_new(A, options = options),
-                                    batch,
-                                ),
+                                _time_gpu_batched(A -> inv(A, options = options), batch),
                             )
                         catch err
                             if debug_errors
@@ -301,7 +290,7 @@ function run_phase0_regime_benchmark(;
                             push!(
                                 t_inv,
                                 _time_gpu_batched(
-                                    A -> right_inverse_new(A, options = options),
+                                    A -> right_inverse(A, options = options),
                                     batch,
                                 ),
                             )

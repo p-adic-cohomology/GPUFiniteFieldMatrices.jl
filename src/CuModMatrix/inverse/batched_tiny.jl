@@ -192,7 +192,7 @@ function _tiny_inverse_batched_kernel!(A, invA, ok, n::Int32, N::Int32)
 end
 
 function _pluq_batched_tiny!(mats::AbstractVector{<:CuModMatrix}, n::Int)
-    isempty(mats) && return PLUQFactorization[]
+    isempty(mats) && return PLUQ[]
     !_batch_supported_n(n) && throw(ArgumentError("supported sizes are 4, 8, 16, 32"))
     N = mats[1].N
     _validate_inverse_modulus(PLUQOptions(), mats[1])
@@ -223,9 +223,9 @@ function _pluq_batched_tiny!(mats::AbstractVector{<:CuModMatrix}, n::Int)
     p = Array(pdev)
     q = Array(qdev)
     r = Array(rdev)
-    out = Vector{PLUQFactorization{T}}(undef, b)
+    out = Vector{PLUQ{T}}(undef, b)
     for i = 1:b
-        out[i] = PLUQFactorization(mats[i], Int.(p[:, i]), Int.(q[:, i]), Int(r[i]))
+        out[i] = PLUQ(mats[i], Int.(p[:, i]), Int.(q[:, i]), Int(r[i]))
     end
     return out
 end

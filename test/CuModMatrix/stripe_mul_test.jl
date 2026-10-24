@@ -2,8 +2,8 @@
 function test_stripe_mul()
     A_data = Base.rand(1:100, 100, 100)
     B_data = Base.rand(1:100, 100, 100)
-    A = CuModMatrix(A_data, 2^11, elem_type = Float32)
-    B = CuModMatrix(B_data, 2^11, elem_type = Float32)
+    A = CuModMatrix{Float32}(A_data, 2^11)
+    B = CuModMatrix{Float32}(B_data, 2^11)
     C = GPUFiniteFieldMatrices.zeros(Float32, 100, 100, 2^11)
 
     GPUFiniteFieldMatrices.stripe_mul!(C, A, B)
@@ -17,8 +17,8 @@ function test_stripe_mul()
     A_data[5, 5] = 11^3 - 5
     B_data[95, 95] = 11^3 - 23
 
-    A = CuModMatrix(A_data, 11^3, elem_type = Float32)
-    B = CuModMatrix(B_data, 11^3, elem_type = Float32)
+    A = CuModMatrix{Float32}(A_data, 11^3)
+    B = CuModMatrix{Float32}(B_data, 11^3)
     C = GPUFiniteFieldMatrices.zeros(Float32, 100, 100, 11^3)
 
     GPUFiniteFieldMatrices.stripe_mul!(C, A, B)
@@ -36,8 +36,8 @@ function test_stripe_mul()
     A_data[5, 5] = 11^3 - 5
     B_data[95, 95] = 11^3 - 23
 
-    A = CuModMatrix(A_data, 11^3, elem_type = Float32)
-    B = CuModMatrix(B_data, 11^3, elem_type = Float32)
+    A = CuModMatrix{Float32}(A_data, 11^3)
+    B = CuModMatrix{Float32}(B_data, 11^3)
     C = GPUFiniteFieldMatrices.zeros(Float32, s, s, 11^3)
 
     println("Multiplying on the GPU...")
@@ -57,8 +57,8 @@ function test_stripe_mul()
     A_data[95, 95] = 11^3 - 23
     x_data = Base.rand(1:100, 100)
 
-    A = CuModMatrix(A_data, 11^3, elem_type = Float32)
-    x = CuModVector(x_data, 11^3, elem_type = Float32)
+    A = CuModMatrix{Float32}(A_data, 11^3)
+    x = CuModVector{Float32}(x_data, 11^3)
     z = GPUFiniteFieldMatrices.zeros(Float32, 100, 11^3)
 
     GPUFiniteFieldMatrices.stripe_mul!(z, A, x)
@@ -77,8 +77,8 @@ function test_stripe_mul()
     A_data[5, 5] = 7^4 - 5
     A_data[95, 95] = 7^4 - 23
 
-    A = CuModMatrix(A_data, 7^4, elem_type = Float32)
-    x = CuModVector(x_data, 7^4, elem_type = Float32)
+    A = CuModMatrix{Float32}(A_data, 7^4)
+    x = CuModVector{Float32}(x_data, 7^4)
     z = GPUFiniteFieldMatrices.zeros(Float32, s, 7^4)
 
     println("Multiplying on the GPU...")

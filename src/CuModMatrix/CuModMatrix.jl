@@ -134,38 +134,33 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
 end
 
 """
-    CuModArray(A::AbstractArray{T}, N)
+    CuModArray(A::AbstractArray, N)
+    CuModArray{T,D}(A::AbstractArray, N)
 
-General contructor from abstract CPU array.
-Pads data on the GPU to fit a multiple of 32.
+Construct from a CPU array and pad data on the GPU to fit a multiple of 32.
+The unparameterized constructor defaults to Float32.
 """
 function CuModArray(
     A::AbstractArray{T,D},
     N::Int;
     mod = true,
     new_size = nothing,
-    elem_type = DEFAULT_TYPE,
 ) where {T,D}
-    CuModArray{elem_type,D}(A, N; mod = mod, new_size = new_size)
+    CuModArray{DEFAULT_TYPE,D}(A, N; mod = mod, new_size = new_size)
 end
 
 const CuModMatrix{T} = CuModArray{T,2}
 const CuModVector{T} = CuModArray{T,1}
 
 """
-    CuModMatrix(A::AbstractMatrix{T}, N)
+    CuModMatrix(A::AbstractMatrix, N)
+    CuModMatrix{T}(A::AbstractMatrix, N)
 
-General contructor from abstract CPU matrix.
-Pads data on the GPU to fit a multiple of 32.
+Construct from a CPU matrix and pad data on the GPU to fit a multiple of 32.
+The unparameterized constructor defaults to Float32.
 """
-function CuModMatrix(
-    A::AbstractMatrix{T},
-    N::Int;
-    mod = true,
-    new_size = nothing,
-    elem_type = DEFAULT_TYPE,
-) where {T}
-    CuModArray{elem_type,2}(A, N; mod = mod, new_size = new_size)
+function CuModMatrix(A::AbstractMatrix{T}, N::Int; mod = true, new_size = nothing) where {T}
+    CuModArray{DEFAULT_TYPE,2}(A, N; mod = mod, new_size = new_size)
 end
 
 """
@@ -185,19 +180,14 @@ function CuModMatrix(A::CuArray{T,2}, N::Int; mod = false, new_size = nothing) w
 end
 
 """
-    CuModVector(A::AbstractMatrix{T}, N)
+    CuModVector(A::AbstractVector, N)
+    CuModVector{T}(A::AbstractVector, N)
 
-General contructor from abstract CPU matrix.
-Pads data on the GPU to fit a multiple of 32.
+Construct from a CPU vector and pad data on the GPU to fit a multiple of 32.
+The unparameterized constructor defaults to Float32.
 """
-function CuModVector(
-    A::AbstractVector{T},
-    N::Int;
-    mod = true,
-    new_size = nothing,
-    elem_type = DEFAULT_TYPE,
-) where {T}
-    CuModArray{elem_type,1}(A, N; mod = mod, new_size = new_size)
+function CuModVector(A::AbstractVector{T}, N::Int; mod = true, new_size = nothing) where {T}
+    CuModArray{DEFAULT_TYPE,1}(A, N; mod = mod, new_size = new_size)
 end
 
 """
@@ -342,7 +332,7 @@ function Base.:^(A::CuModMatrix, n::Integer)
         I_mat = Matrix{eltype(A.data)}(I, rows(A), cols(A))
         return CuModMatrix(I_mat, A.N)
     elseif n < 0
-        return inverse(A)^(-n)
+        return inv(A)^(-n)
     else
         if n == 1
             return A
@@ -360,7 +350,7 @@ function Base.transpose(A::CuModMatrix)
 end
 
 function _setup_PLUQ(A::CuModMatrix)
-    return pluq_new(A)
+    return pluq(A)
 end
 
 function _is_invertible(F)
@@ -381,7 +371,7 @@ function is_invertible_with_inverse(A::CuModMatrix; debug::Bool = false)
     if !_is_invertible(F)
         return false, nothing
     end
-    A_inv = inverse_new(A)
+    A_inv = inv(A)
     if debug
         println("A")
         display(A)
@@ -430,15 +420,6 @@ function _inverse_permutation_kernel!(
     return
 end
 
-"""
-    is_invertible(A::CuModMatrix)
-
-Checks if a matrix is invertible mod N.
-"""
-function is_invertible(A::CuModMatrix)
-    return is_invertible_new(A)
-end
-
 function mod_inv(a::Integer, m::Integer)
     aa = mod(a, m)
     t = 0
@@ -458,15 +439,6 @@ end
 
 function mod_inv(a::Number, m::Integer)
     return mod_inv(Int(round(a)), m)
-end
-
-"""
-    inverse(A::CuModMatrix)
-
-Computes the inverse of a matrix mod N.
-"""
-function inverse(A::CuModMatrix)
-    return inverse_new(A)
 end
 
 # Additional utility functions
@@ -559,12 +531,12 @@ function elementwise_multiply!(
 end
 
 """
-    negate!(B, A, [mod_N])
+    neg!(B, A, [mod_N])
 
 In-place negation: B = -A mod N. No allocation is performed.
 If mod_N is provided, it will be used instead of B.N for the modulus.
 """
-function negate!(B::CuModArray, A::CuModArray, mod_N::Integer = -1)
+function neg!(B::CuModArray, A::CuModArray, mod_N::Integer = -1)
     N = mod_N > 0 ? mod_N : B.N
 
     if mod_N <= 0 && A.N != B.N
@@ -589,9 +561,9 @@ end
 Scales the array A by s, overwriting A.
 As ZZ/n is commutative, this has the same behavior as lmul!
 
-TODO: make this and lmul! extend base
+Extends LinearAlgebra.rmul! and LinearAlgebra.lmul!
 """
-rmul!(A::CuModArray, s::Number) = mul!(A, A, s)
+LinearAlgebra.rmul!(A::CuModArray, s::Number) = mul!(A, A, s)
 
 """
     lmul!(s,A)
@@ -599,7 +571,7 @@ rmul!(A::CuModArray, s::Number) = mul!(A, A, s)
 Scales the array A by s, overwriting A.
 As ZZ/n is commutative, this has the same behavior as lmul!
 """
-lmul!(s::Number, A::CuModArray) = mul!(A, A, s)
+LinearAlgebra.lmul!(s::Number, A::CuModArray) = mul!(A, A, s)
 
 function dumb_copy_kernel!(B, A)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
@@ -770,28 +742,6 @@ function LinearAlgebra.mul!(
     return C
 end
 
-function mulN!(C::CuModMatrix, A::CuModMatrix, B::CuModMatrix; M = nothing, N = nothing)
-
-    if (A.N != B.N || A.N != C.N)
-        throw(
-            CuModArrayModulusMismatchException("All matrices must have the same modulus N"),
-        )
-    end
-    if cols(A) != rows(B)
-        throw(
-            CuModArraySizeMismatchException(
-                "Matrix dimensions do not match for multiplication",
-            ),
-        )
-    end
-    if rows(C) != rows(A) || cols(C) != cols(B)
-        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
-    end
-
-    stripe_mul!(C, A, B; M = M, N = N)
-    return C
-end
-
 """
     mul!(z, A, x)
 
@@ -826,7 +776,12 @@ function LinearAlgebra.mul!(
     return z
 end
 
-function CuModcopy(A::CuModArray{T,D}) where {T,D}
+"""
+    copy(A::CuModArray)
+
+Copy the data and metadata into a new CuModArray.
+"""
+function Base.copy(A::CuModArray{T,D}) where {T,D}
     B = CuModArray{T,D}(copy(A.data), A.N, mod = false, new_size = size(A))
 end
 

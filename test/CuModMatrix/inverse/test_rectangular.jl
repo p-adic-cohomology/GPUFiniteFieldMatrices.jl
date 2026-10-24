@@ -11,7 +11,7 @@ function _random_full_row_rank(m::Int, n::Int, p::Int; max_tries::Int = 64)
         Ahost = rand(0:(p-1), m, n)
         A = CuModMatrix(Ahost, p)
         try
-            X = right_inverse_new(A)
+            X = right_inverse(A)
             return A, X
         catch
         end
@@ -24,7 +24,7 @@ function _random_full_col_rank(m::Int, n::Int, p::Int; max_tries::Int = 64)
         Ahost = rand(0:(p-1), m, n)
         A = CuModMatrix(Ahost, p)
         try
-            X = left_inverse_new(A)
+            X = left_inverse(A)
             return A, X
         catch
         end
@@ -49,21 +49,21 @@ end
 function test_rectangular_rank_and_failures()
     p = 101
     Awide = CuModMatrix([1 2 3 4; 2 4 6 8], p)
-    Fwide = pluq_new(Awide)
+    Fwide = pluq(Awide)
     @test Fwide.rank == 1
-    @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException right_inverse_new(Awide)
+    @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException right_inverse(Awide)
 
     Atall = CuModMatrix([1 2; 2 4; 3 6], p)
-    Ftall = pluq_new(Atall)
+    Ftall = pluq(Atall)
     @test Ftall.rank == 1
-    @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException left_inverse_new(Atall)
+    @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException left_inverse(Atall)
 
     # A full-row-rank matrix may have an all-zero leading column.  The blocked
-    # device panel stops there and `pluq_new` must restart from its saved input
+    # device panel stops there and `pluq` must restart from its saved input
     # with complete pivoting rather than treating the matrix as rank-deficient.
     Ashuffled = CuModMatrix([0 1 0 2; 0 0 1 3], p)
-    Fshuffled = pluq_new(Ashuffled)
+    Fshuffled = pluq(Ashuffled)
     @test Fshuffled.rank == 2
-    Xshuffled = right_inverse_new(Ashuffled)
+    Xshuffled = right_inverse(Ashuffled)
     @test mod.(Array(Ashuffled * Xshuffled), p) == _rect_id(eltype(Ashuffled.data), 2)
 end

@@ -24,7 +24,7 @@ function test_allocations()
     result = CUDA.@timed GPUFiniteFieldMatrices.sub!(C, A, B)
     @test result[:gpu_bytes] == 0
 
-    result = CUDA.@timed negate!(C, A)
+    result = CUDA.@timed GPUFiniteFieldMatrices.neg!(C, A)
     @test result[:gpu_bytes] == 0
 
     result = CUDA.@timed scalar_add!(C, A, 2)

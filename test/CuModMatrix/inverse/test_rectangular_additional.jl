@@ -57,22 +57,22 @@ function test_rectangular_additional_sizes()
         for T in (Float32, Float64)
             for (m, n) in row_cases
                 Ahost = _extra_full_row_rank_host(m, n, p, T, rng)
-                A = CuModMatrix(Ahost, p; elem_type = T)
-                X = right_inverse_new(A, options = PLUQOptions(autotune = true))
+                A = CuModMatrix{T}(Ahost, p)
+                X = right_inverse(A, options = PLUQOptions(autotune = true))
                 AX = mod.(Array(A * X), p)
                 @test AX == _extra_id(Int, m)
             end
             for (m, n) in col_cases
                 Ahost = _extra_full_col_rank_host(m, n, p, T, rng)
-                A = CuModMatrix(Ahost, p; elem_type = T)
-                X = left_inverse_new(A, options = PLUQOptions(autotune = true))
+                A = CuModMatrix{T}(Ahost, p)
+                X = left_inverse(A, options = PLUQOptions(autotune = true))
                 XA = mod.(Array(X * A), p)
                 @test XA == _extra_id(Int, n)
             end
             for n in square_cases
                 Ahost = _extra_invertible_square_host(n, p, T, rng)
-                A = CuModMatrix(Ahost, p; elem_type = T)
-                Xaug = inverse_new(
+                A = CuModMatrix{T}(Ahost, p)
+                Xaug = inv(
                     A,
                     options = PLUQOptions(autotune = true, inverse_strategy = :augmented),
                 )
@@ -94,15 +94,15 @@ function test_dense_rectangular_right_inverse()
     for i = 1:m
         Ahost[i, m+i] = 1.0f0
     end
-    A = CuModMatrix(Ahost, p; elem_type = Float32)
-    X = right_inverse_new(A, options = PLUQOptions(autotune = true, check_prime = true))
+    A = CuModMatrix{Float32}(Ahost, p)
+    X = right_inverse(A, options = PLUQOptions(autotune = true, check_prime = true))
     @test mod.(Array(A * X), p) == _extra_id(Int, m)
 end
 
 function test_right_inverse_singular_leading_block_fallback()
     p = 101
     # The leading 2×2 block is singular, but columns 2 and 3 form I₂.
-    A = CuModMatrix(Float32[0 1 0; 0 0 1], p; elem_type = Float32)
-    X = right_inverse_new(A, options = PLUQOptions(autotune = true, check_prime = true))
+    A = CuModMatrix{Float32}(Float32[0 1 0; 0 0 1], p)
+    X = right_inverse(A, options = PLUQOptions(autotune = true, check_prime = true))
     @test mod.(Array(A * X), p) == _extra_id(Int, 2)
 end

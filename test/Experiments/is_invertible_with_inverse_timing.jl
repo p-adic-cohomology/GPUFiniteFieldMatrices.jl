@@ -16,7 +16,7 @@ end
 function random_matrix_from_spec(spec::MatrixSpec; rng::AbstractRNG = Random.default_rng())
     A = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
     A_typed = Matrix{spec.elem_type}(A)
-    return CuModMatrix(A_typed, spec.p; elem_type = spec.elem_type)
+    return CuModMatrix{spec.elem_type}(A_typed, spec.p)
 end
 
 function _append_time!(times::Dict{Symbol,Vector{Float64}}, key::Symbol, value::Float64)
@@ -261,11 +261,13 @@ function is_invertible_with_inverse_timed(A::CuModMatrix; debug::Bool = false)
         end
 
         CUDA.@time begin
-            U_inv = upper_triangular_inverse_no_copy(U; debug = debug)
+            U_inv =
+                GPUFiniteFieldMatrices.upper_triangular_inverse_no_copy(U; debug = debug)
         end
 
         CUDA.@time begin
-            L_inv = lower_triangular_inverse_no_copy(L; debug = debug)
+            L_inv =
+                GPUFiniteFieldMatrices.lower_triangular_inverse_no_copy(L; debug = debug)
         end
 
         if debug
