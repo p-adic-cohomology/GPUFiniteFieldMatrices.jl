@@ -410,12 +410,32 @@ function zero!(A::KaratsubaArray)
     zero!(A.data2)
 end
 
+"""
+    from_karatsuba(T::Type, K::KaratsubaArray)
+
+Reconstruct the full array represented by `K` as `K.data1 + K.N1*K.data2`.
+The explicit `T` argument is part of the typed conversion API; this method does
+not convert elements, so the result retains the element type of `K`'s split
+arrays.
+"""
 function from_karatsuba(T::Type, K::KaratsubaArray)
     A = Base.zeros(T, size(K.data1)...)
     A = K.data1 + K.N1*K.data2
     A
 end
 
+"""
+    to_karatsuba(A::AbstractArray)
+    to_karatsuba(A::AbstractArray, M::Integer)
+    to_karatsuba(T::Type, A::AbstractArray)
+    to_karatsuba(T::Type, A::AbstractArray, M::Integer)
+
+Convert `A` to a split Karatsuba representation. When `M` is supplied, it is
+used for both split factors and the representation modulus. Otherwise the split
+base is selected from `eltype(A)` and the largest dimension of `A`. The typed
+overloads accept `T` as an explicit type argument but do not convert elements;
+the representation retains `A`'s element type.
+"""
 function to_karatsuba(A::AbstractArray, M::Integer)
     to_karatsuba(eltype(A), A, M)
 end
