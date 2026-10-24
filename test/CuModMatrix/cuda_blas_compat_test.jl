@@ -73,6 +73,32 @@ function test_cuda_blas_compatibility()
         @test z_override.N == N
     end
 
+    # Exercise the computed Float32 stripe budget at the exclusive input bound.
+    precision_bound = 2048
+    precision_max_ops = GPUFiniteFieldMatrices.find_max_stripe_ops(Float32, precision_bound)
+    @test precision_max_ops == 3
+
+    precision_inner_dim = 2 * precision_max_ops + 1
+    precision_A_values = fill(precision_bound - 1, 2, precision_inner_dim)
+    precision_x_values = fill(precision_bound - 1, precision_inner_dim)
+    precision_A =
+        GPUFiniteFieldMatrices.CuModMatrix{Float32}(precision_A_values, precision_bound)
+    precision_x =
+        GPUFiniteFieldMatrices.CuModVector{Float32}(precision_x_values, precision_bound)
+    precision_z = GPUFiniteFieldMatrices.zeros(Float32, 2, precision_bound)
+
+    CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
+        precision_z,
+        precision_A,
+        precision_x;
+        input_bound = precision_bound,
+    )
+    # Keep the oracle exact, independent of Float32 accumulation.
+    precision_expected = Float32.(
+        mod.(BigInt.(precision_A_values) * BigInt.(precision_x_values), precision_bound),
+    )
+    @test Array(precision_z) == precision_expected
+
     # Exercise the batched GEMV path with initialized plans and an independent
     # CPU modular product. The inputs are small and deterministic.
     n = 32
