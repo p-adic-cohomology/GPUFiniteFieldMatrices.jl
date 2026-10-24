@@ -283,6 +283,15 @@ const nKMuls = 3
 
 
 # the stuff in this function should apply to the general mul!, but with gemm instead of gemv
+"""
+    karatsuba_gemv!(y, A, x)
+
+Multiply a Karatsuba matrix `A` by a Karatsuba vector `x`, storing the result in
+`y`. All three values must have initialized plans, use the same split base `M`,
+and have dimensions compatible with the product. This specialized path currently
+supports `Float64` storage only. Initialize plans with `initialize_plan!` before
+calling this function.
+"""
 function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (A.M != B.M) || (A.M != C.M)
         error("Matrices must have the same modulus m")
