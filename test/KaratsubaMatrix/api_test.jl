@@ -12,6 +12,11 @@ function test_karatsuba_public_api_values()
         @test Array(mod.from_karatsuba(Float64, explicit)) == a_values
         @test Array(mod.from_karatsuba(Float64, automatic)) == a_values
 
+        typed_explicit = mod.to_karatsuba(Float64, a, modulus)
+        typed_automatic = mod.to_karatsuba(Float64, a)
+        @test Array(mod.from_karatsuba(Float64, typed_explicit)) == a_values
+        @test Array(mod.from_karatsuba(Float64, typed_automatic)) == a_values
+
         ak = mod.to_karatsuba(a, modulus)
         bk = mod.to_karatsuba(b, modulus)
         ck = mod.to_karatsuba(

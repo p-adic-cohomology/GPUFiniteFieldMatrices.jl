@@ -105,9 +105,26 @@ access, for example GPUFiniteFieldMatrices.similar_with_modulus(A, 103).
 #### Karatsuba matrices
 
 Convert a `CuModMatrix` to the split representation with `to_karatsuba(A, M)` and
-convert it back with `from_karatsuba(Float64, K)`. Initialized Karatsuba products
-extend `LinearAlgebra.mul!`; the specialized matrix-vector path is available
-through qualified access as `GPUFiniteFieldMatrices.karatsuba_gemv!`.
+convert it back with `from_karatsuba(Float64, K)`. Before multiplying, initialize
+the plans on both inputs and the destination with the qualified helper, then call
+`LinearAlgebra.mul!`:
+
+```julia
+using GPUFiniteFieldMatrices
+using LinearAlgebra
+
+A = CuModMatrix{Float64}([20 30; 40 50], 100)
+B = CuModMatrix{Float64}([20 30; 40 50], 100)
+AK = to_karatsuba(A, 100)
+BK = to_karatsuba(B, 100)
+C = to_karatsuba(CuModMatrix{Float64}(zeros(Float64, 2, 2), 100), 100)
+foreach(GPUFiniteFieldMatrices.initialize_plan!, (AK, BK, C))
+mul!(C, AK, BK)
+from_karatsuba(Float64, C)
+```
+
+The specialized matrix-vector path is available through qualified access as
+`GPUFiniteFieldMatrices.karatsuba_gemv!`.
 
 The `*` operator and matrix-matrix keyword paths remain unsupported; these
 renames change the API spellings without changing those behaviors.
