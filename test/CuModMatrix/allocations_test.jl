@@ -42,7 +42,7 @@ function test_allocations()
     result = CUDA.@timed GPUFiniteFieldMatrices.copy!(C, A)
     @test result[:gpu_bytes] == 0
 
-    result = CUDA.@timed mod_elements!(C, 3)
+    result = CUDA.@timed mod_elements!(C; modulus_override = 3)
     @test result[:gpu_bytes] == 0
 
     result = CUDA.@timed mul!(C, A, B)

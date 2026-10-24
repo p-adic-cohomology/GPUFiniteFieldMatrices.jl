@@ -58,8 +58,10 @@ function benchmark_inplace_vs_standard()
     println()
 
     # Benchmark in-place matrix multiplication
-    t5 = @benchmark GPUFiniteFieldMatrices.mat_mul_gpu_type($A, $B, $C)
-    println("In-place multiplication (GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B, C)):")
+    t5 = @benchmark GPUFiniteFieldMatrices.mat_mul_type_inplace!($C, $A, $B)
+    println(
+        "In-place multiplication (GPUFiniteFieldMatrices.mat_mul_type_inplace!(C, A, B)):",
+    )
     display(t5)
     println()
 
@@ -97,13 +99,13 @@ function benchmark_matmul_regimes()
 
     # Benchmark standard regime
     println("\nBenchmarking matrix multiplication regimes:")
-    t1 = @benchmark GPUFiniteFieldMatrices.mat_mul_gpu_type($A, $B, -1, "⊠")
+    t1 = @benchmark GPUFiniteFieldMatrices.mat_mul_gpu_type($A, $B; REGIME = "⊠")
     println("Standard regime (⊠):")
     display(t1)
     println()
 
     # Benchmark hybrid regime
-    t2 = @benchmark GPUFiniteFieldMatrices.mat_mul_gpu_type($A, $B, -1, "hybrid")
+    t2 = @benchmark GPUFiniteFieldMatrices.mat_mul_gpu_type($A, $B; REGIME = "hybrid")
     println("Hybrid regime (hybrid):")
     display(t2)
     println()

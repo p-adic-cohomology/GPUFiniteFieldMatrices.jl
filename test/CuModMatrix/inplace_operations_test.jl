@@ -132,7 +132,7 @@ function test_inplace_modulus_override()
 
     # Test add! with modulus override
     override_modulus = 3
-    GPUFiniteFieldMatrices.add!(C, A, B; mod_N = override_modulus)
+    GPUFiniteFieldMatrices.add!(C, A, B; modulus_override = override_modulus)
 
     println("C = A + B (in-place with modulus override $override_modulus) = ")
     display(C)
@@ -142,7 +142,7 @@ function test_inplace_modulus_override()
     @test Array(C) == expected
 
     # Test sub! with modulus override
-    GPUFiniteFieldMatrices.sub!(C, A, B; mod_N = override_modulus)
+    GPUFiniteFieldMatrices.sub!(C, A, B; modulus_override = override_modulus)
 
     println("C = A - B (in-place with modulus override $override_modulus) = ")
     display(C)
@@ -152,7 +152,7 @@ function test_inplace_modulus_override()
     @test Array(C) == expected
 
     # Test elementwise_multiply! with modulus override
-    elementwise_multiply!(C, A, B, override_modulus)
+    elementwise_multiply!(C, A, B; modulus_override = override_modulus)
 
     println("C = A .* B (in-place with modulus override $override_modulus) = ")
     display(C)
@@ -160,11 +160,12 @@ function test_inplace_modulus_override()
 
     expected = mod.(A_data .* A_data, override_modulus)
     @test Array(C) == expected
+    @test C.N == modulus1
 
     scalar = 3
 
     # Test scalar_add! with modulus override
-    scalar_add!(C, A, scalar, override_modulus)
+    scalar_add!(C, A, scalar; modulus_override = override_modulus)
     println("C = A + $scalar (in-place with modulus override $override_modulus) = ")
     display(C)
     println()
@@ -173,7 +174,7 @@ function test_inplace_modulus_override()
     @test Array(C) == expected
 
     # Test scalar_sub! with modulus override
-    scalar_sub!(C, A, scalar, override_modulus)
+    scalar_sub!(C, A, scalar; modulus_override = override_modulus)
     println("C = A - $scalar (in-place with modulus override $override_modulus) = ")
     display(C)
     println()
@@ -181,8 +182,20 @@ function test_inplace_modulus_override()
     expected = mod.(A_data .- scalar, override_modulus)
     @test Array(C) == expected
 
+    # Reverse scalar subtraction and negation share the same keyword contract.
+    GPUFiniteFieldMatrices.rscalar_sub!(C, A, scalar; modulus_override = override_modulus)
+    @test Array(C) == mod.(scalar .- A_data, override_modulus)
+    GPUFiniteFieldMatrices.neg!(C, A; modulus_override = override_modulus)
+    @test Array(C) == mod.(-A_data, override_modulus)
+
+    # Direct elementwise and division kernels use the same per-call keyword.
+    GPUFiniteFieldMatrices.mul_elementwise!(C, A, B; modulus_override = override_modulus)
+    @test Array(C) == mod.(A_data .* A_data, override_modulus)
+    GPUFiniteFieldMatrices.div!(C, A, 2; modulus_override = override_modulus)
+    @test Array(C) == mod.(A_data .* invmod(2, override_modulus), override_modulus)
+
     # Test scalar_multiply! with modulus override
-    mul!(C, A, scalar, override_modulus)
+    mul!(C, A, scalar; modulus_override = override_modulus)
     println("C = A * $scalar (in-place with modulus override $override_modulus) = ")
     display(C)
     println()
@@ -236,7 +249,7 @@ function test_inplace_copy_and_mod()
 
     # Test mod_elements! with modulus override
     override_modulus = 5
-    mod_elements!(F, override_modulus)
+    mod_elements!(F; modulus_override = override_modulus)
     println("F with modulus $override_modulus applied in-place = ")
     display(F)
     println()

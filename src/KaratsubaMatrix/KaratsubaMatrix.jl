@@ -199,8 +199,8 @@ function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaAr
         B.data2.data,
         A.N1,
     )
-    # add!(A.plan,A.data1,A.data2; mod_N=2*A.N1)
-    # add!(B.plan,B.data1,B.data2; mod_N=2*B.N1)
+    # add!(A.plan,A.data1,A.data2; modulus_override=2*A.N1)
+    # add!(B.plan,B.data1,B.data2; modulus_override=2*B.N1)
 
     # use gemm
 
@@ -318,8 +318,8 @@ function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray
         B.data2.data,
         A.N1,
     )
-    # add!(A.plan,A.data1,A.data2; mod_N=2*A.N1)
-    # add!(B.plan,B.data1,B.data2; mod_N=2*B.N1)
+    # add!(A.plan,A.data1,A.data2; modulus_override=2*A.N1)
+    # add!(B.plan,B.data1,B.data2; modulus_override=2*B.N1)
 
     (zero_ptr, one_ptr) = cublas_scalars_f64()
 
@@ -443,14 +443,14 @@ function KaratsubaMatrix(T::Type, A::AbstractArray, N1::Integer, N2::Integer, M:
     K.data1 .= mod.(A - Int(K.M)*K.data2,N1)
     =#
     #=
-    LinearAlgebra.mul!(K.data2,A,1/M,N2)
+    LinearAlgebra.mul!(K.data2, A, 1 / M; modulus_override = N2)
     trunc_elements!(K.data2)
     =#
     divide_elements!(K.data2, A, N1)
-    mod_elements!(K.data2, N2)
+    mod_elements!(K.data2; modulus_override = N2)
     LinearAlgebra.mul!(K.data1, K.data2, Int(N1))
-    sub!(K.data1, A, K.data1; mod_N = N1)
-    mod_elements!(K.data1, N1)
+    sub!(K.data1, A, K.data1; modulus_override = N1)
+    mod_elements!(K.data1; modulus_override = N1)
     K
 end
 
@@ -711,13 +711,13 @@ end
 #    LinearAlgebra.mul!(K.data2,K.data2,1/A.M)
 #    trunc_elements!(K.data2)
 #    =#
-#    mod_elements!(K.data1,A.N1)
-#    mod_elements!(K.data2,A.N2)
+#    mod_elements!(K.data1; modulus_override=A.N1)
+#    mod_elements!(K.data2; modulus_override=A.N2)
 #    #=
 #    add!(K.data1,A.data1,B.data1,2*A.M)
 #    add!(K.data2,A.data2,B.data2)
 #    add!(K.data2,K.data2,divides(K.data1,K.M),K.N2)
-#    mod_elements!(K.data1,K.N1)
+#    mod_elements!(K.data1; modulus_override=K.N1)
 #    =#
 
 #    K
@@ -739,15 +739,15 @@ function sub!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     sub!(K.data2,A.data1,B.data1)
     LinearAlgebra.mul!(K.data2,K.data2,1/A.M)
     trunc_elements!(K.data2)
-    mod_elements!(K.data2,A.N2)
+    mod_elements!(K.data2; modulus_override=A.N2)
     LinearAlgebra.mul!(K.data1,K.data1,A.M,A.M^2)
     sub!(K.data1,B.data1,K.data1)
     sub!(K.data1,A.data1,K.data1)
-    mod_elements!(K.data1,A.N1)
+    mod_elements!(K.data1; modulus_override=A.N1)
     add!(K.data2,K.data2,A.data2)
     sub!(K.data2,K.data2,B.data2)
     sub!(K.data2,K.data2,A.data1.<B.data1)
-    mod_elements!(K.data2,A.N2)
+    mod_elements!(K.data2; modulus_override=A.N2)
     =#
     tw = TILE_WIDTH
 
@@ -871,11 +871,11 @@ function negate!(K::KaratsubaArray, A::KaratsubaArray)
     # LinearAlgebra.mul!(K.data1,K.data2,A.N1,A.M^2)
     # add!(K.data1,K.data1,A.data1,A.M^2)
     # negate!(K.data1,K.data1,A.N1)
-    # mod_elements!(K.data1,A.N1)
+    # mod_elements!(K.data1; modulus_override=A.N1)
     # scalar_add!(K.data2,K.data2,A.N2,A.M^2)
     # scalar_sub!(K.data2,K.data2,1,A.M^2)
     # sub!(K.data2,K.data2,A.data2,A.M)
-    # mod_elements!(K.data2,A.N2)
+    # mod_elements!(K.data2; modulus_override=A.N2)
     K
 end
 
