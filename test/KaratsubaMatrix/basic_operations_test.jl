@@ -9,8 +9,8 @@ function test_basic_operations()
     A = [1 2; 3 4]
     B = [5 6; 7 8]
     a = 9
-    AK = MatToKMat(A)
-    BK = MatToKMat(B)
+    AK = to_karatsuba(A)
+    BK = to_karatsuba(B)
     CK = KaratsubaMatrix([1 0 3; 8 11 2; 2 4 6], [10 3 2; 7 13 7; 1 0 9])
     DK = KaratsubaMatrix([9 6 5; 2 17 9; 4 4 23], [5 5 11; 6 4 3; 7 3 19])
     C = Array(CK)
@@ -30,8 +30,8 @@ function test_basic_operations()
     A = CuArray([1 2; 3 4])
     B = CuArray([5 6; 7 8])
     a = 9
-    AK = MatToKMat(A, 100)
-    BK = MatToKMat(B, 100)
+    AK = to_karatsuba(A, 100)
+    BK = to_karatsuba(B, 100)
     CK = KaratsubaMatrix([1 0 3; 8 11 2; 2 4 6], [10 3 2; 7 13 7; 1 0 9], 100)
     DK = KaratsubaMatrix([9 6 5; 2 17 9; 4 4 23], [5 5 11; 6 4 3; 7 3 19], 100)
     C = CuArray(Array(CK))
@@ -51,8 +51,8 @@ function test_basic_operations()
     A = GPUFiniteFieldMatrices.CuModMatrix([1 2; 3 4], 100)
     B = GPUFiniteFieldMatrices.CuModMatrix([5 6; 7 8], 100)
     a = 9
-    AK = MatToKMat(A, 100)
-    BK = MatToKMat(B, 100)
+    AK = to_karatsuba(A, 100)
+    BK = to_karatsuba(B, 100)
     CK = KaratsubaMatrix([1 0 3; 8 11 2; 2 4 6], [10 3 2; 7 13 7; 1 0 9], 100)
     DK = KaratsubaMatrix([9 6 5; 2 17 9; 4 4 23], [5 5 11; 6 4 3; 7 3 19], 100)
     C = GPUFiniteFieldMatrices.CuModMatrix(Array(CK), 100^2)
@@ -124,9 +124,8 @@ function test_karatsuba_operations()
             #@testset "Karatsuba Operations" begin
             #@test Array(GPUFiniteFieldMatrices.add!(CK,AK,BK)) == mod.((ACpu + BCpu),(N1*N2))
             #@test Array(GPUFiniteFieldMatrices.sub!(CK,AK,BK)) == mod.((ACpu - BCpu),(N1*N2))
-            @test Array(GPUFiniteFieldMatrices.KMatMul!(yK, AK, xK)) ==
-                  mod.((ACpu*xCpu), (N1*N2))
-            #@test Array(GPUFiniteFieldMatrices.KMatMul_gemv!(yK,AK,xK)) == mod.((ACpu*xCpu),(N1*N2))
+            @test Array(LinearAlgebra.mul!(yK, AK, xK)) == mod.((ACpu*xCpu), (N1*N2))
+            #@test Array(GPUFiniteFieldMatrices.karatsuba_gemv!(yK,AK,xK)) == mod.((ACpu*xCpu),(N1*N2))
             #@test Array(GPUFiniteFieldMatrices.scalar_multiply!(CK,AK,a)) == mod.((ACpu*a),(N1*N2))
 
             #end

@@ -5,13 +5,13 @@ function test_allocations()
     B = GPUFiniteFieldMatrices.CuModMatrix([5 6; 7 8], 100)
     C = GPUFiniteFieldMatrices.CuModMatrix([0 0; 0 0], 100)
     #D = GPUFiniteFieldMatrices.CuModMatrix([0 0; 0 0],100)
-    AK = GPUFiniteFieldMatrices.MatToKMat(A, 100)
-    BK = GPUFiniteFieldMatrices.MatToKMat(B, 100)
-    CK = GPUFiniteFieldMatrices.MatToKMat(C, 100)
+    AK = GPUFiniteFieldMatrices.to_karatsuba(A, 100)
+    BK = GPUFiniteFieldMatrices.to_karatsuba(B, 100)
+    CK = GPUFiniteFieldMatrices.to_karatsuba(C, 100)
     GPUFiniteFieldMatrices.initialize_plan!(AK)
     GPUFiniteFieldMatrices.initialize_plan!(BK)
     GPUFiniteFieldMatrices.initialize_plan!(CK)
-    #DK = MatToKMat(D, 100)
+    #DK = to_karatsuba(D, 100)
 
     @testset "Allocation tests" begin
         result = CUDA.@timed GPUFiniteFieldMatrices.add!(CK, AK, BK)
@@ -21,7 +21,7 @@ function test_allocations()
         @test result[:gpu_bytes] == 0
 
         #MatMul allocates a few views
-        result = CUDA.@timed GPUFiniteFieldMatrices.KMatMul!(CK, AK, BK)
+        result = CUDA.@timed GPUFiniteFieldMatrices.LinearAlgebra.mul!(CK, AK, BK)
         @test result[:gpu_bytes] < 30
 
     end

@@ -49,6 +49,6 @@ function test_cuda_blas_compatibility()
     GPUFiniteFieldMatrices.initialize_plan!(y)
 
     expected = mod.((A1_data + N1 .* A2_data) * (x1_data + N1 .* x2_data), modulus)
-    CUDA.@sync GPUFiniteFieldMatrices.KMatMul_gemv!(y, A, x)
+    CUDA.@sync GPUFiniteFieldMatrices.karatsuba_gemv!(y, A, x)
     @test Array(y) == expected
 end
