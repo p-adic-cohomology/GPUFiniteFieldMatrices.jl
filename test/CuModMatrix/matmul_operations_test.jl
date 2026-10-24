@@ -52,7 +52,8 @@ function test_matmul_operations()
 
     # Test multiplication with modulus override
     override_modulus = 7
-    C_mod = GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B, override_modulus)
+    C_mod =
+        GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B; modulus_override = override_modulus)
 
     println(
         "GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B) with modulus $override_modulus = ",
@@ -67,6 +68,7 @@ function test_matmul_operations()
     println(B_data)
     println(expected_C_mod)
     @test Array(C_mod) ≈ expected_C_mod
+    @test C_mod.N == override_modulus
 
     # Force the exact modular GEMM to split its inner dimension.  A single
     # Float32 dot product of this length can exceed the exactly represented
@@ -115,7 +117,7 @@ function test_inplace_matmul_operations()
     println("Testing mat_mul_gpu_type...")
     mat_mul_type_inplace!(C, A, B)
 
-    println("After GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B, C):")
+    println("After GPUFiniteFieldMatrices.mat_mul_type_inplace!(C, A, B):")
     display(C)
     println()
 
@@ -126,9 +128,9 @@ function test_inplace_matmul_operations()
 
     # Test in-place multiplication with modulus override
     override_modulus = 3
-    C2 = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, override_modulus)
+    C2 = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, modulus)
 
-    mat_mul_type_inplace!(C2, A, B, override_modulus)
+    mat_mul_type_inplace!(C2, A, B; modulus_override = override_modulus)
 
     println("In-place multiplication with modulus $override_modulus:")
     display(C2)
@@ -138,6 +140,18 @@ function test_inplace_matmul_operations()
     # see previous TODO
     expected_C2 = mod.(A_data * B_data, override_modulus)
     @test Array(C2) ≈ expected_C2
+    @test C2.N == modulus
+
+    # Without an override, the in-place direct helper reduces to the
+    # destination's stored modulus and leaves that metadata unchanged.
+    default_modulus = 5
+    C_default = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, default_modulus)
+    mat_mul_type_inplace!(C_default, A, B)
+    A_values = mod.(A_data, modulus)
+    B_values = mod.(B_data, modulus)
+    expected_default = mod.(A_values * B_values, default_modulus)
+    @test Array(C_default) ≈ expected_default
+    @test C_default.N == default_modulus
 
     println("All in-place matrix multiplication operations tests passed!")
 end

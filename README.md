@@ -110,7 +110,21 @@ extend `LinearAlgebra.mul!`; the specialized matrix-vector path is available
 through qualified access as `GPUFiniteFieldMatrices.karatsuba_gemv!`.
 
 The `*` operator and matrix-matrix keyword paths remain unsupported; these
-renames change the API spellings without changing those behaviors.
+renames change the API spellings without changing those behaviors. Three
+existing Karatsuba matrix-matrix calls still pass legacy `R`, `P`, and
+`maxopsOverride` keywords and raise `MethodError`; this path remains tracked by
+Phase 2 issue `gfm-2x1`.
+
+Per-call reduction moduli use the `modulus_override` keyword, for example
+`elementwise_multiply!(C, A, B; modulus_override = 7)` or
+`LinearAlgebra.mul!(z, A, x; modulus_override = 7)`. An omitted override uses the destination's
+stored modulus and leaves that metadata unchanged. For matrix multiplication,
+`input_bound` is the exclusive upper bound on nonnegative multiplicands, and
+`max_ops` is the maximum number of product contributions accumulated per
+output entry between reductions. For matrix-matrix `mul!`, supplying
+`input_bound` keeps the existing single-stripe execution route even when
+`max_ops` is also supplied; that route can accumulate the full inner dimension
+before reducing, even when it exceeds `max_ops`.
 
 ## License
 
