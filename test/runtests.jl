@@ -22,6 +22,7 @@ using ExplicitImports
 using GPUFiniteFieldMatrices
 
 include("api_surface_test.jl")
+include("KaratsubaMatrix/api_test.jl")
 
 # Exercise the return type check on CPU, even when CUDA is unavailable.
 @testset "DispatchDoctor — return type stability" begin
@@ -95,6 +96,8 @@ include("CuModMatrix/inverse/runtests.jl")
 end
 
 if CUDA.functional()
+    test_karatsuba_public_api_values()
+
     @testset "CuModMatrix.jl" begin
         @testset "Triangular Inverse" begin
             test_upper_triangular_inverse()
