@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Breaking: API renames
+### Breaking: API changes
 
 This change prepares the 0.4.0 API break. No compatibility aliases are kept.
 
@@ -24,7 +24,8 @@ This change prepares the 0.4.0 API break. No compatibility aliases are kept.
 | similar(A, N::Integer) | similar_with_modulus(A, N) | similar(A) remains unchanged. |
 | mulN!(C, A, B) | LinearAlgebra.mul!(C, A, B) | The byte-identical duplicate was removed. |
 | Package-local rmul!(A, s), lmul!(s, A) | LinearAlgebra.rmul!(A, s), LinearAlgebra.lmul!(s, A) | Methods now extend LinearAlgebra's generics. |
-| negate!(B, A, mod_N) | neg!(B, A, mod_N) | Signature and behavior are unchanged. |
+| negate!(B, A, mod_N) | GPUFiniteFieldMatrices.neg!(B, A, mod_N) | Renamed; the replacement is qualified-only. |
+| mod_inv, change_modulus_no_alloc! | GPUFiniteFieldMatrices.mod_inv, GPUFiniteFieldMatrices.change_modulus_no_alloc! | Previously exported; now qualified-only. |
 | add!, sub!, zero! | unchanged | These names remain available as qualified public functions. |
 
 The public declarations export the everyday array, PLUQ, inverse, batch, and
