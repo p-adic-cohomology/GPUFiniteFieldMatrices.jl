@@ -27,7 +27,7 @@ function mod!(C::CuArray, A::CuArray, m::Integer; threads::Int = DEFAULT_THREADS
 end
 
 function mod(A::CuModArray, m::Integer)
-    C = similar(A, m)
+    C = similar_with_modulus(A, m)
     mod!(C, A, m)
     return C
 end

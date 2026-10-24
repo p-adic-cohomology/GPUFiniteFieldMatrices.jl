@@ -135,20 +135,20 @@ end
 function _phase0_main_case(reg::Phase0Regime, shape::Symbol, T::DataType, p::Int, rng)
     if shape == :square
         Ahost = _phase0_square_host(reg.square_n, p, T, rng; force_invertible = true)
-        A = CuModMatrix(Ahost, p; elem_type = T)
-        F = pluq_new(A)
+        A = CuModMatrix{T}(Ahost, p)
+        F = pluq(A)
         @test length(F.p) == reg.square_n
         @test length(F.q) == reg.square_n
         @test 0 <= F.rank <= reg.square_n
         if reg.square_n <= 64
-            @test pluq_check_identity(F, A)
-            L = pluq_extract_L(F)
-            U = pluq_extract_U(F)
+            @test GPUFiniteFieldMatrices.pluq_check_identity(F, A)
+            L = F.L
+            U = F.U
             @test size(L) == (reg.square_n, reg.square_n)
             @test size(U) == (reg.square_n, reg.square_n)
         end
         if reg.run_inverse && reg.square_n <= 64
-            Ainv = inverse_new(A)
+            Ainv = inv(A)
             AAinv = mod.(round.(Int, Array(A * Ainv)), p)
             @test AAinv == _phase0_id(Int, reg.square_n)
         end
@@ -156,21 +156,18 @@ function _phase0_main_case(reg::Phase0Regime, shape::Symbol, T::DataType, p::Int
         return
     end
     Ahost = _phase0_full_row_rank_host(reg.rect_m, reg.rect_n, p, T, rng)
-    A = CuModMatrix(Ahost, p; elem_type = T)
-    F = pluq_new(A)
+    A = CuModMatrix{T}(Ahost, p)
+    F = pluq(A)
     @test length(F.p) == reg.rect_m
     @test length(F.q) == reg.rect_n
     @test 0 <= F.rank <= min(reg.rect_m, reg.rect_n)
     if reg.run_inverse
-        Xr = right_inverse_new(A)
+        Xr = right_inverse(A)
         AX = mod.(round.(Int, Array(A * Xr)), p)
         @test AX == _phase0_id(Int, reg.rect_m)
-        At = CuModMatrix(
-            _phase0_full_col_rank_host(reg.rect_n, reg.rect_m, p, T, rng),
-            p;
-            elem_type = T,
-        )
-        Xl = left_inverse_new(At)
+        At =
+            CuModMatrix{T}(_phase0_full_col_rank_host(reg.rect_n, reg.rect_m, p, T, rng), p)
+        Xl = left_inverse(At)
         XA = mod.(round.(Int, Array(Xl * At)), p)
         @test XA == _phase0_id(Int, reg.rect_m)
     end

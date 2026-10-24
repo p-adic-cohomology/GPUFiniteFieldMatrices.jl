@@ -71,8 +71,8 @@ function random_invertible_cumod(
     for _ = 1:max_tries
         Ahost = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
         Atyped = Matrix{spec.elem_type}(Ahost)
-        A = CuModMatrix(Atyped, spec.p; elem_type = spec.elem_type)
-        if GPUFiniteFieldMatrices.is_invertible_new(A)
+        A = CuModMatrix{spec.elem_type}(Atyped, spec.p)
+        if GPUFiniteFieldMatrices.is_invertible(A)
             return A
         end
     end
@@ -92,24 +92,24 @@ function random_one_sided_invertible_cumod(
     if spec.rows != spec.cols && !rectangular_requires_full_rank
         Ahost = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
         Atyped = Matrix{spec.elem_type}(Ahost)
-        return CuModMatrix(Atyped, spec.p; elem_type = spec.elem_type)
+        return CuModMatrix{spec.elem_type}(Atyped, spec.p)
     end
     for _ = 1:max_tries
         Ahost = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
         Atyped = Matrix{spec.elem_type}(Ahost)
-        A = CuModMatrix(Atyped, spec.p; elem_type = spec.elem_type)
+        A = CuModMatrix{spec.elem_type}(Atyped, spec.p)
         ok = if spec.rows == spec.cols
-            GPUFiniteFieldMatrices.is_invertible_new(A)
+            GPUFiniteFieldMatrices.is_invertible(A)
         elseif spec.rows < spec.cols
             try
-                GPUFiniteFieldMatrices.right_inverse_new(A)
+                GPUFiniteFieldMatrices.right_inverse(A)
                 true
             catch
                 false
             end
         else
             try
-                GPUFiniteFieldMatrices.left_inverse_new(A)
+                GPUFiniteFieldMatrices.left_inverse(A)
                 true
             catch
                 false
@@ -127,13 +127,13 @@ end
 """
     prime_gpu!(; p=101, elem_type=Float32, n=100)
 
-Warm up the GPU by running both current and old inverse once.
+Warm up the GPU with scalar and batched inverse calls.
 """
 function prime_gpu!(; p::Int = 101, elem_type::DataType = Float32, n::Int = 100)
     Ih = Matrix{elem_type}(I, n, n)
-    A = CuModMatrix(Ih, p; elem_type = elem_type)
-    CUDA.@sync GPUFiniteFieldMatrices.inverse_new(A)
-    CUDA.@sync GPUFiniteFieldMatrices.inverse(A)
+    A = CuModMatrix{elem_type}(Ih, p)
+    CUDA.@sync inv(A)
+    CUDA.@sync GPUFiniteFieldMatrices.inverse_batched([A])
     return nothing
 end
 
@@ -181,7 +181,7 @@ end
 """
     benchmark_inverse_suite(spec_tuples; trials=5, warmup=true, check_against_nemo=false, make_plot=true, plot_path="test/Experiments/inv_benchmark.png", verbose=true)
 
-Benchmark current GPU inverse (`inverse_new`), old GPU inverse (`inverse`), and Nemo inverse
+Benchmark GPU inverse_batched, scalar Base.inv, and Nemo inverse
 over a list of tuple specs `(rows, cols, p, dtype)`.
 """
 function benchmark_inverse_suite(
@@ -193,7 +193,7 @@ function benchmark_inverse_suite(
     plot_path::String = "test/Experiments/inv_benchmark.png",
     batch_count::Int = 4,
     benchmark_mode::Symbol = :throughput,
-    compare_old::Bool = false,
+    compare_scalar::Bool = false,
     verbose::Bool = true,
 )
     if benchmark_mode != :throughput && benchmark_mode != :latency
@@ -215,18 +215,17 @@ function benchmark_inverse_suite(
         nemo_inv =
             check_against_nemo && spec.rows == spec.cols ?
             nemo_inverse_matrix(A_cpu, spec.p) : nothing
-        new_times = Float64[]
-        old_times = Float64[]
+        batched_times = Float64[]
+        scalar_times = Float64[]
         nemo_times = Float64[]
         for _ = 1:trials
-            t_new = try
-                _time_gpu_batch(B -> GPUFiniteFieldMatrices.inverse_new_batch(B), batch)
+            t_batched = try
+                _time_gpu_batch(B -> GPUFiniteFieldMatrices.inverse_batched(B), batch)
             catch
                 NaN
             end
-            t_old = try
-                (compare_old && spec.rows == spec.cols) ?
-                _time_gpu_call(() -> GPUFiniteFieldMatrices.inverse(A)) : NaN
+            t_scalar = try
+                (compare_scalar && spec.rows == spec.cols) ? _time_gpu_call(() -> inv(A)) : NaN
             catch
                 NaN
             end
@@ -246,35 +245,34 @@ function benchmark_inverse_suite(
             catch
                 NaN
             end
-            push!(new_times, t_new)
-            push!(old_times, t_old)
+            push!(batched_times, t_batched)
+            push!(scalar_times, t_scalar)
             push!(nemo_times, t_nemo)
         end
-        Ainv_new = try
-            GPUFiniteFieldMatrices.inverse_new_batch([A])[1]
+        Ainv_batched = try
+            GPUFiniteFieldMatrices.inverse_batched([A])[1]
         catch
             nothing
         end
-        Ainv_old = try
-            (compare_old && spec.rows == spec.cols) ?
-            GPUFiniteFieldMatrices.inverse(A) : nothing
+        Ainv_scalar = try
+            (compare_scalar && spec.rows == spec.cols) ? inv(A) : nothing
         catch
             nothing
         end
-        new_ok = true
-        old_ok = compare_old && spec.rows == spec.cols
+        batched_ok = true
+        scalar_ok = compare_scalar && spec.rows == spec.cols
         if check_against_nemo
-            if spec.rows == spec.cols && Ainv_new !== nothing
-                Ainv_new_cpu = mod.(round.(Int, Array(Ainv_new)), spec.p)
-                new_ok = Ainv_new_cpu == nemo_inv
-                if compare_old && Ainv_old !== nothing
-                    Ainv_old_cpu = mod.(round.(Int, Array(Ainv_old)), spec.p)
-                    old_ok = Ainv_old_cpu == nemo_inv
+            if spec.rows == spec.cols && Ainv_batched !== nothing
+                Ainv_batched_cpu = mod.(round.(Int, Array(Ainv_batched)), spec.p)
+                batched_ok = Ainv_batched_cpu == nemo_inv
+                if compare_scalar && Ainv_scalar !== nothing
+                    Ainv_scalar_cpu = mod.(round.(Int, Array(Ainv_scalar)), spec.p)
+                    scalar_ok = Ainv_scalar_cpu == nemo_inv
                 end
             else
                 nres = nemo_is_invertible_with_inverse(A_cpu, spec.p)
-                new_ok = nres.invertible
-                old_ok = false
+                batched_ok = nres.invertible
+                scalar_ok = false
             end
         end
         row = (
@@ -282,26 +280,28 @@ function benchmark_inverse_suite(
             cols = spec.cols,
             p = spec.p,
             elem_type = spec.elem_type,
-            new_mean = mean(new_times),
-            old_mean = (compare_old && spec.rows == spec.cols) ? mean(old_times) : NaN,
+            batched_mean = mean(batched_times),
+            scalar_mean = (compare_scalar && spec.rows == spec.cols) ?
+                          mean(scalar_times) : NaN,
             nemo_mean = mean(nemo_times),
-            new_median = median(new_times),
-            old_median = (compare_old && spec.rows == spec.cols) ? median(old_times) : NaN,
+            batched_median = median(batched_times),
+            scalar_median = (compare_scalar && spec.rows == spec.cols) ?
+                            median(scalar_times) : NaN,
             nemo_median = median(nemo_times),
-            new_ok = new_ok,
-            old_ok = old_ok,
+            batched_ok = batched_ok,
+            scalar_ok = scalar_ok,
         )
         push!(results, row)
         if verbose
             @printf(
-                "mode=%s spec=(%d,%d,p=%d,%s)  new=%.6f s  old=%.6f s  nemo=%.6f s\n",
+                "mode=%s spec=(%d,%d,p=%d,%s)  batched=%.6f s  scalar=%.6f s  nemo=%.6f s\n",
                 string(benchmark_mode),
                 spec.rows,
                 spec.cols,
                 spec.p,
                 string(spec.elem_type),
-                row.new_mean,
-                row.old_mean,
+                row.batched_mean,
+                row.scalar_mean,
                 row.nemo_mean
             )
         end
@@ -310,26 +310,26 @@ function benchmark_inverse_suite(
         try
             @eval using Plots
             x = [r.rows for r in results]
-            y_new = [r.new_mean for r in results]
-            y_old = [r.old_mean for r in results]
+            y_new = [r.batched_mean for r in results]
+            y_old = [r.scalar_mean for r in results]
             y_nemo = [r.nemo_mean for r in results]
             plt = plot(
                 x,
                 y_new;
-                label = "inverse_new (GPU)",
+                label = "inverse_batched (GPU)",
                 color = :blue,
                 marker = :circle,
                 linewidth = 2,
                 xlabel = "matrix size (rows)",
                 ylabel = "time (s)",
-                title = "Inverse benchmark: new vs old vs Nemo",
+                title = "Inverse benchmark: batched vs scalar vs Nemo",
             )
-            if compare_old
+            if compare_scalar
                 plot!(
                     plt,
                     x,
                     y_old;
-                    label = "inverse old (GPU square-only)",
+                    label = "Base.inv (GPU square-only)",
                     color = :red,
                     marker = :square,
                     linewidth = 2,
@@ -386,7 +386,7 @@ function run_default_inverse_benchmark(;
         warmup = warmup,
         check_against_nemo = check_against_nemo,
         make_plot = make_plot,
-        compare_old = false,
+        compare_scalar = false,
     )
 end
 
@@ -426,7 +426,7 @@ function run_fastest_vs_nemo_benchmark(;
         make_plot = make_plot,
         batch_count = batch_count,
         benchmark_mode = benchmark_mode,
-        compare_old = false,
+        compare_scalar = false,
     )
 end
 
@@ -452,7 +452,7 @@ function run_tiny_batched_kernel_benchmark(;
                     end
                 end
             end
-            push!(mats, CuModMatrix(A, p; elem_type = elem_type))
+            push!(mats, CuModMatrix{elem_type}(A, p))
         end
         t_fast = Float64[]
         t_generic = Float64[]
@@ -473,7 +473,7 @@ function run_tiny_batched_kernel_benchmark(;
             )
             t2 = _time_gpu_batch(B -> begin
                 for A in B
-                    GPUFiniteFieldMatrices.inverse_new(A)
+                    inv(A)
                 end
             end, mats)
             push!(t_fast, t1)

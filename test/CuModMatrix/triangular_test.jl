@@ -3,7 +3,8 @@ function test_upper_triangular_inverse(DEBUG::Bool = false)
     function unit_test_upper_triangular_inverse(A::Matrix, N::Int; debug::Bool = false)
         println("Running upper triangular inverse test with size $(size(A)) and N=$N")
         A_gpu = CuModMatrix(A, N; new_size = size(A))
-        A_inv = upper_triangular_inverse_no_copy(A_gpu; debug = debug)
+        A_inv =
+            GPUFiniteFieldMatrices.upper_triangular_inverse_no_copy(A_gpu; debug = debug)
         if debug
             println("A:")
             display(A_gpu)
@@ -52,7 +53,8 @@ function test_lower_triangular_inverse(DEBUG::Bool = false)
     function unit_test_lower_triangular_inverse(A::Matrix, N::Int; debug::Bool = false)
         println("Running lower triangular inverse test with size $(size(A)) and N=$N")
         A_gpu = CuModMatrix(A, N)
-        A_inv = lower_triangular_inverse_no_copy(A_gpu; debug = debug)
+        A_inv =
+            GPUFiniteFieldMatrices.lower_triangular_inverse_no_copy(A_gpu; debug = debug)
 
         res = Array(A_gpu * A_inv)
         I_ref = Matrix{eltype(A)}(I, (size(A_gpu)[1], size(A_gpu)[1]))

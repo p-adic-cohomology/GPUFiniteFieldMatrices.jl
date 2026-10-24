@@ -125,15 +125,15 @@ function _resolve_options(options::PLUQOptions, A::CuModMatrix)
 end
 
 """
-    pluq_new!(A; options=PLUQOptions())
+    pluq!(A; options=PLUQOptions())
 
 Compute a blocked PLUQ factorization in place on GPU-resident data and return
-`PLUQFactorization` with packed LU and permutation vectors.
+`PLUQ` with packed LU and permutation vectors.
 
 `A.N` must be prime. Pass `check_prime=true` in `PLUQOptions` to validate this
 precondition on the host before launching GPU kernels.
 """
-function pluq_new!(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
+function pluq!(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     opts = _resolve_options(options, A)
     m = rows(A)
     n = cols(A)
@@ -156,35 +156,35 @@ function pluq_new!(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
             pluq_rectangular_rank_reference_gpu!(A.data, A.N, m, n, options = opts)
         end
     end
-    return PLUQFactorization(A, p, q, rank)
+    return PLUQ(A, p, q, rank)
 end
 
 """
-    pluq_new(A; options=PLUQOptions())
+    pluq(A; options=PLUQOptions())
 
 Compute a blocked PLUQ factorization on a copy of `A`.
 
 `A.N` must be prime. Pass `check_prime=true` in `PLUQOptions` to validate this
 precondition on the host before launching GPU kernels.
 """
-function pluq_new(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
+function pluq(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     Adata = copy(A.data)
     Awork = CuModMatrix(Adata, A.N; new_size = size(A))
-    return pluq_new!(Awork, options = options)
+    return pluq!(Awork, options = options)
 end
 
 """
-    is_invertible_new(A; options=PLUQOptions())
+    is_invertible(A; options=PLUQOptions())
 
 Return `true` iff `A` has full rank under the new GPU PLUQ path.
 
 `A.N` must be prime. Pass `check_prime=true` in `PLUQOptions` to validate this
 precondition on the host before launching GPU kernels.
 """
-function is_invertible_new(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
+function is_invertible(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     m = rows(A)
     n = cols(A)
-    F = pluq_new(A, options = options)
+    F = pluq(A, options = options)
     return m == n && F.rank == m
 end
 
@@ -192,7 +192,7 @@ end
     pluq_init_aug_kernel!(aug, Adata, n)
 
 Initialize augmented matrix `[A | I]` in `aug` for Gauss-Jordan inversion.
-Internal kernel used by `inverse_new`.
+Internal kernel used by `inv`.
 """
 function pluq_init_aug_kernel!(aug, Adata, n::Int32)
     i = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
@@ -211,7 +211,7 @@ end
     pluq_aug_find_pivot_kernel!(aug, pivot_slot, k, n, N)
 
 Find first nonzero pivot row in column `k` of augmented matrix.
-Internal kernel used by `inverse_new`.
+Internal kernel used by `inv`.
 """
 function pluq_aug_find_pivot_kernel!(aug, pivot_slot, k::Int32, n::Int32, N::Int32)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x
@@ -295,7 +295,7 @@ end
     pluq_aug_scale_row_kernel!(aug, row, jstart, n2, invpivot, N)
 
 Scale one augmented row by the modular inverse of the pivot.
-Internal kernel used by `inverse_new`.
+Internal kernel used by `inv`.
 """
 function pluq_aug_scale_row_from_diag_kernel!(
     aug,
@@ -323,7 +323,7 @@ end
     pluq_aug_elim_kernel!(aug, k, n, n2, N)
 
 Eliminate column `k` from all rows except the pivot row in augmented matrix.
-Internal kernel used by `inverse_new`.
+Internal kernel used by `inv`.
 """
 function pluq_aug_elim_kernel!(aug, k::Int32, n::Int32, n2::Int32, N::Int32)
     i = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
@@ -341,7 +341,7 @@ end
     pluq_copy_block_kernel!(dest, src, n)
 
 Copy the top-left `n x n` block from `src` to `dest`.
-Internal utility used by `inverse_new`.
+Internal utility used by `inv`.
 """
 function pluq_copy_block_kernel!(dest, src, n::Int32)
     i = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
@@ -353,7 +353,7 @@ function pluq_copy_block_kernel!(dest, src, n::Int32)
 end
 
 """
-    inverse_new(A; options=PLUQOptions())
+    inv(A; options=PLUQOptions())
 
 Compute the inverse over `mod N`.
 
@@ -364,13 +364,13 @@ reference path on `[A I]`.
 `A.N` must be prime. Pass `check_prime=true` in `PLUQOptions` to validate this
 precondition on the host before launching GPU kernels.
 """
-function inverse_new(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
+function Base.inv(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     if rows(A) != cols(A)
         throw(CuModMatrixNotSquareException("matrix must be square"))
     end
     opts = _resolve_options(options, A)
     if opts.inverse_strategy == :pluq
-        return inverse_pluq_new(A, options = opts)
+        return inverse_pluq(A, options = opts)
     end
     n = rows(A)
     N = A.N
@@ -455,7 +455,7 @@ function inverse_new(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
 end
 
 """
-    inverse_pluq_new(A; options=PLUQOptions())
+    inverse_pluq(A; options=PLUQOptions())
 
 Compute the inverse over `mod N` through the PLUQ factorization pipeline:
 factor `A`, extract `L` and `U`, invert the triangular factors, multiply them,
@@ -464,19 +464,19 @@ and apply row/column permutations.
 `A.N` must be prime. Pass `check_prime=true` in `PLUQOptions` to validate this
 precondition on the host before launching GPU kernels.
 """
-function inverse_pluq_new(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
+function inverse_pluq(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     if rows(A) != cols(A)
         throw(CuModMatrixNotSquareException("matrix must be square"))
     end
     opts = _resolve_options(options, A)
     _validate_inverse_matmul_modulus(A)
     n = rows(A)
-    F = pluq_new(A, options = opts)
+    F = pluq(A, options = opts)
     if F.rank != n
         throw(InverseNotDefinedException("matrix is singular modulo $(A.N)"))
     end
-    L = pluq_extract_L(F)
-    U = pluq_extract_U(F)
+    L = F.L
+    U = F.U
     Linv = lower_triangular_inverse_no_copy(L)
     Uinv = upper_triangular_inverse_no_copy(U)
     M = zeros(eltype(A.data), n, n, A.N)
@@ -631,7 +631,7 @@ function _right_inverse_leading_block(A::CuModMatrix, opts::PLUQOptions)
         Int32(m),
     )
     Binv = try
-        inverse_pluq_new(B, options = PLUQOptions(opts; inverse_strategy = :pluq))
+        inverse_pluq(B, options = PLUQOptions(opts; inverse_strategy = :pluq))
     catch err
         if err isa InverseNotDefinedException
             return nothing
@@ -652,7 +652,7 @@ end
 function _right_inverse_selected_columns(A::CuModMatrix, opts::PLUQOptions)
     m = rows(A)
     n = cols(A)
-    F = pluq_new(A, options = opts)
+    F = pluq(A, options = opts)
     F.rank == m || return nothing
     qdev = CuArray(Int32.(F.q[1:m]))
     T = eltype(A.data)
@@ -666,7 +666,7 @@ function _right_inverse_selected_columns(A::CuModMatrix, opts::PLUQOptions)
         Int32(m),
     )
     Binv = try
-        inverse_pluq_new(B, options = PLUQOptions(opts; inverse_strategy = :pluq))
+        inverse_pluq(B, options = PLUQOptions(opts; inverse_strategy = :pluq))
     catch err
         err isa InverseNotDefinedException || rethrow()
         return nothing
@@ -682,7 +682,7 @@ function _right_inverse_selected_columns(A::CuModMatrix, opts::PLUQOptions)
 end
 
 """
-    right_inverse_new(A; options=PLUQOptions())
+    right_inverse(A; options=PLUQOptions())
 
 Compute a right inverse `X` such that `A*X = I` for full row-rank rectangular
 `A` with `rows(A) <= cols(A)` over `GF(N)`.
@@ -700,11 +700,11 @@ precondition on the host before launching GPU kernels.
 Example:
 ```julia
 A = CuModMatrix([1 2 3; 0 1 4], 101)
-X = right_inverse_new(A)
+X = right_inverse(A)
 Array(A * X)
 ```
 """
-function right_inverse_new(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
+function right_inverse(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     opts = _resolve_options(options, A)
     m = rows(A)
     n = cols(A)
@@ -865,11 +865,11 @@ function right_inverse_new(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
 end
 
 """
-    left_inverse_new(A; options=PLUQOptions())
+    left_inverse(A; options=PLUQOptions())
 
 Compute a left inverse `X` such that `X*A = I` for full column-rank
 rectangular `A` with `rows(A) >= cols(A)` over `GF(N)`.
-`inverse_strategy` only controls square `inverse_new`; this rectangular path is
+`inverse_strategy` only controls square `inv`; this rectangular path is
 always augmented rank-revealing elimination via transposition.
 
 `A.N` must be prime. Pass `check_prime=true` in `PLUQOptions` to validate this
@@ -878,11 +878,11 @@ precondition on the host before launching GPU kernels.
 Example:
 ```julia
 A = CuModMatrix([1 2; 0 1; 3 4], 101)
-X = left_inverse_new(A)
+X = left_inverse(A)
 Array(X * A)
 ```
 """
-function left_inverse_new(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
+function left_inverse(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     m = rows(A)
     n = cols(A)
     if m < n
@@ -890,20 +890,20 @@ function left_inverse_new(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     end
     ATdata = permutedims(A.data, (2, 1))
     AT = CuModMatrix(ATdata, A.N; new_size = (n, m))
-    R = right_inverse_new(AT, options = options)
+    R = right_inverse(AT, options = options)
     Ldata = permutedims(R.data, (2, 1))
     return CuModMatrix(Ldata, A.N; new_size = (n, m))
 end
 
 """
-    pluq_new_batch(mats; options=PLUQOptions())
+    pluq_batched(mats; options=PLUQOptions())
 
-Run `pluq_new` across a batch of matrices and return factorization objects.
+Run `pluq` across a batch of matrices and return factorization objects.
 
 Each modulus must be prime. Pass `check_prime=true` in `PLUQOptions` to validate
 the precondition for the first matrix before launching GPU kernels.
 """
-function pluq_new_batch(
+function pluq_batched(
     mats::AbstractVector{<:CuModMatrix};
     options::PLUQOptions = PLUQOptions(),
 )
@@ -923,13 +923,13 @@ function pluq_new_batch(
     end
     isempty(mats) && return Any[]
     opts = _resolve_options(options, mats[1])
-    firstF = pluq_new(mats[1], options = opts)
+    firstF = pluq(mats[1], options = opts)
     out = Vector{typeof(firstF)}(undef, length(mats))
     out[1] = firstF
     nstreams = min(opts.batch_streams, length(mats))
     if nstreams == 1
         for i = 2:length(mats)
-            out[i] = pluq_new(mats[i], options = opts)
+            out[i] = pluq(mats[i], options = opts)
         end
         return out
     end
@@ -937,7 +937,7 @@ function pluq_new_batch(
     for i = 2:length(mats)
         s = streams[(i-1)%nstreams+1]
         CUDA.stream!(s) do
-            out[i] = pluq_new(mats[i], options = opts)
+            out[i] = pluq(mats[i], options = opts)
         end
     end
     for s in streams
@@ -947,7 +947,7 @@ function pluq_new_batch(
 end
 
 """
-    inverse_new_batch(mats; options=PLUQOptions())
+    inverse_batched(mats; options=PLUQOptions())
 
 Run the fastest inverse path across a batch. For rectangular matrices this
 dispatches to one-sided inverses.
@@ -955,7 +955,7 @@ dispatches to one-sided inverses.
 Each modulus must be prime. Pass `check_prime=true` in `PLUQOptions` to validate
 the precondition for the first matrix before launching GPU kernels.
 """
-function inverse_new_batch(
+function inverse_batched(
     mats::AbstractVector{<:CuModMatrix};
     options::PLUQOptions = PLUQOptions(),
 )
@@ -981,11 +981,11 @@ function inverse_new_batch(
         for i in eachindex(mats)
             A = mats[i]
             if rows(A) == cols(A)
-                out[i] = inverse_new(A, options = opts)
+                out[i] = inv(A, options = opts)
             elseif rows(A) < cols(A)
-                out[i] = right_inverse_new(A, options = opts)
+                out[i] = right_inverse(A, options = opts)
             else
-                out[i] = left_inverse_new(A, options = opts)
+                out[i] = left_inverse(A, options = opts)
             end
         end
         return out
@@ -996,11 +996,11 @@ function inverse_new_batch(
         s = streams[(i-1)%nstreams+1]
         CUDA.stream!(s) do
             if rows(A) == cols(A)
-                out[i] = inverse_new(A, options = opts)
+                out[i] = inv(A, options = opts)
             elseif rows(A) < cols(A)
-                out[i] = right_inverse_new(A, options = opts)
+                out[i] = right_inverse(A, options = opts)
             else
-                out[i] = left_inverse_new(A, options = opts)
+                out[i] = left_inverse(A, options = opts)
             end
         end
     end

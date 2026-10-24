@@ -27,8 +27,8 @@ function test_batched_tiny_kernels()
         origs = CuModMatrix[]
         for _ = 1:4
             H = _tiny_invertible_host(n, p, Float32, rng)
-            push!(mats, CuModMatrix(H, p; elem_type = Float32))
-            push!(origs, CuModMatrix(copy(H), p; elem_type = Float32))
+            push!(mats, CuModMatrix{Float32}(H, p))
+            push!(origs, CuModMatrix{Float32}(copy(H), p))
         end
         Fs = if n == 4
             GPUFiniteFieldMatrices.pluq_batched_4x4!(mats)
@@ -47,14 +47,7 @@ function test_batched_tiny_kernels()
 
         mats2 = CuModMatrix[]
         for _ = 1:4
-            push!(
-                mats2,
-                CuModMatrix(
-                    _tiny_invertible_host(n, p, Float32, rng),
-                    p;
-                    elem_type = Float32,
-                ),
-            )
+            push!(mats2, CuModMatrix{Float32}(_tiny_invertible_host(n, p, Float32, rng), p))
         end
         invs = if n == 4
             GPUFiniteFieldMatrices.inverse_batched_4x4!(mats2)
@@ -72,7 +65,7 @@ function test_batched_tiny_kernels()
 
         S = Matrix{Float32}(I, n, n)
         S[2, :] .= S[1, :]
-        singular = [CuModMatrix(S, p; elem_type = Float32)]
+        singular = [CuModMatrix{Float32}(S, p)]
         if n == 4
             @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException GPUFiniteFieldMatrices.inverse_batched_4x4!(
                 singular,

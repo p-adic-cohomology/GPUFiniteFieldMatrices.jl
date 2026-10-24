@@ -30,9 +30,9 @@ function test_timings()
     result = @btimed CUDA.@sync mul!($z, $A, $x)
     @test result[:time] < 0.01 # on a 3070, I can get less than 0.001
 
-    A = CuModMatrix(A_data, 11, elem_type = Float64)
-    B = CuModMatrix(B_data, 11, elem_type = Float64)
-    x = CuModVector(x_data, 11, elem_type = Float64)
+    A = CuModMatrix{Float64}(A_data, 11)
+    B = CuModMatrix{Float64}(B_data, 11)
+    x = CuModVector{Float64}(x_data, 11)
 
     C = GPUFiniteFieldMatrices.zeros(Float64, n, n, 11)
     z = GPUFiniteFieldMatrices.zeros(Float64, n, 11)

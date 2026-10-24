@@ -85,6 +85,23 @@ B = CuModMatrix([2 1; 0 3], 5)
 A * B
 ```
 
+#### LinearAlgebra inversion and PLUQ
+
+The unparameterized CPU-array constructor keeps its Float32 default. Use a type
+parameter to choose another storage type. Inversion follows LinearAlgebra.inv,
+and PLUQ factors are available through F.L and F.U:
+
+    using GPUFiniteFieldMatrices
+    using LinearAlgebra
+
+    A = CuModMatrix{Float32}([1 2; 3 4], 101)
+    Ainv = inv(A)
+    F = pluq(A)
+    L, U = F.L, F.U
+
+Advanced helpers such as similar_with_modulus remain available by qualified
+access, for example GPUFiniteFieldMatrices.similar_with_modulus(A, 103).
+
 #### Karatsuba matrices
 
 ```julia
