@@ -87,9 +87,10 @@ end
 Matrix-vector multiplication based on stripes. `input_bound` is the exclusive
 bound on nonnegative input values and controls the default `max_ops`. `max_ops`
 is the number of product contributions accumulated per output entry between
-modular reductions. `modulus_override` changes the per-call reduction modulus;
-when omitted, `z.N` is used and its stored modulus is unchanged. The low-level
-`respect_max_ops=false` option recomputes the budget even when `max_ops` is given.
+modular reductions. A supplied `modulus_override` must be positive and sets the
+per-call reduction modulus; when omitted, `z.N` is used and its stored modulus
+is unchanged. The low-level `respect_max_ops=false` option recomputes the budget
+even when `max_ops` is given.
 """
 #TODO: replayce CuVector{Float64} with padded custom type.
 #the ".data" stuff won't work until then

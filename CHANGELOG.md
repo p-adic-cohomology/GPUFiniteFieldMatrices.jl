@@ -25,7 +25,7 @@ This change prepares the 0.4.0 API break. No compatibility aliases are kept.
 | mulN!(C, A, B) | LinearAlgebra.mul!(C, A, B) | The byte-identical duplicate was removed. |
 | Package-local rmul!(A, s), lmul!(s, A) | LinearAlgebra.rmul!(A, s), LinearAlgebra.lmul!(s, A) | Methods now extend LinearAlgebra's generics. |
 | negate!(B, A, mod_N) | neg!(B, A; modulus_override=...) | Negation uses the per-call reduction modulus without changing stored metadata. |
-| mod_N argument or keyword on elementwise/scalar operations and direct matrix helpers | `; modulus_override=...` | One keyword spelling for a per-call reduction modulus; omission uses the destination's stored modulus. |
+| mod_N argument or keyword on elementwise/scalar operations and direct matrix helpers | `; modulus_override=...` | One keyword spelling for a per-call reduction modulus; positive values override the stored modulus, while zero or negative values use it. Matrix-vector `mul!` requires a positive override when supplied. |
 | matrix-vector `mul!`/`stripe_mul!`: `R`, `P`, `M` | `input_bound`, `modulus_override`, `max_ops` | `input_bound` is exclusive; `max_ops` counts product contributions accumulated per output entry between reductions. |
 | matrix-matrix `mul!`/`stripe_mul!`: `M`, `N` | `max_ops`, `input_bound` | Supplying `input_bound` preserves the existing single-stripe route; it does not override the reduction modulus and may accumulate more contributions than `max_ops` before reduction. |
 | low-level `stripe_mul!` `maxopsOverride` | `respect_max_ops` | `true` honors a supplied `max_ops`; `false` recomputes it from `input_bound`. High-level matrix-vector `mul!` drops its ineffective `maxopsOverride` keyword. |

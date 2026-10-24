@@ -41,8 +41,9 @@ end
 """
     mat_mul_gpu_type(A::CuModMatrix, B::CuModMatrix; modulus_override = nothing)
 
-Matrix multiplication that works directly with `CuModMatrix` objects. An
-omitted `modulus_override` uses `A.N` for reduction.
+Matrix multiplication that works directly with `CuModMatrix` objects. A
+positive `modulus_override` sets the reduction modulus; omitted, zero, or
+negative values use `A.N`.
 """
 function mat_mul_gpu_type(
     A::CuModMatrix,
@@ -68,7 +69,8 @@ end
     mat_mul_type_inplace!(C::CuModMatrix, A::CuModMatrix, B::CuModMatrix; modulus_override = nothing)
 
 In-place matrix multiplication that works directly with `CuModMatrix` objects.
-An omitted `modulus_override` uses `C.N`; reductions leave `C.N` unchanged.
+A positive `modulus_override` sets the reduction modulus; omitted, zero, or
+negative values use `C.N`. Reductions leave `C.N` unchanged.
 """
 function mat_mul_type_inplace!(
     C::CuModMatrix,

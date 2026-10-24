@@ -38,6 +38,28 @@ function test_cuda_blas_compatibility()
         )
         @test Array(z) == T.(vector_expected)
 
+        z_recomputed = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N)
+        CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
+            z_recomputed,
+            vector_A,
+            x;
+            max_ops = 1,
+            input_bound = N,
+            respect_max_ops = false,
+        )
+        @test Array(z_recomputed) == T.(vector_expected)
+
+        if T === Float32
+            @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
+                z_recomputed,
+                vector_A,
+                x;
+                max_ops = 1,
+                input_bound = 100_000,
+                respect_max_ops = false,
+            )
+        end
+
         z_override = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N)
         override_modulus = 31
         CUDA.@sync LinearAlgebra.mul!(
@@ -79,4 +101,5 @@ function test_cuda_blas_compatibility()
     expected = mod.((A1_data + N1 .* A2_data) * (x1_data + N1 .* x2_data), modulus)
     CUDA.@sync GPUFiniteFieldMatrices.karatsuba_gemv!(y, A, x)
     @test Array(y) == expected
+
 end

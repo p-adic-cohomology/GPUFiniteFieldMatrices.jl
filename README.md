@@ -117,9 +117,14 @@ Phase 2 issue `gfm-2x1`.
 
 Per-call reduction moduli use the `modulus_override` keyword, for example
 `elementwise_multiply!(C, A, B; modulus_override = 7)` or
-`LinearAlgebra.mul!(z, A, x; modulus_override = 7)`. An omitted override uses the destination's
-stored modulus and leaves that metadata unchanged. For matrix multiplication,
-`input_bound` is the exclusive upper bound on nonnegative multiplicands, and
+`LinearAlgebra.mul!(z, A, x; modulus_override = 7)`. For elementwise/scalar
+operations and direct matrix helpers, a positive override sets the reduction
+modulus; zero or a negative value falls back to the stored modulus. The
+non-mutating `mat_mul_gpu_type` helper defaults to `A.N`, while the in-place
+`mat_mul_type_inplace!` helper defaults to `C.N`. Matrix-vector `mul!` requires a
+positive override when supplied. In-place operations leave the destination's
+stored modulus unchanged. For matrix multiplication, `input_bound` is the
+exclusive upper bound on nonnegative multiplicands, and
 `max_ops` is the maximum number of product contributions accumulated per
 output entry between reductions. For matrix-matrix `mul!`, supplying
 `input_bound` keeps the existing single-stripe execution route even when
