@@ -11,7 +11,9 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Unroll = "36e64239-2ab9-4580-84fb-56737a503d36"
 
 [compat]
+CUDA = "5, 6"
 DispatchDoctor = "0.4.28"
+IterTools = "1"
 SparseArrays = "1.12.0"
 Unroll = "0.1.0"
 julia = "1.12"
