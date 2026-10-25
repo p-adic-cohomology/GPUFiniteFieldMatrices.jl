@@ -26,8 +26,7 @@ function test_timings()
     C = GPUFiniteFieldMatrices.KaratsubaZeros(Float32, n, n, 11, 11, 11^2, true)
     z = GPUFiniteFieldMatrices.KaratsubaZeros(Float32, n, 11, 11, 11^2, true)
 
-    plan1 = GPUFiniteFieldMatrices.KaratsubaZeros(Float32, n, n, 11, 11, 11^2, true)
-    plan2 = GPUFiniteFieldMatrices.KaratsubaZeros(Float32, n, 11, 11, 11^2, true)
+    foreach(GPUFiniteFieldMatrices.initialize_plan!, (A, B, C, x, z))
 
     result = @btimed CUDA.@sync GPUFiniteFieldMatrices.add!($C, $A, $B)
     @test result[:time] < 0.015
@@ -35,23 +34,8 @@ function test_timings()
     result = @btimed CUDA.@sync GPUFiniteFieldMatrices.scalar_multiply!($C, $A, 2)
     @test result[:time] < 0.01
 
-    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.LinearAlgebra.mul!(
-        $C,
-        $A,
-        $B,
-        $plan1,
-        $plan1,
-    )
-    @test result[:time] < 1
-
-    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.LinearAlgebra.mul!(
-        $z,
-        $A,
-        $x,
-        $plan2,
-        $plan1,
-    )
-    @test result[:time] < 0.01
+    @test_throws ErrorException GPUFiniteFieldMatrices.LinearAlgebra.mul!(C, A, B)
+    @test_throws ErrorException GPUFiniteFieldMatrices.karatsuba_gemv!(z, A, x)
 
     A1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A_data1, 11^2)
     B1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(B_data1, 11^2)
@@ -68,8 +52,7 @@ function test_timings()
     C = GPUFiniteFieldMatrices.KaratsubaZeros(Float64, n, n, 11, 11, 11^2, true)
     z = GPUFiniteFieldMatrices.KaratsubaZeros(Float64, n, 11, 11, 11^2, true)
 
-    plan1 = GPUFiniteFieldMatrices.KaratsubaZeros(Float64, n, n, 11, 11, 11^2, true)
-    plan2 = GPUFiniteFieldMatrices.KaratsubaZeros(Float64, n, 11, 11, 11^2, true)
+    foreach(GPUFiniteFieldMatrices.initialize_plan!, (A, B, C, x, z))
 
     result = @btimed CUDA.@sync GPUFiniteFieldMatrices.add!($C, $A, $B)
     @test result[:time] < 0.04
@@ -77,22 +60,10 @@ function test_timings()
     result = @btimed CUDA.@sync GPUFiniteFieldMatrices.scalar_multiply!($C, $A, 2)
     @test result[:time] < 0.025
 
-    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.LinearAlgebra.mul!(
-        $C,
-        $A,
-        $B,
-        $plan1,
-        $plan1,
-    )
+    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.LinearAlgebra.mul!($C, $A, $B)
     @test result[:time] < 4
 
-    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.LinearAlgebra.mul!(
-        $z,
-        $A,
-        $x,
-        $plan2,
-        $plan1,
-    )
+    result = @btimed CUDA.@sync GPUFiniteFieldMatrices.karatsuba_gemv!($z, $A, $x)
     @test result[:time] < 0.01
 
     CUDA.@sync println("Done testing timing.")

@@ -124,8 +124,8 @@ function test_karatsuba_operations()
             #@testset "Karatsuba Operations" begin
             #@test Array(GPUFiniteFieldMatrices.add!(CK,AK,BK)) == mod.((ACpu + BCpu),(N1*N2))
             #@test Array(GPUFiniteFieldMatrices.sub!(CK,AK,BK)) == mod.((ACpu - BCpu),(N1*N2))
-            @test Array(LinearAlgebra.mul!(yK, AK, xK)) == mod.((ACpu*xCpu), (N1*N2))
-            #@test Array(GPUFiniteFieldMatrices.karatsuba_gemv!(yK,AK,xK)) == mod.((ACpu*xCpu),(N1*N2))
+            @test Array(GPUFiniteFieldMatrices.karatsuba_gemv!(yK, AK, xK)) ==
+                  mod.((ACpu*xCpu), (N1*N2))
             #@test Array(GPUFiniteFieldMatrices.scalar_multiply!(CK,AK,a)) == mod.((ACpu*a),(N1*N2))
 
             #end

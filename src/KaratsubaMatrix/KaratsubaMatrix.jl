@@ -154,6 +154,15 @@ function find_max_ops_karatsuba(type, N)
 
 end
 
+"""
+    LinearAlgebra.mul!(C, A, B)
+
+Multiply the Karatsuba matrices `A` and `B`, storing the product in `C`. The
+three matrices must share the same representation modulus `M`; `A`'s column
+count must match `B`'s row count, and `C` must be sized for that product. Call
+`initialize_plan!` on all three matrices before multiplying. This matrix path
+currently supports `Float64` storage only.
+"""
 function LinearAlgebra.mul!(
     C::KaratsubaArray{TC,2},
     A::KaratsubaArray{TA,2},
