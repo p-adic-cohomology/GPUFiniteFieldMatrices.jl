@@ -106,6 +106,7 @@
     @test which(Base.similar, Tuple{matrix_type,Int}).module !== mod
     @test which(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type}).module ===
           mod
+    # The package's mul! overload is matrix-only; vectors use karatsuba_gemv!.
     @test which(LinearAlgebra.mul!, Tuple{karatsuba_type,karatsuba_type,karatsuba_type}).module ===
           mod
     @test which(Base.copy, Tuple{karatsuba_type}).module === mod

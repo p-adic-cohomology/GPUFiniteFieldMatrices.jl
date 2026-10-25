@@ -17,6 +17,14 @@ function test_karatsuba_public_api_values()
         @test Array(mod.from_karatsuba(Float64, typed_explicit)) == a_values
         @test Array(mod.from_karatsuba(Float64, typed_automatic)) == a_values
 
+        different_source_values = Float32[20 30; 40 50]
+        different_source = mod.CuModMatrix{Float32}(different_source_values, modulus)
+        typed_different_source = mod.to_karatsuba(Float64, different_source, modulus)
+        @test eltype(typed_different_source.data1) == Float32
+        typed_different_roundtrip = mod.from_karatsuba(Float64, typed_different_source)
+        @test eltype(typed_different_roundtrip) == Float32
+        @test Array(typed_different_roundtrip) == different_source_values
+
         ak = mod.to_karatsuba(a, modulus)
         bk = mod.to_karatsuba(b, modulus)
         ck = mod.to_karatsuba(
@@ -25,7 +33,11 @@ function test_karatsuba_public_api_values()
         )
         foreach(mod.initialize_plan!, (ak, bk, ck))
 
-        LinearAlgebra.mul!(ck, ak, bk)
+        ak_copy = copy(ak)
+        @test ak_copy.plan !== nothing
+        @test ak_copy.plan !== ak.plan
+
+        LinearAlgebra.mul!(ck, ak_copy, bk)
         @test Array(ck) == Base.mod.(a_values * b_values, modulus^2)
     end
 end

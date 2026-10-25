@@ -154,7 +154,11 @@ function find_max_ops_karatsuba(type, N)
 
 end
 
-function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
+function LinearAlgebra.mul!(
+    C::KaratsubaArray{TC,2},
+    A::KaratsubaArray{TA,2},
+    B::KaratsubaArray{TB,2},
+) where {TC,TA,TB}
     if (A.M != B.M) || (A.M != C.M)
         error("Matrices must have the same modulus m")
     end
