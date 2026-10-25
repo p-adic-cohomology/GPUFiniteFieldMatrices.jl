@@ -3,7 +3,7 @@ function test_karatsuba_public_api_values()
         mod = GPUFiniteFieldMatrices
         modulus = 100
         a_values = Float64[20 30; 40 50]
-        b_values = Float64[20 30; 40 50]
+        b_values = Float64[2 1; 0 3]
         a = mod.CuModMatrix{Float64}(a_values, modulus)
         b = mod.CuModMatrix{Float64}(b_values, modulus)
 
