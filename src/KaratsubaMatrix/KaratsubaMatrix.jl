@@ -158,10 +158,12 @@ end
     LinearAlgebra.mul!(C, A, B)
 
 Multiply the Karatsuba matrices `A` and `B`, storing the product in `C`. The
-three matrices must share the same representation modulus `M`; `A`'s column
-count must match `B`'s row count, and `C` must be sized for that product. Call
-`initialize_plan!` on all three matrices before multiplying. This matrix path
-currently supports `Float64` storage only.
+three matrices must share the same representation modulus `M`, and `A`'s column
+count must match `B`'s row count. The caller must ensure that `C` has dimensions
+`(size(A, 1), size(B, 2))`; this method does not explicitly validate the
+destination dimensions before CUDA work begins. Call `initialize_plan!` on all
+three matrices before multiplying. This matrix path currently supports
+`Float64` storage only.
 """
 function LinearAlgebra.mul!(
     C::KaratsubaArray{TC,2},

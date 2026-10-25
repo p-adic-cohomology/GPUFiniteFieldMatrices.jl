@@ -131,30 +131,43 @@
     @test Kcopy.data2 == K.data2
     @test Kcopy.data1 !== K.data1
 
-    # The mul! contract guards run before CUDA work and can be checked on CPU.
+    # The explicit mul! checks run before CUDA work and can be checked on CPU.
+    assert_guard_error_message = function (operation, expected_message)
+        err = try
+            operation()
+            nothing
+        catch caught
+            caught
+        end
+        @test err isa ErrorException
+        if err isa ErrorException
+            @test sprint(showerror, err) == expected_message
+        end
+    end
     mul_left =
         mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
     mul_right_wrong_modulus =
         mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 16)
     mul_dest =
         mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
-    @test_throws ErrorException LinearAlgebra.mul!(
-        mul_dest,
-        mul_left,
-        mul_right_wrong_modulus,
+    assert_guard_error_message(
+        () -> LinearAlgebra.mul!(mul_dest, mul_left, mul_right_wrong_modulus),
+        "Matrices must have the same modulus m",
     )
 
     mul_left_wrong_shape =
         mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 3), zeros(Float64, 2, 3), 3, 5, 15)
     mul_right_wrong_shape =
         mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
-    @test_throws ErrorException LinearAlgebra.mul!(
-        mul_dest,
-        mul_left_wrong_shape,
-        mul_right_wrong_shape,
+    assert_guard_error_message(
+        () -> LinearAlgebra.mul!(mul_dest, mul_left_wrong_shape, mul_right_wrong_shape),
+        "Matrix dimensions don't work for multiplication",
     )
 
     mul_unplanned_right =
         mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
-    @test_throws ErrorException LinearAlgebra.mul!(mul_dest, mul_left, mul_unplanned_right)
+    assert_guard_error_message(
+        () -> LinearAlgebra.mul!(mul_dest, mul_left, mul_unplanned_right),
+        "Must initialize plans first",
+    )
 end

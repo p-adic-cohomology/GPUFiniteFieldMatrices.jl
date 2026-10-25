@@ -123,6 +123,12 @@ mul!(C, AK, BK)
 from_karatsuba(Float64, C)
 ```
 
+For `LinearAlgebra.mul!`, all three matrices must use the same representation
+modulus, the inner dimensions of `A` and `B` must match, and all three matrices
+must have initialized plans. The caller must size `C` to `(size(A, 1), size(B, 2))`:
+this method does not explicitly check the destination dimensions before CUDA
+work begins. This multiplication path currently supports `Float64` storage only.
+
 The example uses the CUDA-backed `CuModMatrix` path. The `AbstractArray`
 `to_karatsuba` overloads do not currently provide a working CPU-only conversion:
 with a plain `Matrix{Float64}` under Julia 1.12.7, each of
@@ -133,8 +139,8 @@ from a manually split host `KaratsubaArray`, but the strict `Pkg.test()` gate
 rejects that call with `DispatchDoctor.TypeInstabilityError` because its return
 type is inferred as `Any`. The CPU suite therefore has no positive value-level
 conversion assertion, and a complete CPU round trip remains unverified. This
-return-instability finding remains open as `gfm-9dqt`; the separate CPU
-`initialize_plan!` return-union issue remains open as `gfm-0wjq`.
+return-inference limitation remains open, as does the separate CPU
+`initialize_plan!` return-union limitation.
 
 The specialized matrix-vector path is available through qualified access as
 `GPUFiniteFieldMatrices.karatsuba_gemv!`.
