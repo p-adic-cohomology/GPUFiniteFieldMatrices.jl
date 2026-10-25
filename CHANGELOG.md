@@ -29,7 +29,7 @@ This change prepares the 0.4.0 API break. No compatibility aliases are kept.
 | add!, sub!, zero! | unchanged | These names remain available as qualified public functions. |
 | KMatMul!(C, A, B) | LinearAlgebra.mul!(C, A, B) | Extends LinearAlgebra's multiplication method. |
 | KMatMul_gemv!(C, A, x) | karatsuba_gemv!(C, A, x) | Name only; behavior is unchanged. |
-| Karatsubacopy(A) | Base.copy(A) | Copy semantics are unchanged. |
+| Karatsubacopy(A) | Base.copy(A) | Renamed; the separate metadata repair below preserves the source modulus. |
 | MatToKMat(...) | to_karatsuba(...) | Conversion helper; all overloads are renamed. |
 | KMatToMat(T, K) | from_karatsuba(T, K) | Conversion helper; argument order is unchanged. |
 
@@ -40,3 +40,13 @@ similar_with_modulus, inverse_pluq, the fixed-size batch kernels, triangular
 inverses, low-level multiplication helpers, and TILE_WIDTH. The helper
 pluq_check_identity remains internal. Base.inv, Base.copy, and LinearAlgebra
 methods are available through their owning modules.
+
+### Fixed: Karatsuba copy metadata
+
+The Karatsuba API rename initially retained the legacy copy body's `M = N1*N2`
+metadata behavior. A separately scoped behavior repair now preserves the source's
+stored `M` in `Base.copy`, so a copied converted operand remains compatible with
+uncopied operands and destinations in `LinearAlgebra.mul!`. Split factors,
+independent copied arrays, and conditional independent-plan initialization keep
+their existing behavior. This metadata correction is distinct from the earlier
+rename-only changes; it does not change the multiplication kernels.

@@ -7,6 +7,55 @@ function test_karatsuba_public_api_values()
         a = mod.CuModMatrix{Float64}(a_values, modulus)
         b = mod.CuModMatrix{Float64}(b_values, modulus)
 
+        @testset "Copied converted operand preserves M" begin
+            # Match the existing 32-thread launch geometry without kernel edits.
+            copy_size = 32
+            copy_a_values = Matrix{Float64}(LinearAlgebra.I, copy_size, copy_size)
+            copy_b_values = Matrix{Float64}(LinearAlgebra.I, copy_size, copy_size)
+            copy_a_values[1:2, 1:2] .= a_values
+            copy_b_values[1:2, 1:2] .= b_values
+            converted_ak =
+                mod.to_karatsuba(mod.CuModMatrix{Float64}(copy_a_values, modulus), modulus)
+            converted_bk =
+                mod.to_karatsuba(mod.CuModMatrix{Float64}(copy_b_values, modulus), modulus)
+            converted_ck = mod.to_karatsuba(
+                mod.CuModMatrix{Float64}(zeros(Float64, copy_size, copy_size), modulus),
+                modulus,
+            )
+            foreach(mod.initialize_plan!, (converted_ak, converted_bk, converted_ck))
+            converted_copy = copy(converted_ak)
+            @test converted_copy.M ==
+                  converted_ak.M ==
+                  converted_bk.M ==
+                  converted_ck.M ==
+                  modulus
+            @test converted_copy.N1 == converted_ak.N1
+            @test converted_copy.N2 == converted_ak.N2
+            @test converted_copy.data1 !== converted_ak.data1
+            @test converted_copy.data2 !== converted_ak.data2
+            @test converted_copy.data1.data !== converted_ak.data1.data
+            @test converted_copy.data2.data !== converted_ak.data2.data
+            @test converted_copy.plan !== nothing
+            @test converted_copy.plan !== converted_ak.plan
+            @test converted_copy.plan.data !== converted_ak.plan.data
+            copied_data1 = Array(converted_copy.data1)
+            copied_data2 = Array(converted_copy.data2)
+            fill!(converted_ak.data1.data, 0)
+            fill!(converted_ak.data2.data, 0)
+            fill!(converted_ak.plan.data, -1)
+            @test Array(converted_copy.data1) == copied_data1
+            @test Array(converted_copy.data2) == copied_data2
+            @test Array(converted_copy.plan) == zeros(Float64, copy_size, copy_size)
+            @test copy_a_values * copy_b_values != copy_b_values * copy_a_values
+            # Existing split arithmetic reduces modulo N1*N2, independently of
+            # the stored-M compatibility field repaired by this change.
+            converted_expected = Base.mod.(copy_a_values * copy_b_values, modulus^2)
+
+            LinearAlgebra.mul!(converted_ck, converted_copy, converted_bk)
+            @test Array(converted_ck) == converted_expected
+            @test Array(converted_ak.plan) == fill(-1.0, copy_size, copy_size)
+        end
+
         explicit = mod.to_karatsuba(a, modulus)
         automatic = mod.to_karatsuba(a)
         @test Array(mod.from_karatsuba(Float64, explicit)) == a_values
@@ -25,8 +74,7 @@ function test_karatsuba_public_api_values()
         @test eltype(typed_different_roundtrip) == Float32
         @test Array(typed_different_roundtrip) == different_source_values
 
-        # Keep the initialized-copy product in a coherent split representation.
-        # Legacy copying sets M to N1*N2, so all operands here use that M.
+        # Retain initialized-copy coverage for a coherent split representation.
         ak = mod.KaratsubaMatrix(
             a,
             mod.CuModMatrix{Float64}(zeros(Float64, 2, 2), modulus),
@@ -53,6 +101,7 @@ function test_karatsuba_public_api_values()
         ak_copy = copy(ak)
         @test ak_copy.plan !== nothing
         @test ak_copy.plan !== ak.plan
+        @test ak_copy.M == ak.M
 
         LinearAlgebra.mul!(ck, ak_copy, bk)
         @test Array(ck) == Base.mod.(a_values * b_values, modulus^2)

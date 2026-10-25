@@ -131,27 +131,44 @@
     @test Kcopy.data2 == K.data2
     @test Kcopy.data1 !== K.data1
 
-    # Characterize the documented legacy changed-M behavior; this does not
-    # assert metadata preservation or repair Base.copy.
-    legacy_data1 = [1 2; 0 1]
-    legacy_data2 = zeros(Int, 2, 2)
-    expected_legacy_data1 = copy(legacy_data1)
-    expected_legacy_data2 = copy(legacy_data2)
-    legacy_source = karatsuba_type(legacy_data1, legacy_data2, 3, 3, 3)
-    legacy_copy = copy(legacy_source)
-    @test legacy_copy.M == 9
-    @test legacy_copy.M != legacy_source.M
-    @test legacy_source.M == 3
-    @test legacy_source.data1 == expected_legacy_data1
-    @test legacy_source.data2 == expected_legacy_data2
-    @test legacy_copy.data1 == expected_legacy_data1
-    @test legacy_copy.data2 == expected_legacy_data2
-    @test legacy_copy.data1 !== legacy_source.data1
-    @test legacy_copy.data2 !== legacy_source.data2
-    legacy_source.data1[1, 1] = -1
-    legacy_source.data2[1, 1] = -1
-    @test legacy_copy.data1 == expected_legacy_data1
-    @test legacy_copy.data2 == expected_legacy_data2
+    # The separately scoped copy repair preserves stored M, including converter-
+    # style metadata where M differs from N1*N2. No CPU plan or conversion runs.
+    for integer_type in (Int, BigInt),
+        (factor1, factor2, stored_modulus) in ((3, 5, 15), (3, 3, 3))
+
+        split_data1 = [1 2; 0 1]
+        split_data2 = zeros(Int, 2, 2)
+        expected_data1 = copy(split_data1)
+        expected_data2 = copy(split_data2)
+        source = karatsuba_type(
+            split_data1,
+            split_data2,
+            integer_type(factor1),
+            integer_type(factor2),
+            integer_type(stored_modulus),
+        )
+        copied = copy(source)
+        @test copied !== source
+        @test copied.M == source.M == integer_type(stored_modulus)
+        @test typeof(copied.M) === integer_type
+        @test copied.N1 == source.N1 == integer_type(factor1)
+        @test copied.N2 == source.N2 == integer_type(factor2)
+        @test copied.plan === nothing
+        @test source.plan === nothing
+        @test copied.data1 == source.data1 == expected_data1
+        @test copied.data2 == source.data2 == expected_data2
+        @test copied.data1 !== source.data1
+        @test copied.data2 !== source.data2
+        source.data1[1, 1] = -1
+        source.data2[1, 1] = -1
+        @test copied.data1 == expected_data1
+        @test copied.data2 == expected_data2
+        copied.data1[1, 2] = -2
+        copied.data2[1, 2] = -2
+        @test source.data1[1, 2] == expected_data1[1, 2]
+        @test source.data2[1, 2] == expected_data2[1, 2]
+        @test source.M == integer_type(stored_modulus)
+    end
 
     # The explicit mul! checks run before CUDA work and can be checked on CPU.
     assert_guard_error_message = function (operation, expected_message)
