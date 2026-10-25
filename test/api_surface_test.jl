@@ -133,8 +133,8 @@
 
     # Characterize the documented legacy changed-M behavior; this does not
     # assert metadata preservation or repair Base.copy.
-    legacy_data1 = [1 2; 3 4]
-    legacy_data2 = [5 6; 7 8]
+    legacy_data1 = [1 2; 0 1]
+    legacy_data2 = zeros(Int, 2, 2)
     expected_legacy_data1 = copy(legacy_data1)
     expected_legacy_data2 = copy(legacy_data2)
     legacy_source = karatsuba_type(legacy_data1, legacy_data2, 3, 3, 3)
