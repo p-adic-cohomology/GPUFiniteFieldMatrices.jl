@@ -214,6 +214,43 @@ function test_inplace_modulus_override()
 
         scalar_add!(C, A, scalar; modulus_override = fallback_override)
         @test Array(C) == mod.(A_data .+ scalar, modulus1)
+
+        GPUFiniteFieldMatrices.sub!(C, A, A; modulus_override = fallback_override)
+        @test Array(C) == zeros(eltype(A_data), size(A_data))
+        @test C.N == modulus1
+
+        GPUFiniteFieldMatrices.mul_elementwise!(
+            C,
+            A,
+            A;
+            modulus_override = fallback_override,
+        )
+        @test Array(C) == mod.(A_data .* A_data, modulus1)
+
+        GPUFiniteFieldMatrices.scalar_sub!(
+            C,
+            A,
+            scalar;
+            modulus_override = fallback_override,
+        )
+        @test Array(C) == mod.(A_data .- scalar, modulus1)
+
+        GPUFiniteFieldMatrices.rscalar_sub!(
+            C,
+            A,
+            scalar;
+            modulus_override = fallback_override,
+        )
+        @test Array(C) == mod.(scalar .- A_data, modulus1)
+
+        GPUFiniteFieldMatrices.neg!(C, A; modulus_override = fallback_override)
+        @test Array(C) == mod.(-A_data, modulus1)
+
+        GPUFiniteFieldMatrices.div!(C, A, 2; modulus_override = fallback_override)
+        @test Array(C) == mod.(A_data .* invmod(2, modulus1), modulus1)
+
+        mul!(C, A, scalar; modulus_override = fallback_override)
+        @test Array(C) == mod.(A_data .* scalar, modulus1)
     end
 
     # Test matrix multiplication with modulus override
@@ -269,6 +306,13 @@ function test_inplace_copy_and_mod()
 
     expected = mod.(expected, override_modulus)
     @test Array(F) == expected
+
+    for fallback_override in (0, -1)
+        copyto!(F, Float32.(A_data .* 2))
+        mod_elements!(F; modulus_override = fallback_override)
+        @test Array(F) == mod.(A_data .* 2, modulus)
+        @test F.N == modulus
+    end
 
     # Test filling (and modding)
     fill!(F, 122.0)
