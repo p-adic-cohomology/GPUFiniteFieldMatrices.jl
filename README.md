@@ -142,6 +142,15 @@ conversion assertion, and a complete CPU round trip remains unverified. This
 return-inference limitation remains open, as does the separate CPU
 `initialize_plan!` return-union limitation.
 
+`Base.copy` retains the legacy `Karatsubacopy` metadata behavior: the copied
+representation stores `M = N1*N2`, which can differ from the source's `M`.
+In particular, `to_karatsuba(A, M)` stores `M` with split factors `N1 = N2 = M`,
+so copying that representation changes its stored `M` to `M^2`. Multiplication
+requires matching stored `M` on all operands; do not mix these copied and
+uncopied representations. The initialized-copy product test uses the existing
+split constructors with a consistent `M = N1*N2`. Correcting this metadata
+behavior is deferred to a separate follow-up.
+
 The specialized matrix-vector path is available through qualified access as
 `GPUFiniteFieldMatrices.karatsuba_gemv!`.
 

@@ -25,11 +25,28 @@ function test_karatsuba_public_api_values()
         @test eltype(typed_different_roundtrip) == Float32
         @test Array(typed_different_roundtrip) == different_source_values
 
-        ak = mod.to_karatsuba(a, modulus)
-        bk = mod.to_karatsuba(b, modulus)
-        ck = mod.to_karatsuba(
+        # Keep the initialized-copy product in a coherent split representation.
+        # Legacy copying sets M to N1*N2, so all operands here use that M.
+        ak = mod.KaratsubaMatrix(
+            a,
             mod.CuModMatrix{Float64}(zeros(Float64, 2, 2), modulus),
             modulus,
+            modulus,
+            modulus^2,
+        )
+        bk = mod.KaratsubaMatrix(
+            b,
+            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2), modulus),
+            modulus,
+            modulus,
+            modulus^2,
+        )
+        ck = mod.KaratsubaMatrix(
+            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2), modulus),
+            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2), modulus),
+            modulus,
+            modulus,
+            modulus^2,
         )
         foreach(mod.initialize_plan!, (ak, bk, ck))
 
