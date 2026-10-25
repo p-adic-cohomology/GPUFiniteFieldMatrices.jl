@@ -9,6 +9,10 @@
 Given a type `type` that is supported by cuBLAS,
 find the maximum number of product contributions that can be accumulated per output
 entry before a modular reduction, for multiplicands in `0:(input_bound - 1)`.
+The current supported budget calculation requires `input_bound > 1`. Although
+`input_bound == 1` describes zero-only multiplicands, that bound is an existing
+unsupported edge case for this helper. The existing formula, defaults, and error
+behavior are unchanged.
 """
 function find_max_stripe_ops(type, input_bound)
     if occursin("Float", string(type))
