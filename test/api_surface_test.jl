@@ -131,6 +131,28 @@
     @test Kcopy.data2 == K.data2
     @test Kcopy.data1 !== K.data1
 
+    # Characterize the documented legacy changed-M behavior; this does not
+    # assert metadata preservation or repair Base.copy.
+    legacy_data1 = [1 2; 3 4]
+    legacy_data2 = [5 6; 7 8]
+    expected_legacy_data1 = copy(legacy_data1)
+    expected_legacy_data2 = copy(legacy_data2)
+    legacy_source = karatsuba_type(legacy_data1, legacy_data2, 3, 3, 3)
+    legacy_copy = copy(legacy_source)
+    @test legacy_copy.M == 9
+    @test legacy_copy.M != legacy_source.M
+    @test legacy_source.M == 3
+    @test legacy_source.data1 == expected_legacy_data1
+    @test legacy_source.data2 == expected_legacy_data2
+    @test legacy_copy.data1 == expected_legacy_data1
+    @test legacy_copy.data2 == expected_legacy_data2
+    @test legacy_copy.data1 !== legacy_source.data1
+    @test legacy_copy.data2 !== legacy_source.data2
+    legacy_source.data1[1, 1] = -1
+    legacy_source.data2[1, 1] = -1
+    @test legacy_copy.data1 == expected_legacy_data1
+    @test legacy_copy.data2 == expected_legacy_data2
+
     # The explicit mul! checks run before CUDA work and can be checked on CPU.
     assert_guard_error_message = function (operation, expected_message)
         err = try
