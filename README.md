@@ -123,6 +123,19 @@ mul!(C, AK, BK)
 from_karatsuba(Float64, C)
 ```
 
+The example uses the CUDA-backed `CuModMatrix` path. The `AbstractArray`
+`to_karatsuba` overloads do not currently provide a working CPU-only conversion:
+with a plain `Matrix{Float64}` under Julia 1.12.7, each of
+`to_karatsuba(A)`, `to_karatsuba(A, M)`, `to_karatsuba(Float64, A)`, and
+`to_karatsuba(Float64, A, M)` throws `ErrorException("CUDA driver not found")`.
+A direct runtime probe of `from_karatsuba(Float64, K)` reconstructed values
+from a manually split host `KaratsubaArray`, but the strict `Pkg.test()` gate
+rejects that call with `DispatchDoctor.TypeInstabilityError` because its return
+type is inferred as `Any`. The CPU suite therefore has no positive value-level
+conversion assertion, and a complete CPU round trip remains unverified. This
+return-instability finding remains open as `gfm-9dqt`; the separate CPU
+`initialize_plan!` return-union issue remains open as `gfm-0wjq`.
+
 The specialized matrix-vector path is available through qualified access as
 `GPUFiniteFieldMatrices.karatsuba_gemv!`.
 
