@@ -39,5 +39,21 @@ function test_karatsuba_public_api_values()
 
         LinearAlgebra.mul!(ck, ak_copy, bk)
         @test Array(ck) == Base.mod.(a_values * b_values, modulus^2)
+
+        rect_a_values = Float64[1 2 3; 4 5 6]
+        rect_b_values = Float64[2 1 0 3; 1 2 3 4; 0 1 2 3]
+        rect_a = mod.CuModMatrix{Float64}(rect_a_values, modulus)
+        rect_b = mod.CuModMatrix{Float64}(rect_b_values, modulus)
+        rect_ak = mod.to_karatsuba(rect_a, modulus)
+        rect_bk = mod.to_karatsuba(rect_b, modulus)
+        rect_ck = mod.to_karatsuba(
+            mod.CuModMatrix{Float64}(zeros(Float64, 2, 4), modulus),
+            modulus,
+        )
+        foreach(mod.initialize_plan!, (rect_ak, rect_bk, rect_ck))
+
+        LinearAlgebra.mul!(rect_ck, rect_ak, rect_bk)
+        @test size(rect_ck) == (2, 4)
+        @test Array(rect_ck) == Base.mod.(rect_a_values * rect_b_values, modulus^2)
     end
 end
