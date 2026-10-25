@@ -142,14 +142,14 @@ function test_inplace_matmul_operations()
     @test Array(C2) ≈ expected_C2
     @test C2.N == modulus
 
-    # Without an override, the in-place direct helper reduces to the
-    # destination's stored modulus and leaves that metadata unchanged.
+    # Without an override, preserve the prior A.N reduction default while
+    # leaving the destination's stored metadata unchanged.
     default_modulus = 5
     C_default = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, default_modulus)
     mat_mul_type_inplace!(C_default, A, B)
     A_values = mod.(A_data, modulus)
     B_values = mod.(B_data, modulus)
-    expected_default = mod.(A_values * B_values, default_modulus)
+    expected_default = mod.(A_values * B_values, modulus)
     @test Array(C_default) ≈ expected_default
     @test C_default.N == default_modulus
 

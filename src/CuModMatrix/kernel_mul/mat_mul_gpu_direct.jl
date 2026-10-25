@@ -70,7 +70,7 @@ end
 
 In-place matrix multiplication that works directly with `CuModMatrix` objects.
 A positive `modulus_override` sets the reduction modulus; omitted, zero, or
-negative values use `C.N`. Reductions leave `C.N` unchanged.
+negative values use `A.N`. Reductions leave `C.N` unchanged.
 """
 function mat_mul_type_inplace!(
     C::CuModMatrix,
@@ -81,8 +81,8 @@ function mat_mul_type_inplace!(
     REGIME = "⊠",
     type = nothing,
 )
-    # Use the provided modulus if available, otherwise use C's stored modulus.
-    N = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
+    # Use the provided modulus if available, otherwise preserve A's stored modulus.
+    N = modulus_override === nothing || modulus_override <= 0 ? A.N : modulus_override
 
     if rows(C) != rows(A) || cols(C) != cols(B)
         throw(MatrixSizeMismatchException("Output matrix C has incorrect dimensions"))

@@ -134,6 +134,7 @@
         (mod.mul_elementwise!, Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray}),
         (mod.div!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
         (mod.mod_elements!, Tuple{mod.CuModArray}),
+        (LinearAlgebra.mul!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
     )
     for (f, signature) in keyword_signatures
         @test :modulus_override in keyword_decl(f, signature)
@@ -153,6 +154,7 @@
         Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray,Int},
     )
     @test !hasmethod(mod.div!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
+    @test !hasmethod(LinearAlgebra.mul!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
     @test :modulus_override in
           keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,Float64})
     @test :input_bound in

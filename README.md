@@ -120,8 +120,8 @@ Per-call reduction moduli use the `modulus_override` keyword, for example
 `LinearAlgebra.mul!(z, A, x; modulus_override = 7)`. For elementwise/scalar
 operations and direct matrix helpers, a positive override sets the reduction
 modulus; zero or a negative value falls back to the stored modulus. The
-non-mutating `mat_mul_gpu_type` helper defaults to `A.N`, while the in-place
-`mat_mul_type_inplace!` helper defaults to `C.N`. Matrix-vector `mul!` requires a
+non-mutating `mat_mul_gpu_type` helper and the in-place
+`mat_mul_type_inplace!` helper both default to `A.N`. Matrix-vector `mul!` requires a
 positive override when supplied. In-place operations leave the destination's
 stored modulus unchanged. For matrix multiplication, `input_bound` is the
 exclusive upper bound on nonnegative multiplicands, and
