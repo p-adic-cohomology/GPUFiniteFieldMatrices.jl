@@ -203,6 +203,19 @@ function test_inplace_modulus_override()
     expected = mod.(A_data .* scalar, override_modulus)
     @test Array(C) == expected
 
+    # Zero and negative overrides retain the stored-modulus fallback.
+    for fallback_override in (0, -1)
+        GPUFiniteFieldMatrices.add!(C, A, A; modulus_override = fallback_override)
+        @test Array(C) == mod.(A_data .+ A_data, modulus1)
+        @test C.N == modulus1
+
+        elementwise_multiply!(C, A, A; modulus_override = fallback_override)
+        @test Array(C) == mod.(A_data .* A_data, modulus1)
+
+        scalar_add!(C, A, scalar; modulus_override = fallback_override)
+        @test Array(C) == mod.(A_data .+ scalar, modulus1)
+    end
+
     # Test matrix multiplication with modulus override
     #
     #NOTE: this feature was removed, but here's the test preserved in this comment

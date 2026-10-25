@@ -153,6 +153,13 @@ function test_inplace_matmul_operations()
     @test Array(C_default) ≈ expected_default
     @test C_default.N == default_modulus
 
+    for fallback_override in (0, -1)
+        C_fallback = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, default_modulus)
+        mat_mul_type_inplace!(C_fallback, A, B; modulus_override = fallback_override)
+        @test Array(C_fallback) ≈ expected_default
+        @test C_fallback.N == default_modulus
+    end
+
     println("All in-place matrix multiplication operations tests passed!")
 end
 
