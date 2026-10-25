@@ -130,4 +130,31 @@
     @test Kcopy.data1 == K.data1
     @test Kcopy.data2 == K.data2
     @test Kcopy.data1 !== K.data1
+
+    # The mul! contract guards run before CUDA work and can be checked on CPU.
+    mul_left =
+        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
+    mul_right_wrong_modulus =
+        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 16)
+    mul_dest =
+        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
+    @test_throws ErrorException LinearAlgebra.mul!(
+        mul_dest,
+        mul_left,
+        mul_right_wrong_modulus,
+    )
+
+    mul_left_wrong_shape =
+        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 3), zeros(Float64, 2, 3), 3, 5, 15)
+    mul_right_wrong_shape =
+        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
+    @test_throws ErrorException LinearAlgebra.mul!(
+        mul_dest,
+        mul_left_wrong_shape,
+        mul_right_wrong_shape,
+    )
+
+    mul_unplanned_right =
+        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
+    @test_throws ErrorException LinearAlgebra.mul!(mul_dest, mul_left, mul_unplanned_right)
 end
