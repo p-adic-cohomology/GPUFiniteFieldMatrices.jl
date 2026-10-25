@@ -444,8 +444,9 @@ end
     to_karatsuba(T::Type, A::AbstractArray, M::Integer)
 
 Convert `A` to a split Karatsuba representation. When `M` is supplied, it is
-used for both split factors and the representation modulus. Otherwise the split
-base is selected from `eltype(A)` and the largest dimension of `A`. The typed
+used for both split factors and the representation modulus. When `M` is omitted,
+the untyped overload chooses the split base from `eltype(A)`, while the typed
+overload chooses it from `T`; both use the largest dimension of `A`. The typed
 overloads accept `T` as an explicit type argument but do not convert elements;
 the representation retains `A`'s element type.
 """
