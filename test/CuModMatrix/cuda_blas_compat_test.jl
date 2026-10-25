@@ -99,6 +99,23 @@ function test_cuda_blas_compatibility()
     )
     @test Array(precision_z) == precision_expected
 
+    # Exercise matrix-matrix stripe reductions at the computed Float32 budget.
+    precision_B_values = fill(precision_bound - 1, precision_inner_dim, 2)
+    precision_B =
+        GPUFiniteFieldMatrices.CuModMatrix{Float32}(precision_B_values, precision_bound)
+    precision_C = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, precision_bound)
+
+    CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
+        precision_C,
+        precision_A,
+        precision_B;
+        max_ops = precision_max_ops,
+    )
+    precision_matrix_expected = Float32.(
+        mod.(BigInt.(precision_A_values) * BigInt.(precision_B_values), precision_bound),
+    )
+    @test Array(precision_C) == precision_matrix_expected
+
     # Exercise the batched GEMV path with initialized plans and an independent
     # CPU modular product. The inputs are small and deterministic.
     n = 32
