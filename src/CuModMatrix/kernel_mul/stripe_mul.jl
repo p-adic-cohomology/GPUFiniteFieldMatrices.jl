@@ -4,13 +4,13 @@
 #end
 
 """
-    find_max_stripe_ops(type,N)
+    find_max_stripe_ops(type, input_bound)
 
 Given a type `type` that is supported by cuBLAS,
-find out how many columns we can include in a stripe
-(in the stripe multiplication algorithm)
+find the maximum number of product contributions that can be accumulated per output
+entry before a modular reduction, for multiplicands in `0:(input_bound - 1)`.
 """
-function find_max_stripe_ops(type, N)
+function find_max_stripe_ops(type, input_bound)
     if occursin("Float", string(type))
         bits_dict = Dict("64" => 53, "32" => 24, "16" => 11)
         bits_match = match(r"\d+", string(type))
@@ -23,7 +23,7 @@ function find_max_stripe_ops(type, N)
         throw(ArgumentError("Input type is not recognized."))
     end
 
-    floor(Int, (2^bits - 1) / (N-1)^2) - 1
+    floor(Int, (2^bits - 1) / (input_bound - 1)^2) - 1
 end
 
 """
@@ -81,9 +81,15 @@ returns (0, 1) as pointers that can be used with low-level cuBLAS APIs
 end
 
 """
-    stripe_mul!(z::CuModVector,A::CuModMatrix,x::CuModVector)
+    stripe_mul!(z::CuModVector, A::CuModMatrix, x::CuModVector;
+        max_ops=nothing, input_bound=nothing, modulus_override=nothing)
 
-Matrix-vector multiplication based on stripes
+Matrix-vector multiplication based on stripes. `input_bound` is the exclusive
+bound on nonnegative input values and controls the default `max_ops`. `max_ops`
+is the number of product contributions accumulated per output entry between
+modular reductions. `modulus_override` changes the per-call reduction modulus;
+when omitted, `z.N` is used and its stored modulus is unchanged. The low-level
+`respect_max_ops=false` option recomputes the budget even when `max_ops` is given.
 """
 #TODO: replayce CuVector{Float64} with padded custom type.
 #the ".data" stuff won't work until then
@@ -91,14 +97,11 @@ function stripe_mul!(
     z::CuModVector,
     A::CuModMatrix,
     x::CuModVector;
-    M = nothing,
-    R = nothing,
-    N = nothing,
-    maxopsOverride = true,
+    max_ops = nothing,
+    input_bound = nothing,
+    modulus_override = nothing,
+    respect_max_ops::Bool = true,
 )
-    #TODO: add new signature that takes in custom M and N (and can copy the old one into new one)
-    # so we can update the modulus but use the old bound for coeffs.
-
     if A.N != z.N || z.N != z.N
         throw(ArgumentError("Mismatched modulus in matmul"))
     elseif cols(A) != length(z)
@@ -109,30 +112,16 @@ function stripe_mul!(
         throw(ArgumentError("Mismatched element types in matmul"))
     end # possibly also enforce that the eltypes are the same
 
-    if R==nothing
-        R = z.N
+    bound = input_bound === nothing ? z.N : input_bound
+    if !respect_max_ops || max_ops === nothing
+        max_ops = find_max_stripe_ops(eltype(A.data), bound)
     end
+    reduction_modulus = modulus_override === nothing ? z.N : modulus_override
 
-    if maxopsOverride == true
-        if M == nothing
-            if N == nothing
-                M = find_max_stripe_ops(eltype(A.data), R)
-            else
-                M = find_max_stripe_ops(eltype(A.data), R)
-            end
-        end
-    else
-        M = find_max_stripe_ops(eltype(A.data), R)
-    end
-
-    if N==nothing
-        N = z.N
-    end
-
-    if M < 1
+    if max_ops < 1
         throw(
             ArgumentError(
-                "cannot perform a single multiplication for modulus $(R) with datatype $(eltype(A.data))",
+                "cannot perform a single multiplication for input bound $(bound) with datatype $(eltype(A.data))",
             ),
         )
     end
@@ -148,56 +137,62 @@ function stripe_mul!(
 
     summed_size = cols(A)#size(A,2)
 
-    num_stripes = div(summed_size, M) + 1
+    num_stripes = div(summed_size, max_ops) + 1
 
 
     if num_stripes == 1
         _CUDA_BLAS.gemv!('N', one_ptr, A.data, x.data, zero_ptr, z.data)
-        mod!(z.data, z.data, N)
+        mod!(z.data, z.data, reduction_modulus)
         return
     end
 
 
     i = 1
 
-    range = 1:M
+    range = 1:max_ops
     A_temp = @view A.data[:, range]
     x_temp = @view x.data[range]
     _CUDA_BLAS.gemv!('N', one_ptr, A_temp, x_temp, zero_ptr, z.data)
-    mod!(z.data, z.data, N)
+    mod!(z.data, z.data, reduction_modulus)
 
     i += 1
 
     while i < num_stripes
-        range = (M*(i-1)+1):(M*i)
+        range = (max_ops*(i-1)+1):(max_ops*i)
         A_temp = @view A.data[:, range]
         x_temp = @view x.data[range]
         _CUDA_BLAS.gemv!('N', one_ptr, A_temp, x_temp, one_ptr, z.data)
-        mod!(z.data, z.data, N)
+        mod!(z.data, z.data, reduction_modulus)
 
         i += 1
     end
     # i == num_stripes
 
-    range = (M*(i-1)+1):cols(A)
+    range = (max_ops*(i-1)+1):cols(A)
     A_temp = @view A.data[:, range]
     x_temp = @view x.data[range]
     _CUDA_BLAS.gemv!('N', one_ptr, A_temp, x_temp, one_ptr, z.data)
-    mod!(z.data, z.data, N)
+    mod!(z.data, z.data, reduction_modulus)
 
 end
 
 """
-    stripe_mul!(C::CuModMatrix,A::CuModMatrix,B::CuModMatrix)
+    stripe_mul!(C::CuModMatrix, A::CuModMatrix, B::CuModMatrix;
+        max_ops=nothing, input_bound=nothing)
 
-Matrix multiplication mod N based on stripes.
+Matrix multiplication mod N based on stripes. `input_bound` is the exclusive
+bound on nonnegative input values and controls the default `max_ops`. Supplying
+`input_bound` retains the existing single-stripe route. `max_ops` is the number
+of product contributions accumulated per output entry between reductions on
+the multi-stripe route. The single-stripe route may accumulate more than
+`max_ops` contributions before its reduction.
 """
 function stripe_mul!(
     C::CuModMatrix,
     A::CuModMatrix,
     B::CuModMatrix;
-    M = nothing,
-    N = nothing,
+    max_ops = nothing,
+    input_bound = nothing,
 )
 
     if A.N != B.N || B.N != C.N
@@ -210,20 +205,12 @@ function stripe_mul!(
         throw(ArgumentError("Mismatched element types in matmul"))
     end # possibly also enforce that the eltypes are the same
 
-    #TODO
-    # basicallty adapt a new P which is the actual maxium, not the modulus
-    # Be careful not to mod by P though
-    # Also update all the versions of stripe_mul!
-
-    if M == nothing
-        if N == nothing
-            M = find_max_stripe_ops(eltype(A.data), A.N)
-        else
-            M = find_max_stripe_ops(eltype(A.data), N)
-        end
+    if max_ops === nothing
+        bound = input_bound === nothing ? A.N : input_bound
+        max_ops = find_max_stripe_ops(eltype(A.data), bound)
     end
 
-    if M < 1
+    if max_ops < 1
         throw(
             ArgumentError(
                 "cannot perform a single multiplication for modulus $(A.N) with datatype $(eltype(A.data))",
@@ -233,8 +220,8 @@ function stripe_mul!(
 
     summed_size = cols(A)#size(A,2)
 
-    if N == nothing
-        num_stripes = div(summed_size, M) + 1
+    if input_bound === nothing
+        num_stripes = div(summed_size, max_ops) + 1
     else
         num_stripes = 1
     end
@@ -247,7 +234,7 @@ function stripe_mul!(
 
     i = 1
 
-    range = 1:M
+    range = 1:max_ops
     A_temp = @view A.data[:, range]
     B_temp = @view B.data[range, :]
     _CUDA_BLAS.gemm!('N', 'N', 1, A_temp, B_temp, 0, C.data)
@@ -256,7 +243,7 @@ function stripe_mul!(
     i += 1
 
     while i < num_stripes
-        range = (M*(i-1)+1):(M*i)
+        range = (max_ops*(i-1)+1):(max_ops*i)
         A_temp = @view A.data[:, range]
         B_temp = @view B.data[range, :]
         _CUDA_BLAS.gemm!('N', 'N', 1, A_temp, B_temp, 1, C.data)
@@ -266,7 +253,7 @@ function stripe_mul!(
     end
     # i == num_stripes
 
-    range = (M*(i-1)+1):cols(A)
+    range = (max_ops*(i-1)+1):cols(A)
     A_temp = @view A.data[:, range]
     B_temp = @view B.data[range, :]
     _CUDA_BLAS.gemm!('N', 'N', 1, A_temp, B_temp, 1, C.data)
