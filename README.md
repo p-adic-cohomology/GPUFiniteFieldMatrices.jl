@@ -12,7 +12,7 @@ We currently implement:
 
 - `CuModMatrix`, a `CuArray` wrapper which represents a matrix modulo `N`. `CuModMatrix` pads elements to 32 bits, and has various matrix operations implemented as GPU kernels. This includes:
   - matrix multiplication (for `N < ~2^26`)
-  - if `N` is prime, RREF, LU decomposition, PLUQ decomposition, square
+  - if `N` is prime, row reduction, LU decomposition, PLUQ decomposition, square
     inversion, and rectangular one-sided inverses. See
     [`src/CuModMatrix/inverse/README.md`](src/CuModMatrix/inverse/README.md) for
     the inverse algorithms and their modulus contract.
