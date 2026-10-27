@@ -105,9 +105,54 @@ access, for example GPUFiniteFieldMatrices.similar_with_modulus(A, 103).
 #### Karatsuba matrices
 
 Convert a `CuModMatrix` to the split representation with `to_karatsuba(A, M)` and
-convert it back with `from_karatsuba(Float64, K)`. Initialized Karatsuba products
-extend `LinearAlgebra.mul!`; the specialized matrix-vector path is available
-through qualified access as `GPUFiniteFieldMatrices.karatsuba_gemv!`.
+convert it back with `from_karatsuba(Float64, K)`. Before multiplying, initialize
+the plans on both inputs and the destination with the qualified helper, then call
+`LinearAlgebra.mul!`:
+
+```julia
+using GPUFiniteFieldMatrices
+using LinearAlgebra
+
+A = CuModMatrix{Float64}([20 30; 40 50], 100)
+B = CuModMatrix{Float64}([20 30; 40 50], 100)
+AK = to_karatsuba(A, 100)
+BK = to_karatsuba(B, 100)
+C = to_karatsuba(CuModMatrix{Float64}(zeros(Float64, 2, 2), 100), 100)
+foreach(GPUFiniteFieldMatrices.initialize_plan!, (AK, BK, C))
+mul!(C, AK, BK)
+from_karatsuba(Float64, C)
+```
+
+For `LinearAlgebra.mul!`, all three matrices must use the same representation
+modulus, the inner dimensions of `A` and `B` must match, and all three matrices
+must have initialized plans. The caller must size `C` to `(size(A, 1), size(B, 2))`:
+this method does not explicitly check the destination dimensions before CUDA
+work begins. This multiplication path currently supports `Float64` storage only.
+
+The example uses the CUDA-backed `CuModMatrix` path. The `AbstractArray`
+`to_karatsuba` overloads do not currently provide a working CPU-only conversion:
+with a plain `Matrix{Float64}` under Julia 1.12.7, each of
+`to_karatsuba(A)`, `to_karatsuba(A, M)`, `to_karatsuba(Float64, A)`, and
+`to_karatsuba(Float64, A, M)` throws `ErrorException("CUDA driver not found")`.
+A direct runtime probe of `from_karatsuba(Float64, K)` reconstructed values
+from a manually split host `KaratsubaArray`, but the strict `Pkg.test()` gate
+rejects that call with `DispatchDoctor.TypeInstabilityError` because its return
+type is inferred as `Any`. The CPU suite therefore has no positive value-level
+conversion assertion, and a complete CPU round trip remains unverified. This
+return-inference limitation remains open, as does the separate CPU
+`initialize_plan!` return-union limitation.
+
+`Base.copy` retains the legacy `Karatsubacopy` metadata behavior: the copied
+representation stores `M = N1*N2`, which can differ from the source's `M`.
+In particular, `to_karatsuba(A, M)` stores `M` with split factors `N1 = N2 = M`,
+so copying that representation changes its stored `M` to `M^2`. Multiplication
+requires matching stored `M` on all operands; do not mix these copied and
+uncopied representations. The initialized-copy product test uses the existing
+split constructors with a consistent `M = N1*N2`. Correcting this metadata
+behavior is deferred to a separate follow-up.
+
+The specialized matrix-vector path is available through qualified access as
+`GPUFiniteFieldMatrices.karatsuba_gemv!`.
 
 The `*` operator and matrix-matrix keyword paths remain unsupported; these
 renames change the API spellings without changing those behaviors. Three

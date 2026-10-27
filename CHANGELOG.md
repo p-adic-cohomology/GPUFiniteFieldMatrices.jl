@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Breaking: API renames
+### Breaking: API changes
 
 This change prepares the 0.4.0 API break. No compatibility aliases are kept.
 
@@ -30,6 +30,7 @@ This change prepares the 0.4.0 API break. No compatibility aliases are kept.
 | Low-level matrix-vector `stripe_mul!`: `M`, `R`, `N` | `max_ops`, `input_bound`, `modulus_override` | `input_bound` is exclusive; `max_ops` counts product contributions accumulated per output entry between reductions. |
 | matrix-matrix `mul!`/`stripe_mul!`: `M`, `N` | `max_ops`, `input_bound` | Supplying `input_bound` preserves the existing single-stripe route; it does not override the reduction modulus and may accumulate more contributions than `max_ops` before reduction. |
 | low-level `stripe_mul!` `maxopsOverride` | `respect_max_ops` | `true` honors a supplied `max_ops`; `false` recomputes it from `input_bound`. High-level matrix-vector `mul!` drops its ineffective `maxopsOverride` keyword. |
+| mod_inv, change_modulus_no_alloc! | GPUFiniteFieldMatrices.mod_inv, GPUFiniteFieldMatrices.change_modulus_no_alloc! | Previously exported; now qualified-only. |
 | add!, sub!, zero! | unchanged | These names remain available as qualified public functions. |
 | KMatMul!(C, A, B) | LinearAlgebra.mul!(C, A, B) | Extends LinearAlgebra's multiplication method. |
 | KMatMul_gemv!(C, A, x) | karatsuba_gemv!(C, A, x) | Name only; behavior is unchanged. |

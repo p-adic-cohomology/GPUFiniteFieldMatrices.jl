@@ -154,7 +154,22 @@ function find_max_ops_karatsuba(type, N)
 
 end
 
-function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
+"""
+    LinearAlgebra.mul!(C, A, B)
+
+Multiply the Karatsuba matrices `A` and `B`, storing the product in `C`. The
+three matrices must share the same representation modulus `M`, and `A`'s column
+count must match `B`'s row count. The caller must ensure that `C` has dimensions
+`(size(A, 1), size(B, 2))`; this method does not explicitly validate the
+destination dimensions before CUDA work begins. Call `initialize_plan!` on all
+three matrices before multiplying. This matrix path currently supports
+`Float64` storage only.
+"""
+function LinearAlgebra.mul!(
+    C::KaratsubaArray{TC,2},
+    A::KaratsubaArray{TA,2},
+    B::KaratsubaArray{TB,2},
+) where {TC,TA,TB}
     if (A.M != B.M) || (A.M != C.M)
         error("Matrices must have the same modulus m")
     end
@@ -283,6 +298,15 @@ const nKMuls = 3
 
 
 # the stuff in this function should apply to the general mul!, but with gemm instead of gemv
+"""
+    karatsuba_gemv!(y, A, x)
+
+Multiply a Karatsuba matrix `A` by a Karatsuba vector `x`, storing the result in
+`y`. All three values must have initialized plans, use the same split base `M`,
+and have dimensions compatible with the product. This specialized path currently
+supports `Float64` storage only. Initialize plans with `initialize_plan!` before
+calling this function.
+"""
 function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (A.M != B.M) || (A.M != C.M)
         error("Matrices must have the same modulus m")
@@ -401,12 +425,33 @@ function zero!(A::KaratsubaArray)
     zero!(A.data2)
 end
 
+"""
+    from_karatsuba(T::Type, K::KaratsubaArray)
+
+Reconstruct the full array represented by `K` as `K.data1 + K.N1*K.data2`.
+The explicit `T` argument is part of the typed conversion API; this method does
+not convert elements, so the result retains the element type of `K`'s split
+arrays.
+"""
 function from_karatsuba(T::Type, K::KaratsubaArray)
     A = Base.zeros(T, size(K.data1)...)
     A = K.data1 + K.N1*K.data2
     A
 end
 
+"""
+    to_karatsuba(A::AbstractArray)
+    to_karatsuba(A::AbstractArray, M::Integer)
+    to_karatsuba(T::Type, A::AbstractArray)
+    to_karatsuba(T::Type, A::AbstractArray, M::Integer)
+
+Convert `A` to a split Karatsuba representation. When `M` is supplied, it is
+used for both split factors and the representation modulus. When `M` is omitted,
+the untyped overload chooses the split base from `eltype(A)`, while the typed
+overload chooses it from `T`; both use the largest dimension of `A`. The typed
+overloads accept `T` as an explicit type argument but do not convert elements;
+the representation retains `A`'s element type.
+"""
 function to_karatsuba(A::AbstractArray, M::Integer)
     to_karatsuba(eltype(A), A, M)
 end

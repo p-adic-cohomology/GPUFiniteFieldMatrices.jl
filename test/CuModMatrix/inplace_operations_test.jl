@@ -20,6 +20,24 @@ function test_inplace_basic_operations()
     A = CuModMatrix(A_data, modulus)
     B = CuModMatrix(B_data, modulus)
 
+    # The renamed alternate-modulus allocator preserves shape and element type
+    # without changing the source matrix.
+    original_A = Array(A)
+    A_other_modulus = GPUFiniteFieldMatrices.similar_with_modulus(A, 7)
+    @test size(A_other_modulus) == size(A)
+    @test eltype(A_other_modulus) == eltype(A)
+    @test A_other_modulus.N == 7
+    @test Array(A) == original_A
+
+    # Base.copy preserves metadata and owns independent device storage.
+    A_copy = copy(A)
+    @test A_copy.N == A.N
+    @test size(A_copy) == size(A)
+    @test eltype(A_copy) == eltype(A)
+    GPUFiniteFieldMatrices.neg!(A_copy, A_copy)
+    @test Array(A_copy) == mod.(-A_data, modulus)
+    @test Array(A) == A_data
+
     C = GPUFiniteFieldMatrices.zeros(Int, 3, 3, modulus)
     D = GPUFiniteFieldMatrices.zeros(Int, 3, 3, modulus)
 
@@ -95,6 +113,14 @@ function test_inplace_basic_operations()
 
     expected = mod.(A_data .* scalar, modulus)
     @test Array(C) == expected
+
+    # Exercise both standard LinearAlgebra in-place scaling argument orders.
+    right_scaled = copy(A)
+    left_scaled = copy(A)
+    LinearAlgebra.rmul!(right_scaled, scalar)
+    LinearAlgebra.lmul!(scalar, left_scaled)
+    @test Array(right_scaled) == expected
+    @test Array(left_scaled) == expected
 
     # Test matrix multiplication
     E = GPUFiniteFieldMatrices.zeros(Float32, 3, 3, modulus)
