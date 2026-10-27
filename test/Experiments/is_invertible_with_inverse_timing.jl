@@ -1,3 +1,6 @@
+# Archived/unsupported experiment; it is not part of test/runtests.jl and
+# still references permutation helpers retired from the loaded package API.
+
 using CUDA
 using Random
 using Statistics
