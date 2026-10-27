@@ -170,11 +170,12 @@ names support matrix-vector products. `*` and `LinearAlgebra.mul!` use this
 shared implementation. An allocating call stores the effective modulus on its
 result. A mutating call reduces with the effective modulus and leaves the
 destination's stored modulus unchanged. For the matrix allocating and mutating
-adapters, omitted, zero, and negative overrides use `A.N`; a positive override
-selects another reduction modulus. Matrix-vector `mul!` requires a positive
-override when supplied. Elementwise and scalar operations use a positive
-override for reduction and fall back to the destination's stored modulus for
-omitted, zero, or negative overrides.
+adapters, an omitted override uses `A.N`; a supplied override must be positive.
+Matrix-vector `mul!` follows the same rule. Elementwise and scalar operations
+use a positive override for reduction. Elementwise and scalar multiplication
+reject zero or negative overrides with `ArgumentError`; other elementwise and
+scalar operations retain the stored-modulus fallback for omitted, zero, or
+negative overrides.
 
 For stripe multiplication, `input_bound` promises that input entries are
 nonnegative and strictly below the bound. `max_ops` is the maximum number of

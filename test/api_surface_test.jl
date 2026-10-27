@@ -192,7 +192,6 @@
           BigInt(2)^24 - 1
     @test mod._stripe_effective_modulus(101, nothing) == 101
     @test mod._stripe_effective_modulus(101, 7) == 7
-    @test mod._stripe_effective_modulus(101, 0; fallback_nonpositive = true) == 101
     @test_throws ArgumentError mod._stripe_effective_modulus(101, 0)
 
     # Unsupported elem_type keywords fail in keyword dispatch before the

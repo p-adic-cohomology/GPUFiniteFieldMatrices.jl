@@ -506,7 +506,7 @@ end
 
 In-place element-wise multiplication: C = A .* B mod N. No allocation is performed.
 Only a positive `modulus_override` replaces `C.N` for the reduction modulus.
-Zero or a negative value uses `C.N`. The stored modulus on `C` is unchanged.
+A zero or negative value throws `ArgumentError`. The stored modulus on `C` is unchanged.
 """
 function elementwise_multiply!(
     C::CuModArray,
@@ -515,9 +515,10 @@ function elementwise_multiply!(
     ;
     modulus_override::Union{Nothing,Integer} = nothing,
 )
-    N = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    N = modulus_override === nothing ? C.N : modulus_override
 
-    if (modulus_override === nothing || modulus_override <= 0) && (A.N != B.N || A.N != C.N)
+    if modulus_override === nothing && (A.N != B.N || A.N != C.N)
         throw(
             CuModArrayModulusMismatchException(
                 "All matrices must have the same modulus N or provide a modulus_override",
@@ -773,7 +774,8 @@ function LinearAlgebra.mul!(
     modulus_override = nothing,
 )
 
-    if (A.N != z.N || A.N != x.N)
+    _validate_positive_modulus_override(modulus_override)
+    if (A.N != x.N || (modulus_override === nothing && A.N != z.N))
         throw(
             CuModArrayModulusMismatchException("All matrices must have the same modulus N"),
         )

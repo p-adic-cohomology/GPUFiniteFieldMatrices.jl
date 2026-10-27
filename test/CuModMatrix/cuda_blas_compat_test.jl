@@ -2,10 +2,10 @@ function test_cuda_blas_compatibility()
     N = 127
     A_data = [1 4 7 10 13; 2 5 8 11 14; 3 6 9 12 15]
     B_data = [2 7; 3 8; 4 9; 5 10; 6 11]
-    matrix_expected = mod.(A_data * B_data, N)
-    vector_A_data = [1 4 7; 2 5 8; 3 6 9]
-    vector_x_data = [3, 5, 7]
-    vector_expected = mod.(vector_A_data * vector_x_data, N)
+    matrix_expected = mod.(BigInt.(A_data) * BigInt.(B_data), N)
+    vector_A_data = A_data
+    vector_x_data = [3, 5, 7, 9, 11]
+    vector_expected = mod.(BigInt.(vector_A_data) * BigInt.(vector_x_data), N)
 
     for T in (Float32, Float64), stripe_width in (8, 5, 2, 1)
         A = GPUFiniteFieldMatrices.CuModMatrix{T}(A_data, N)
@@ -70,6 +70,17 @@ function test_cuda_blas_compatibility()
         @test Array(z_override) == T.(mod.(vector_A_data * vector_x_data, override_modulus))
         @test z_override.N == N
 
+        z_override_different = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), 19)
+        CUDA.@sync LinearAlgebra.mul!(
+            z_override_different,
+            vector_A,
+            x;
+            modulus_override = override_modulus,
+        )
+        @test Array(z_override_different) ==
+              T.(mod.(BigInt.(vector_A_data) * BigInt.(vector_x_data), override_modulus))
+        @test z_override_different.N == 19
+
         # A different stored destination modulus does not replace the working
         # reduction modulus, and the allocating adapter records that modulus.
         C_different_modulus = GPUFiniteFieldMatrices.zeros(T, 3, 2, 19)
@@ -101,6 +112,171 @@ function test_cuda_blas_compatibility()
         @test Array(allocated_vector_override) ==
               T.(mod.(vector_A_data * vector_x_data, 31))
         @test allocated_vector_override.N == 31
+
+        z_reject = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N)
+        z_reject.data[1:length(z_reject)] .= T.([17, 19, 23])
+        z_before_reject = Array(z_reject)
+        matrix_before_reject = Array(C)
+        vector_matrix_before_reject = Array(vector_A)
+        vector_before_reject = Array(x)
+
+        x_bad_modulus = GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data, N + 1)
+        x_bad_modulus_before = Array(x_bad_modulus)
+        @test_throws GPUFiniteFieldMatrices.CuModArrayModulusMismatchException GPUFiniteFieldMatrices.stripe_mul!(
+            z_reject,
+            vector_A,
+            x_bad_modulus,
+        )
+        @test Array(z_reject) == z_before_reject
+        @test Array(vector_A) == vector_matrix_before_reject
+        @test Array(x_bad_modulus) == x_bad_modulus_before
+
+        x_bad_length = GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data[1:(end-1)], N)
+        x_bad_length_before = Array(x_bad_length)
+        @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException GPUFiniteFieldMatrices.stripe_mul!(
+            z_reject,
+            vector_A,
+            x_bad_length,
+        )
+        @test Array(z_reject) == z_before_reject
+        @test Array(x_bad_length) == x_bad_length_before
+
+        z_bad_length = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1) - 1, N)
+        z_bad_length.data[1:length(z_bad_length)] .= T.([17, 19])
+        z_bad_length_before = Array(z_bad_length)
+        @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException GPUFiniteFieldMatrices.stripe_mul!(
+            z_bad_length,
+            vector_A,
+            x,
+        )
+        @test Array(z_bad_length) == z_bad_length_before
+        @test Array(vector_A) == vector_matrix_before_reject
+        @test Array(x) == vector_before_reject
+
+        z_bad_modulus = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N + 1)
+        z_bad_modulus.data[1:length(z_bad_modulus)] .= T.([17, 19, 23])
+        z_bad_modulus_before = Array(z_bad_modulus)
+        @test_throws GPUFiniteFieldMatrices.CuModArrayModulusMismatchException GPUFiniteFieldMatrices.stripe_mul!(
+            z_bad_modulus,
+            vector_A,
+            x,
+        )
+        @test Array(z_bad_modulus) == z_bad_modulus_before
+
+        elementwise_destination = GPUFiniteFieldMatrices.zeros(
+            T,
+            size(vector_A_data, 1),
+            size(vector_A_data, 2),
+            N,
+        )
+        scalar_destination = GPUFiniteFieldMatrices.zeros(
+            T,
+            size(vector_A_data, 1),
+            size(vector_A_data, 2),
+            N,
+        )
+        elementwise_before_reject = Array(elementwise_destination)
+        scalar_before_reject = Array(scalar_destination)
+        for invalid_override in (0, -1)
+            @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
+                C,
+                A,
+                B;
+                modulus_override = invalid_override,
+            )
+            @test Array(C) == matrix_before_reject
+            @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul(
+                A,
+                B;
+                modulus_override = invalid_override,
+            )
+            @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
+                z_reject,
+                vector_A,
+                x;
+                modulus_override = invalid_override,
+            )
+            @test Array(z_reject) == z_before_reject
+            @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul(
+                vector_A,
+                x;
+                modulus_override = invalid_override,
+            )
+            @test_throws ArgumentError LinearAlgebra.mul!(
+                z_reject,
+                vector_A,
+                x_bad_modulus;
+                modulus_override = invalid_override,
+            )
+            @test Array(z_reject) == z_before_reject
+            @test_throws ArgumentError elementwise_multiply!(
+                elementwise_destination,
+                vector_A,
+                vector_A;
+                modulus_override = invalid_override,
+            )
+            @test Array(elementwise_destination) == elementwise_before_reject
+            @test_throws ArgumentError GPUFiniteFieldMatrices.mul_elementwise!(
+                elementwise_destination,
+                vector_A,
+                vector_A;
+                modulus_override = invalid_override,
+            )
+            @test Array(elementwise_destination) == elementwise_before_reject
+            @test_throws ArgumentError LinearAlgebra.mul!(
+                scalar_destination,
+                vector_A,
+                2;
+                modulus_override = invalid_override,
+            )
+            @test Array(scalar_destination) == scalar_before_reject
+        end
+
+        for invalid_bound in (1, 0, -1)
+            @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
+                C,
+                A,
+                B;
+                input_bound = invalid_bound,
+            )
+            @test Array(C) == matrix_before_reject
+            @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul(
+                A,
+                B;
+                input_bound = invalid_bound,
+            )
+            @test_throws ArgumentError LinearAlgebra.mul!(
+                C,
+                A,
+                B;
+                input_bound = invalid_bound,
+            )
+            @test Array(C) == matrix_before_reject
+            @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
+                z_reject,
+                vector_A,
+                x;
+                input_bound = invalid_bound,
+            )
+            @test Array(z_reject) == z_before_reject
+            @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul(
+                vector_A,
+                x;
+                input_bound = invalid_bound,
+            )
+            @test_throws ArgumentError LinearAlgebra.mul!(
+                z_reject,
+                vector_A,
+                x;
+                input_bound = invalid_bound,
+            )
+            @test Array(z_reject) == z_before_reject
+        end
+
+        @test Array(A) == T.(A_data)
+        @test Array(B) == T.(B_data)
+        @test Array(vector_A) == vector_matrix_before_reject
+        @test Array(x) == vector_before_reject
     end
 
     # Exercise the computed Float32 stripe budget at the exclusive input bound.

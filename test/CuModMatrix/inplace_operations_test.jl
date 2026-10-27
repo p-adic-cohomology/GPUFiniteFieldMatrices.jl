@@ -228,15 +228,22 @@ function test_inplace_modulus_override()
 
     expected = mod.(A_data .* scalar, override_modulus)
     @test Array(C) == expected
+    @test C.N == modulus1
 
-    # Zero and negative overrides retain the stored-modulus fallback.
+    # Invalid overrides are errors for multiplication paths.
     for fallback_override in (0, -1)
         GPUFiniteFieldMatrices.add!(C, A, A; modulus_override = fallback_override)
         @test Array(C) == mod.(A_data .+ A_data, modulus1)
         @test C.N == modulus1
 
-        elementwise_multiply!(C, A, A; modulus_override = fallback_override)
-        @test Array(C) == mod.(A_data .* A_data, modulus1)
+        elementwise_before = Array(C)
+        @test_throws ArgumentError elementwise_multiply!(
+            C,
+            A,
+            A;
+            modulus_override = fallback_override,
+        )
+        @test Array(C) == elementwise_before
 
         scalar_add!(C, A, scalar; modulus_override = fallback_override)
         @test Array(C) == mod.(A_data .+ scalar, modulus1)
@@ -245,13 +252,14 @@ function test_inplace_modulus_override()
         @test Array(C) == zeros(eltype(A_data), size(A_data))
         @test C.N == modulus1
 
-        GPUFiniteFieldMatrices.mul_elementwise!(
+        direct_elementwise_before = Array(C)
+        @test_throws ArgumentError GPUFiniteFieldMatrices.mul_elementwise!(
             C,
             A,
             A;
             modulus_override = fallback_override,
         )
-        @test Array(C) == mod.(A_data .* A_data, modulus1)
+        @test Array(C) == direct_elementwise_before
 
         GPUFiniteFieldMatrices.scalar_sub!(
             C,
@@ -275,8 +283,9 @@ function test_inplace_modulus_override()
         GPUFiniteFieldMatrices.div!(C, A, 2; modulus_override = fallback_override)
         @test Array(C) == mod.(A_data .* invmod(2, modulus1), modulus1)
 
-        mul!(C, A, scalar; modulus_override = fallback_override)
-        @test Array(C) == mod.(A_data .* scalar, modulus1)
+        scalar_before = Array(C)
+        @test_throws ArgumentError mul!(C, A, scalar; modulus_override = fallback_override)
+        @test Array(C) == scalar_before
     end
 
     # Test matrix multiplication with modulus override
