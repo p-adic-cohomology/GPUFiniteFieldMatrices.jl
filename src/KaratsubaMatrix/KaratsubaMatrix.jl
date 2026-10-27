@@ -327,7 +327,7 @@ function KMatMul_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     targets = [C.data1.data, C.data2.data, B.plan.data]
     mats = [A.data1.data, A.plan.data, A.data2.data]
     vecs = [B.data1.data, B.plan.data, B.data2.data]
-    CUDA.CUBLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
+    _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
 
     # CUDA.CUBLAS.gemv!('N',one_ptr,A.data1.data,B.data1.data,zero_ptr,C.data1.data)
     # CUDA.CUBLAS.gemv!('N',one_ptr,A.plan.data,B.plan.data,zero_ptr,C.data2.data)

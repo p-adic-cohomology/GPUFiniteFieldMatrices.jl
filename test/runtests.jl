@@ -34,11 +34,17 @@ end
     Aqua.test_all(GPUFiniteFieldMatrices; stale_deps = false, deps_compat = false)
 end
 
+@testset "CUDA BLAS binding" begin
+    expected_blas_name = isdefined(CUDA, :cuBLAS) ? :cuBLAS : :CUBLAS
+    @test nameof(GPUFiniteFieldMatrices._CUDA_BLAS) == expected_blas_name
+end
+
 include("CuModMatrix/basic_operations_test.jl")
 include("CuModMatrix/inplace_operations_test.jl")
 include("CuModMatrix/matmul_operations_test.jl")
 include("CuModMatrix/benchmark_test.jl")
 include("CuModMatrix/stripe_mul_test.jl")
+include("CuModMatrix/cuda_blas_compat_test.jl")
 include("CuModMatrix/allocations_test.jl")
 include("CuModMatrix/timing_test.jl")
 include("CuModMatrix/de_rham_test.jl")
@@ -53,20 +59,36 @@ include("CuModMatrix/inverse/runtests.jl")
     @test check_all_explicit_imports_are_public(GPUFiniteFieldMatrices) === nothing
     @test check_no_self_qualified_accesses(GPUFiniteFieldMatrices) === nothing
 
-    # `CuRef` is owned by CUDACore but re-exported through CUDA's CUBLAS
-    # submodule; accessing it via CUBLAS is a re-export false positive.
-    @test check_all_qualified_accesses_via_owners(
-        GPUFiniteFieldMatrices;
-        ignore = (:CuRef,),
-    ) === nothing
+    @test check_all_qualified_accesses_via_owners(GPUFiniteFieldMatrices) === nothing
 
-    # The ignored names are non-public internals that the GPU code genuinely
-    # needs and for which there is no public alternative:
-    #   CHOLMOD                          – SparseArrays.CHOLMOD.Dense, used in a copyto! signature
-    #   CuRef, gemm!, gemv!, gemv_batched! – CUDA.CUBLAS low-level BLAS entry points
+    # The ignored names are non-public bindings required by supported APIs:
+    #   CHOLMOD                          – SparseArrays.CHOLMOD.Dense in a copyto! signature
+    #   gemm!, gemv!, gemv_batched!      – CUDA cuBLAS low-level BLAS entry points
+    #   @atomic, FAST_MATH, fill, math_mode, pin, rand, zeros
+    #                                    – CUDA 5.11.3 owns these names in CUDA
+    #                                      without public markers. CUDA 6 moves
+    #                                      @atomic, FAST_MATH, fill, math_mode,
+    #                                      pin, and zeros to CUDACore and marks
+    #                                      them public; CUDA 6 also publicly
+    #                                      forwards rand from cuRAND.
+    #                                      Keep the precise CUDA 5 names ignored
+    #                                      to preserve the supported 5.11 line.
+    # The separate owner check remains enabled for all of these accesses.
     @test check_all_qualified_accesses_are_public(
         GPUFiniteFieldMatrices;
-        ignore = (:CHOLMOD, :CuRef, :gemm!, :gemv!, :gemv_batched!),
+        ignore = (
+            :CHOLMOD,
+            :gemm!,
+            :gemv!,
+            :gemv_batched!,
+            Symbol("@atomic"),
+            :FAST_MATH,
+            :fill,
+            :math_mode,
+            :pin,
+            :rand,
+            :zeros,
+        ),
     ) === nothing
 end
 
@@ -93,6 +115,7 @@ if CUDA.functional()
         end
         @testset "Matrix Multiplication" begin
             test_matmul()
+            test_cuda_blas_compatibility()
             test_stripe_mul()
         end
         @testset "Allocations" begin

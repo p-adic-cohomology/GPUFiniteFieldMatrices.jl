@@ -6,10 +6,19 @@ using CUDA:
     CuArray,
     CuDeviceMatrix,
     CuDeviceVector,
+    CuRef,
     blockDim,
     blockIdx,
     gridDim,
     threadIdx
+
+# CUDA 6 uses cuBLAS while CUDA 5.11 exposes only CUBLAS, so select the available binding with getfield to avoid resolving CUDA 6's deprecated alias.
+@static if isdefined(CUDA, :cuBLAS)
+    const _CUDA_BLAS = CUDA.cuBLAS
+else
+    const _CUDA_BLAS = getfield(CUDA, :CUBLAS)
+end
+
 using LinearAlgebra: LinearAlgebra, I, mul!, rank
 using SparseArrays: SparseArrays
 using IterTools: IterTools
