@@ -162,19 +162,30 @@ Phase 2 issue `gfm-2x1`.
 
 Per-call reduction moduli use the `modulus_override` keyword, for example
 `elementwise_multiply!(C, A, B; modulus_override = 7)` or
-`LinearAlgebra.mul!(z, A, x; modulus_override = 7)`. For elementwise/scalar
-operations and direct matrix helpers, a positive override sets the reduction
-modulus; zero or a negative value falls back to the stored modulus. The
-non-mutating `mat_mul_gpu_type` helper and the in-place
-`mat_mul_type_inplace!` helper both default to `A.N`. Matrix-vector `mul!` requires a
-positive override when supplied. In-place operations leave the destination's
-stored modulus unchanged. For matrix multiplication, `input_bound` is the
-exclusive upper bound on nonnegative multiplicands, and
-`max_ops` is the maximum number of product contributions accumulated per
-output entry between reductions. For matrix-matrix `mul!`, supplying
-`input_bound` keeps the existing single-stripe execution route even when
-`max_ops` is also supplied; that route can accumulate the full inner dimension
-before reducing, even when it exceeds `max_ops`.
+`LinearAlgebra.mul!(z, A, x; modulus_override = 7)`. Qualified advanced matrix
+multiplication is available as
+`GPUFiniteFieldMatrices.stripe_mul(A, B; modulus_override = 7)` and
+`GPUFiniteFieldMatrices.stripe_mul!(C, A, B; modulus_override = 7)`; the same
+names support matrix-vector products. `*` and `LinearAlgebra.mul!` use this
+shared implementation. An allocating call stores the effective modulus on its
+result. A mutating call reduces with the effective modulus and leaves the
+destination's stored modulus unchanged. For the matrix allocating and mutating
+adapters, omitted, zero, and negative overrides use `A.N`; a positive override
+selects another reduction modulus. Matrix-vector `mul!` requires a positive
+override when supplied. Elementwise and scalar operations use a positive
+override for reduction and fall back to the destination's stored modulus for
+omitted, zero, or negative overrides.
+
+For stripe multiplication, `input_bound` promises that input entries are
+nonnegative and strictly below the bound. `max_ops` is the maximum number of
+product contributions accumulated per output entry between modular
+reductions. The safe chunk calculation includes the reduced prior accumulator
+and is independent of the working reduction modulus. Supplying `input_bound`
+to matrix-matrix `mul!` or `stripe_mul!` keeps the existing single-stripe route;
+the complete inner dimension must fit the exact-integer budget or the call
+throws `ArgumentError`. That route ignores `max_ops` after validating that a
+supplied value is positive. Matrix-vector calls use the bound to compute a safe
+default stripe size.
 
 ## License
 
