@@ -190,6 +190,48 @@
     @test stripe_budget < mod.find_max_stripe_ops(Float32, stripe_bound)
     @test BigInt(stripe_modulus - 1) + BigInt(stripe_budget) * BigInt(stripe_bound - 1)^2 <=
           BigInt(2)^24 - 1
+
+    # The product bound and reduction modulus both affect the exact budget.
+    # An explicit safe caller budget is retained, and a larger one is rejected.
+    stripe_input_bound = 2_048
+    stripe_reduction_modulus = 5_000_000
+    stripe_safe_budget = mod.find_max_stripe_ops(
+        Float32,
+        stripe_input_bound;
+        modulus = stripe_reduction_modulus,
+    )
+    @test stripe_safe_budget == 2
+    @test stripe_safe_budget < mod.find_max_stripe_ops(Float32, stripe_input_bound)
+    @test mod._stripe_safe_chunk(
+        Float32,
+        stripe_reduction_modulus,
+        stripe_input_bound,
+        nothing,
+    ) == stripe_safe_budget
+    @test mod._stripe_safe_chunk(
+        Float32,
+        stripe_reduction_modulus,
+        stripe_input_bound,
+        1,
+    ) == 1
+    @test_throws ArgumentError mod._stripe_safe_chunk(
+        Float32,
+        stripe_reduction_modulus,
+        stripe_input_bound,
+        stripe_safe_budget + 1,
+    )
+    @test_throws ArgumentError mod._stripe_safe_chunk(
+        Float32,
+        stripe_reduction_modulus,
+        stripe_input_bound,
+        big(2)^100,
+    )
+    stripe_default_modulus = 101
+    @test mod._stripe_safe_chunk(Float32, stripe_default_modulus, nothing, nothing) ==
+          mod.find_max_stripe_ops(Float32, stripe_default_modulus)
+    @test BigInt(stripe_reduction_modulus - 1) +
+          BigInt(stripe_safe_budget) * BigInt(stripe_input_bound - 1)^2 <= BigInt(2)^24 - 1
+
     @test mod._stripe_effective_modulus(101, nothing) == 101
     @test mod._stripe_effective_modulus(101, 7) == 7
     @test_throws ArgumentError mod._stripe_effective_modulus(101, 0)

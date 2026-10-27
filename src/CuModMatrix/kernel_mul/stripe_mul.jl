@@ -146,12 +146,16 @@ function _stripe_safe_chunk(::Type{T}, modulus, input_bound, max_ops) where {T}
             "cannot perform one exact product contribution for input bound $bound and modulus $modulus with $T",
         ),
     )
-    chunk = max_ops === nothing ? safe_ops : Int(max_ops)
-    chunk <= safe_ops || throw(
-        ArgumentError(
-            "max_ops=$chunk exceeds the exact stripe budget $safe_ops for input bound $bound and modulus $modulus",
-        ),
-    )
+    chunk = if max_ops === nothing
+        safe_ops
+    else
+        BigInt(max_ops) <= safe_ops || throw(
+            ArgumentError(
+                "max_ops=$max_ops exceeds the exact stripe budget $safe_ops for input bound $bound and modulus $modulus",
+            ),
+        )
+        Int(max_ops)
+    end
     return chunk
 end
 
@@ -331,9 +335,10 @@ Multiply matrices into `C` modulo the effective modulus. The destination's
 stored modulus is unchanged. A supplied `modulus_override` must be positive.
 `input_bound` promises that input entries are nonnegative and strictly below
 the given bound. `max_ops` limits product contributions per output entry
-between reductions. For compatibility, an explicit matrix `input_bound`
-selects one stripe; the entire inner dimension must fit the exact-integer
-budget or the call throws `ArgumentError`.
+between reductions. When omitted, `max_ops` is derived from the effective input
+bound and reduction modulus. A supplied safe `max_ops` is used as given, while
+an unsafe value throws `ArgumentError`. An explicit `input_bound` may therefore
+require multiple stripes when the inner dimension exceeds the safe budget.
 """
 function stripe_mul!(
     C::CuModMatrix,
@@ -361,14 +366,13 @@ function stripe_mul!(
         throw(ArgumentError("max_ops must be a positive integer"))
 
     bound = input_bound === nothing ? A.N : input_bound
-    raw_max_ops = input_bound === nothing ? max_ops : max(size(A, 2), 1)
     Cdata = _stripe_logical_data(C)
     Adata = _stripe_logical_data(A)
     Bdata = _stripe_logical_data(B)
-    _stripe_preflight(Cdata, Adata, Bdata, modulus, bound, raw_max_ops)
+    _stripe_preflight(Cdata, Adata, Bdata, modulus, bound, max_ops)
 
     fill!(C.data, zero(eltype(C.data)))
-    _stripe_mul!(Cdata, Adata, Bdata; modulus, input_bound = bound, max_ops = raw_max_ops)
+    _stripe_mul!(Cdata, Adata, Bdata; modulus, input_bound = bound, max_ops)
     return C
 end
 
