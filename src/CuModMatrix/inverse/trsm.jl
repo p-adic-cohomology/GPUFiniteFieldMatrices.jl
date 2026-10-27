@@ -269,7 +269,7 @@ Rows `k0:kend` are solved independently over columns `kend+1:n`.
 
 Example:
 ```julia
-pluq_trsm_left_lower_unit_gpu!(A.data, A.N, 1, 16, rows(A))
+pluq_trsm_left_lower_unit_gpu!(parent(A), modulus(A), 1, 16, rows(A))
 ```
 """
 function pluq_trsm_left_lower_unit_gpu!(
@@ -335,7 +335,7 @@ Columns `k0:kend` are solved forward over rows `kend+1:n`.
 
 Example:
 ```julia
-pluq_trsm_right_upper_gpu!(A.data, A.N, 1, 16, rows(A))
+pluq_trsm_right_upper_gpu!(parent(A), modulus(A), 1, 16, rows(A))
 ```
 """
 function pluq_trsm_right_upper_gpu!(

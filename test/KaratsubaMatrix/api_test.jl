@@ -6,6 +6,15 @@ function test_karatsuba_public_api_values()
         b_values = Float64[2 1; 0 3]
         a = mod.CuModMatrix{Float64}(a_values; modulus = modulus)
         b = mod.CuModMatrix{Float64}(b_values; modulus = modulus)
+        @test mod.modulus(a) == modulus
+        @test size(a) == size(a_values)
+        backing = CUDA.CuArray(zeros(Float64, 5, 6))
+        wrapped_backing =
+            mod.CuModMatrix{Float64}(backing; modulus = modulus, new_size = (2, 3))
+        @test Base.parent(wrapped_backing) === backing
+        @test size(wrapped_backing) == (2, 3)
+        @test size(Base.parent(wrapped_backing)) == (5, 6)
+        @test mod.modulus(wrapped_backing) == modulus
 
         explicit = mod.to_karatsuba(a; modulus = modulus)
         automatic = mod.to_karatsuba(a)
@@ -22,22 +31,33 @@ function test_karatsuba_public_api_values()
             mod.CuModMatrix{Float32}(different_source_values; modulus = modulus)
         typed_different_source =
             mod.to_karatsuba(Float64, different_source; modulus = modulus)
-        @test eltype(typed_different_source.data1) == Float64
-        @test typed_different_source.data1 isa mod.CuModMatrix{Float64}
-        @test typed_different_source.data1.data !== different_source.data
+        @test eltype(low_part(typed_different_source)) == Float64
+        @test low_part(typed_different_source) isa mod.CuModMatrix{Float64}
+        @test parent(low_part(typed_different_source)) !== parent(different_source)
         typed_different_roundtrip = mod.from_karatsuba(Float64, typed_different_source)
         @test eltype(typed_different_roundtrip) == Float64
         @test typed_different_roundtrip isa CUDA.CuArray{Float64,2}
         @test Array(typed_different_roundtrip) == Float64.(different_source_values)
 
+        gpu_low = CUDA.CuArray(Int64[1 0])
+        gpu_high = CUDA.CuArray(Int64[37 0])
         gpu_wrapped = mod.KaratsubaMatrix(
-            CUDA.CuArray(Int64[1 0]),
-            CUDA.CuArray(Int64[37 0]);
+            gpu_low,
+            gpu_high;
             low_modulus = 2,
             high_modulus = 7,
             modulus = 19,
         )
-        gpu_reconstructed = mod.from_karatsuba(Int64, gpu_wrapped)
+        @test mod.low_part(gpu_wrapped) === gpu_low
+        @test mod.high_part(gpu_wrapped) === gpu_high
+        @test (
+            mod.low_modulus(gpu_wrapped),
+            mod.high_modulus(gpu_wrapped),
+            mod.modulus(gpu_wrapped),
+        ) == (2, 7, 19)
+        @test (@inferred mod.initialize_plan!(gpu_wrapped)) === gpu_wrapped
+        @test gpu_wrapped.plan isa CUDA.CuArray{Int64,2}
+        gpu_reconstructed = @inferred mod.from_karatsuba(Int64, gpu_wrapped)
         @test gpu_reconstructed isa CUDA.CuArray{Int64,2}
         @test Array(gpu_reconstructed) == Int64[75 0]
 
@@ -105,7 +125,9 @@ function test_karatsuba_public_api_values()
             high_modulus = modulus,
             modulus = modulus^2,
         )
-        foreach(mod.initialize_plan!, (ak, bk, ck))
+        @test (@inferred mod.initialize_plan!(ak)) === ak
+        foreach(mod.initialize_plan!, (bk, ck))
+        @test ak.plan isa mod.CuModMatrix{Float64}
 
         ak_copy = copy(ak)
         @test ak_copy.plan !== nothing

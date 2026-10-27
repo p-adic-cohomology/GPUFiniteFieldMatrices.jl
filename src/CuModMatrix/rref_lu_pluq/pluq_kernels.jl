@@ -64,19 +64,19 @@ function pluq_gpu_kernel(A::CuModMatrix; debug::Bool = false)
     end
 
     # NVTX.@range "Init PLUQ d_A, d_L, Perm_rows, Perm_cols" begin
-    N = A.N
+    N = modulus(A)
 
-    A_padded_rows = size(A.data, 1)
-    A_padded_cols = size(A.data, 2)
+    A_padded_rows = size(parent(A), 1)
+    A_padded_cols = size(parent(A), 2)
 
-    d_A = copy(A.data)
-    d_L = CUDA.zeros(eltype(A.data), (A_padded_rows, A_padded_rows))
+    d_A = copy(parent(A))
+    d_L = CUDA.zeros(eltype(parent(A)), (A_padded_rows, A_padded_rows))
 
     Perm_rows = Array{Tuple{Int,Int}}(undef, 0)
     Perm_cols = Array{Tuple{Int,Int}}(undef, 0)
     # end
 
-    rows, cols = size(A.data)
+    rows, cols = size(parent(A))
     rows -= TILE_WIDTH
     cols -= TILE_WIDTH
 

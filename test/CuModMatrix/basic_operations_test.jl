@@ -72,7 +72,7 @@ function test_basic_operations()
 
     # Element-wise multiplication
     F = GPUFiniteFieldMatrices.zeros(
-        GPUFiniteFieldMatrices.CuModMatrix{eltype(A.data)},
+        GPUFiniteFieldMatrices.CuModMatrix{eltype(parent(A))},
         size(A, 1),
         size(A, 2);
         modulus = modulus,
@@ -247,12 +247,12 @@ function test_modulus_functions()
     println()
 
     # Check properties and values
-    @test B.N == modulus2
+    @test GPUFiniteFieldMatrices.modulus(B) == modulus2
     @test size(B) == size(A)
     @test Array(B) == mod.(A_data, modulus2)
 
     # Test that A is unchanged
-    @test A.N == modulus1
+    @test GPUFiniteFieldMatrices.modulus(A) == modulus1
 
     # Test change_modulus! (in-place)
     C = CuModMatrix(A_data; modulus = modulus1)
@@ -265,7 +265,7 @@ function test_modulus_functions()
     println()
 
     # Check properties and values
-    @test Cprime.N == modulus2
+    @test GPUFiniteFieldMatrices.modulus(Cprime) == modulus2
     @test Array(C) == mod.(A_data, modulus2)
 
     println("All modulus-changing function tests passed!")

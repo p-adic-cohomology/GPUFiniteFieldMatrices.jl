@@ -36,6 +36,10 @@ end
 A matrix over a finite field mod N, implemented using CuArray. The internal representation
 pads to multiples of TILE_WIDTH (32) for efficient GPU computation.
 
+Use `modulus(A)` for the modulus, `size(A)` for the logical dimensions, and
+`parent(A)` for the padded GPU storage. The `data`, `size`, and `N` fields are
+internal implementation details.
+
 Note matrices over the permitted size for efficient matmul may be created, but matmul 
 will throw an exception if these matrices are multiplied.
 """
@@ -137,6 +141,17 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
         end
     end
 end
+
+"""Return the modulus associated with `A`."""
+modulus(A::CuModArray) = getfield(A, :N)
+
+"""
+    parent(A::CuModArray)
+
+Return the padded GPU storage backing `A`. Its dimensions can exceed `size(A)`;
+`size(A)` continues to report the logical, unpadded dimensions.
+"""
+Base.parent(A::CuModArray) = getfield(A, :data)
 
 """
     CuModArray(A::AbstractArray; modulus)
@@ -290,29 +305,29 @@ Base.length(A::CuModArray{T,1}) where {T} = size(A)[1]
 Base.length(A::CuModArray{T,2}) where {T} = rows(A)*cols(A)
 Base.length(A::CuModArray) = prod(size(A))
 
-Base.eltype(A::CuModArray) = eltype(A.data)
+Base.eltype(A::CuModArray) = eltype(parent(A))
 
 # User needs to do CUDA.@allowscalar to use these
 #
 # Also, 3D indexing is currently not supported because we have no
 # use cases.
-Base.getindex(A::CuModArray, i::Int) = A.data[i]
-Base.getindex(A::CuModArray, i::Int, j::Int) = A.data[i, j]
+Base.getindex(A::CuModArray, i::Int) = parent(A)[i]
+Base.getindex(A::CuModArray, i::Int, j::Int) = parent(A)[i, j]
 
-Base.setindex!(A::CuModArray, v, i::Int, j::Int) = A.data[i, j] = mod(v, A.N)
-Base.setindex!(A::CuModArray, v, i::Int) = A.data[i] = mod(v, A.N)
+Base.setindex!(A::CuModArray, v, i::Int, j::Int) = parent(A)[i, j] = mod(v, modulus(A))
+Base.setindex!(A::CuModArray, v, i::Int) = parent(A)[i] = mod(v, modulus(A))
 
 Base.getindex(A::CuModArray, I::AbstractArray{Int}, J::AbstractArray{Int}) =
-    CuModArray(Array(A.data[I, J]); modulus = A.N)
+    CuModArray(Array(parent(A)[I, J]); modulus = modulus(A))
 Base.getindex(A::CuModArray, I::AbstractArray{Int}, j::Int) =
-    CuModArray(reshape(Array(A.data[I, j]), length(I), 1); modulus = A.N)
+    CuModArray(reshape(Array(parent(A)[I, j]), length(I), 1); modulus = modulus(A))
 Base.getindex(A::CuModArray, i::Int, J::AbstractArray{Int}) =
-    CuModArray(reshape(Array(A.data[i, J]), 1, length(J)); modulus = A.N)
+    CuModArray(reshape(Array(parent(A)[i, J]), 1, length(J)); modulus = modulus(A))
 
 # Convert back to CPU array, with padding
 # Unsafe because there is no guarantee that the padding is zero
 function unsafe_Array(A::CuModArray)
-    Array(A.data)
+    Array(parent(A))
 end
 
 # Convert back to CPU array, without padding
@@ -320,47 +335,47 @@ function Base.Array(A::CuModArray)
 
     rangesize = map(x -> 1:x, size(A))
     inds = CartesianIndices(rangesize)
-    Array(A.data)[inds]
+    Array(parent(A))[inds]
 end
 
 # Display function
 function Base.show(io::IO, A::CuModArray)
-    println("$(join(string.(size(A)),"×")) CuModArray modulo $(A.N):")
+    println("$(join(string.(size(A)),"×")) CuModArray modulo $(modulus(A)):")
 
     # Note this does not display the padding
     println(Array(A))
 end
 
 function Base.show(io::IO, ::MIME"text/plain", A::CuModArray)
-    println("$(join(string.(size(A)),"×")) CuModArray modulo $(A.N):")
+    println("$(join(string.(size(A)),"×")) CuModArray modulo $(modulus(A)):")
     # Base.println_matrix(Array(A))
     remove_first_line(s) = join(split(s, "\n")[2:end], "\n")
     println(remove_first_line(repr("text/plain", Array(A))))
 end
 
 function Base.show(io::IO, A::CuModVector)
-    println("$(join(string.(size(A)),"×")) CuModVector modulo $(A.N):")
+    println("$(join(string.(size(A)),"×")) CuModVector modulo $(modulus(A)):")
 
     # Note this does not display the padding
     println(Array(A))
 end
 
 function Base.show(io::IO, ::MIME"text/plain", A::CuModVector)
-    println("$(join(string.(size(A)),"×")) CuModVector modulo $(A.N):")
+    println("$(join(string.(size(A)),"×")) CuModVector modulo $(modulus(A)):")
     # Base.println_matrix(Array(A))
     remove_first_line(s) = join(split(s, "\n")[2:end], "\n")
     println(remove_first_line(repr("text/plain", Array(A))))
 end
 
 function Base.show(io::IO, A::CuModMatrix)
-    println("$(join(string.(size(A)),"×")) CuModMatrix modulo $(A.N):")
+    println("$(join(string.(size(A)),"×")) CuModMatrix modulo $(modulus(A)):")
 
     # Note this does not display the padding
     println(Array(A))
 end
 
 function Base.show(io::IO, ::MIME"text/plain", A::CuModMatrix)
-    println("$(join(string.(size(A)),"×")) CuModMatrix modulo $(A.N):")
+    println("$(join(string.(size(A)),"×")) CuModMatrix modulo $(modulus(A)):")
     # Base.println_matrix(Array(A))
     remove_first_line(s) = join(split(s, "\n")[2:end], "\n")
     println(remove_first_line(repr("text/plain", Array(A))))
@@ -373,8 +388,8 @@ function Base.:^(A::CuModMatrix, n::Integer)
     end
 
     if n == 0
-        I_mat = Matrix{eltype(A.data)}(I, rows(A), cols(A))
-        return CuModMatrix(I_mat; modulus = A.N)
+        I_mat = Matrix{eltype(parent(A))}(I, rows(A), cols(A))
+        return CuModMatrix(I_mat; modulus = modulus(A))
     elseif n < 0
         return inv(A)^(-n)
     else
@@ -390,7 +405,7 @@ function Base.:^(A::CuModMatrix, n::Integer)
 end
 
 function Base.transpose(A::CuModMatrix)
-    return CuModMatrix(transpose(A.data); modulus = A.N, new_size = size(A))
+    return CuModMatrix(transpose(parent(A)); modulus = modulus(A), new_size = size(A))
 end
 
 function _setup_PLUQ(A::CuModMatrix)
@@ -518,7 +533,7 @@ end
 
 Creates a random vector or matrix in the finite field modulo `modulus`.
 """
-function Random.rand(::Type{CuModArray{T,1}}, length::Integer; modulus::Int) where {T}
+function Base.rand(::Type{CuModArray{T,1}}, length::Integer; modulus::Int) where {T}
     padded_entries = cld(length, TILE_WIDTH) * TILE_WIDTH
     data = CUDA.rand(T, padded_entries)
     if T <: AbstractFloat
@@ -528,7 +543,7 @@ function Random.rand(::Type{CuModArray{T,1}}, length::Integer; modulus::Int) whe
     return CuModArray{T,1}(data; modulus = modulus, mod = false, new_size = (length,))
 end
 
-function Random.rand(
+function Base.rand(
     ::Type{CuModArray{T,2}},
     rows::Integer,
     cols::Integer;
@@ -548,7 +563,7 @@ end
     elementwise_multiply!(C, A, B; modulus_override = nothing)
 
 In-place element-wise multiplication: C = A .* B mod N. No allocation is performed.
-Only a positive `modulus_override` replaces `C.N` for the reduction modulus.
+Only a positive `modulus_override` replaces `modulus(C)` for the reduction modulus.
 A zero or negative value throws `ArgumentError`. The stored modulus on `C` is unchanged.
 """
 function elementwise_multiply!(
@@ -559,9 +574,10 @@ function elementwise_multiply!(
     modulus_override::Union{Nothing,Integer} = nothing,
 )
     _validate_positive_modulus_override(modulus_override)
-    N = modulus_override === nothing ? C.N : modulus_override
+    N = modulus_override === nothing ? modulus(C) : modulus_override
 
-    if modulus_override === nothing && (A.N != B.N || A.N != C.N)
+    if modulus_override === nothing &&
+       (modulus(A) != modulus(B) || modulus(A) != modulus(C))
         throw(
             CuModArrayModulusMismatchException(
                 "All matrices must have the same modulus N or provide a modulus_override",
@@ -580,17 +596,19 @@ end
     neg!(B, A; modulus_override = nothing)
 
 In-place negation: B = -A mod N. No allocation is performed.
-Only a positive `modulus_override` replaces `B.N` for the reduction modulus.
-Zero or a negative value uses `B.N`. The stored modulus on `B` is unchanged.
+Only a positive `modulus_override` replaces `modulus(B)` for the reduction modulus.
+Zero or a negative value uses `modulus(B)`. The stored modulus on `B` is unchanged.
 """
 function neg!(
     B::CuModArray,
     A::CuModArray;
     modulus_override::Union{Nothing,Integer} = nothing,
 )
-    N = modulus_override === nothing || modulus_override <= 0 ? B.N : modulus_override
+    N =
+        modulus_override === nothing || modulus_override <= 0 ? modulus(B) :
+        modulus_override
 
-    if (modulus_override === nothing || modulus_override <= 0) && A.N != B.N
+    if (modulus_override === nothing || modulus_override <= 0) && modulus(A) != modulus(B)
         throw(
             CuModArrayModulusMismatchException(
                 "Both matrices must have the same modulus N or provide a modulus_override",
@@ -646,11 +664,11 @@ function Base.copy!(B::CuModArray, A::CuModArray)
     end
 
     threads = TILE_WIDTH
-    blocks = length(A.data) ÷ TILE_WIDTH
+    blocks = length(parent(A)) ÷ TILE_WIDTH
 
-    @cuda threads=threads blocks=blocks dumb_copy_kernel!(B.data, A.data)
+    @cuda threads=threads blocks=blocks dumb_copy_kernel!(parent(B), parent(A))
 
-    # CUDA.copy!(B.data, A.data)
+    # CUDA.copy!(parent(B), parent(A))
 
     return B
 end
@@ -673,7 +691,7 @@ function Base.copyto!(dest::CuModArray{T,D}, src::DenseArray{T,D}) where {T,D}
     inds = CartesianIndices(src)
 
     #dataview = @view dest[data_inds]
-    copyto!(dest.data, inds, src, inds)
+    copyto!(parent(dest), inds, src, inds)
     return dest
 end
 
@@ -691,9 +709,9 @@ end
 fills (in place) A with the value s (mod N)
 """
 function Base.fill!(A::CuModArray, s::Number)
-    smod = mod(s, A.N)
+    smod = mod(s, modulus(A))
 
-    @. A.data = smod
+    fill!(parent(A), smod)
 end
 
 """
@@ -702,23 +720,25 @@ end
 Sets all of the entries of A to zero, in place.
 
 """
-zero!(A::CuModArray) = fill!(A.data, zero(eltype(A.data)))
+zero!(A::CuModArray) = fill!(parent(A), zero(eltype(parent(A))))
 
 """
     mod_elements!(A; modulus_override = nothing)
 
 Apply modulus to all elements of A in-place.
-Only a positive `modulus_override` replaces `A.N` for the reduction modulus.
-Zero or a negative value uses `A.N`. The stored modulus on `A` is unchanged.
+Only a positive `modulus_override` replaces `modulus(A)` for the reduction modulus.
+Zero or a negative value uses `modulus(A)`. The stored modulus on `A` is unchanged.
 """
 function mod_elements!(A::CuModArray; modulus_override::Union{Nothing,Integer} = nothing)
-    N = modulus_override === nothing || modulus_override <= 0 ? A.N : modulus_override
-    mod!(A.data, A.data, N)
+    N =
+        modulus_override === nothing || modulus_override <= 0 ? modulus(A) :
+        modulus_override
+    mod!(parent(A), parent(A), N)
     return A
 end
 
 function trunc_elements!(A::CuModArray)
-    @. A.data = trunc(A.data)
+    parent(A) .= trunc.(parent(A))
     return A
 end
 
@@ -730,21 +750,21 @@ Creates a new CuModArray with the same values as A but with a different modulus.
 All elements are reduced modulo new_N.
 """
 function change_modulus(A::CuModArray, new_N::Integer)
-    (dataRows, dataCols) = size(A.data)
+    (dataRows, dataCols) = size(parent(A))
     result = zeros(
-        CuModMatrix{eltype(A.data)},
+        CuModMatrix{eltype(parent(A))},
         dataRows - TILE_WIDTH,
         dataCols - TILE_WIDTH;
         modulus = Int(new_N),
     )
 
-    if new_N < A.N
-        mod!(result.data, A.data, new_N)
+    if new_N < modulus(A)
+        mod!(parent(result), parent(A), new_N)
     else
-        @. result.data = A.data
+        copyto!(parent(result), parent(A))
     end
 
-    return CuModArray(result.data; modulus = Int(new_N), new_size = size(A))
+    return CuModArray(parent(result); modulus = Int(new_N), new_size = size(A))
 end
 
 """
@@ -758,18 +778,18 @@ All elements are reduced modulo new_N.
 #
 #This will allocate a litte bit the way the constructor is written right now.
 function change_modulus_no_alloc!(A::CuModArray, new_N::Integer)
-    if new_N < A.N
-        @. A.data = mod(A.data, new_N)
-        mod!(A.data, A.data, new_N)
+    if new_N < modulus(A)
+        parent(A) .= mod.(parent(A), new_N)
+        mod!(parent(A), parent(A), new_N)
     end
 
-    return CuModArray(A.data; modulus = Int(new_N), new_size = size(A))
+    return CuModArray(parent(A); modulus = Int(new_N), new_size = size(A))
 end
 
 """
     mul!(C, A, B; max_ops=nothing, input_bound=nothing)
 
-In-place matrix multiplication: `C = A * B mod C.N`. `input_bound` is the
+In-place matrix multiplication: `C = A * B mod modulus(C)`. `input_bound` is the
 exclusive upper bound on nonnegative multiplicands. When supplied, it keeps
 the existing single-stripe route, including when `max_ops` is also supplied.
 The full inner dimension must fit the exact-integer accumulation budget; an
@@ -785,7 +805,7 @@ function LinearAlgebra.mul!(
     input_bound = nothing,
 )
 
-    if (A.N != B.N || A.N != C.N)
+    if (modulus(A) != modulus(B) || modulus(A) != modulus(C))
         throw(
             CuModArrayModulusMismatchException("All matrices must have the same modulus N"),
         )
@@ -811,7 +831,7 @@ end
 In-place matrix-vector multiplication: `z = A * x`. `input_bound` is the
 exclusive upper bound on nonnegative multiplicands and controls the default
 `max_ops`. A supplied `modulus_override` must be positive and sets the per-call
-reduction modulus; when omitted, `z.N` is used and its stored modulus is
+reduction modulus; when omitted, `modulus(z)` is used and its stored modulus is
 unchanged.
 """
 function LinearAlgebra.mul!(
@@ -823,7 +843,10 @@ function LinearAlgebra.mul!(
 )
 
     _validate_positive_modulus_override(modulus_override)
-    if (A.N != x.N || (modulus_override === nothing && A.N != z.N))
+    if (
+        modulus(A) != modulus(x) ||
+        (modulus_override === nothing && modulus(A) != modulus(z))
+    )
         throw(
             CuModArrayModulusMismatchException("All matrices must have the same modulus N"),
         )
@@ -849,7 +872,12 @@ end
 Copy the data and metadata into a new CuModArray.
 """
 function Base.copy(A::CuModArray{T,D}) where {T,D}
-    B = CuModArray{T,D}(copy(A.data); modulus = A.N, mod = false, new_size = size(A))
+    B = CuModArray{T,D}(
+        copy(parent(A));
+        modulus = modulus(A),
+        mod = false,
+        new_size = size(A),
+    )
 end
 
 #TODO: addmul! (add and scalar multiply), gemv!, gemm!

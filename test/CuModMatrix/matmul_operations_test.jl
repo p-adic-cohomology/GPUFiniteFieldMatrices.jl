@@ -65,7 +65,7 @@ function test_matmul_operations()
     println(B_data)
     println(expected_C_mod)
     @test Array(C_mod) ≈ expected_C_mod
-    @test C_mod.N == override_modulus
+    @test GPUFiniteFieldMatrices.modulus(C_mod) == override_modulus
 
     # Force the exact modular GEMM to split its inner dimension.  A single
     # Float32 dot product of this length can exceed the exactly represented
@@ -97,7 +97,7 @@ function test_inplace_matmul_operations()
         2;
         modulus = 9,
     )
-    C_data = C.data
+    C_data = parent(C)
     modulus = 9  # Prime modulus
 
     A = CuModMatrix(A_data; modulus = modulus)
@@ -147,9 +147,9 @@ function test_inplace_matmul_operations()
     # see previous TODO
     expected_C2 = mod.(A_data * B_data, override_modulus)
     @test Array(C2) ≈ expected_C2
-    @test C2.N == modulus
+    @test GPUFiniteFieldMatrices.modulus(C2) == modulus
 
-    # Without an override, preserve the prior A.N reduction default while
+    # Without an override, preserve the prior GPUFiniteFieldMatrices.modulus(A) reduction default while
     # leaving the destination's stored metadata unchanged.
     default_modulus = 5
     C_default = GPUFiniteFieldMatrices.zeros(
@@ -163,7 +163,7 @@ function test_inplace_matmul_operations()
     B_values = mod.(B_data, modulus)
     expected_default = mod.(A_values * B_values, modulus)
     @test Array(C_default) ≈ expected_default
-    @test C_default.N == default_modulus
+    @test GPUFiniteFieldMatrices.modulus(C_default) == default_modulus
 
     for invalid_override in (0, -1)
         C_invalid = GPUFiniteFieldMatrices.zeros(
@@ -172,7 +172,7 @@ function test_inplace_matmul_operations()
             2;
             modulus = default_modulus,
         )
-        C_invalid.data[1:2, 1:2] .= 7
+        parent(C_invalid)[1:2, 1:2] .= 7
         C_invalid_before = Array(C_invalid)
         @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
             C_invalid,

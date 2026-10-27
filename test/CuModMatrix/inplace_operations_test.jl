@@ -26,12 +26,12 @@ function test_inplace_basic_operations()
     A_other_modulus = GPUFiniteFieldMatrices.similar_with_modulus(A, 7)
     @test size(A_other_modulus) == size(A)
     @test eltype(A_other_modulus) == eltype(A)
-    @test A_other_modulus.N == 7
+    @test GPUFiniteFieldMatrices.modulus(A_other_modulus) == 7
     @test Array(A) == original_A
 
     # Base.copy preserves metadata and owns independent device storage.
     A_copy = copy(A)
-    @test A_copy.N == A.N
+    @test GPUFiniteFieldMatrices.modulus(A_copy) == GPUFiniteFieldMatrices.modulus(A)
     @test size(A_copy) == size(A)
     @test eltype(A_copy) == eltype(A)
     GPUFiniteFieldMatrices.neg!(A_copy, A_copy)
@@ -211,7 +211,7 @@ function test_inplace_modulus_override()
 
     expected = mod.(A_data .* A_data, override_modulus)
     @test Array(C) == expected
-    @test C.N == modulus1
+    @test GPUFiniteFieldMatrices.modulus(C) == modulus1
 
     scalar = 3
 
@@ -253,13 +253,13 @@ function test_inplace_modulus_override()
 
     expected = mod.(A_data .* scalar, override_modulus)
     @test Array(C) == expected
-    @test C.N == modulus1
+    @test GPUFiniteFieldMatrices.modulus(C) == modulus1
 
     # Invalid overrides are errors for multiplication paths.
     for fallback_override in (0, -1)
         GPUFiniteFieldMatrices.add!(C, A, A; modulus_override = fallback_override)
         @test Array(C) == mod.(A_data .+ A_data, modulus1)
-        @test C.N == modulus1
+        @test GPUFiniteFieldMatrices.modulus(C) == modulus1
 
         elementwise_before = Array(C)
         @test_throws ArgumentError elementwise_multiply!(
@@ -275,7 +275,7 @@ function test_inplace_modulus_override()
 
         GPUFiniteFieldMatrices.sub!(C, A, A; modulus_override = fallback_override)
         @test Array(C) == zeros(eltype(A_data), size(A_data))
-        @test C.N == modulus1
+        @test GPUFiniteFieldMatrices.modulus(C) == modulus1
 
         direct_elementwise_before = Array(C)
         @test_throws ArgumentError GPUFiniteFieldMatrices.mul_elementwise!(
@@ -376,7 +376,7 @@ function test_inplace_copy_and_mod()
         copyto!(F, Float32.(A_data .* 2))
         mod_elements!(F; modulus_override = fallback_override)
         @test Array(F) == mod.(A_data .* 2, modulus)
-        @test F.N == modulus
+        @test GPUFiniteFieldMatrices.modulus(F) == modulus
     end
 
     # Test filling (and modding)

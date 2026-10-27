@@ -12,6 +12,11 @@
         :KaratsubaVector,
         :to_karatsuba,
         :from_karatsuba,
+        :modulus,
+        :low_modulus,
+        :high_modulus,
+        :low_part,
+        :high_part,
         :PLUQOptions,
         :PLUQ,
         :pluq,
@@ -269,9 +274,9 @@
     )
     Kcopy = copy(K)
     @test Kcopy !== K
-    @test Kcopy.data1 == K.data1
-    @test Kcopy.data2 == K.data2
-    @test Kcopy.data1 !== K.data1
+    @test low_part(Kcopy) == low_part(K)
+    @test high_part(Kcopy) == high_part(K)
+    @test low_part(Kcopy) !== low_part(K)
 
     # Characterize the documented legacy changed-M behavior; this does not
     # assert metadata preservation or repair Base.copy.
@@ -287,19 +292,20 @@
         modulus = 3,
     )
     legacy_copy = copy(legacy_source)
-    @test legacy_copy.M == 9
-    @test legacy_copy.M != legacy_source.M
-    @test legacy_source.M == 3
-    @test legacy_source.data1 == expected_legacy_data1
-    @test legacy_source.data2 == expected_legacy_data2
-    @test legacy_copy.data1 == expected_legacy_data1
-    @test legacy_copy.data2 == expected_legacy_data2
-    @test legacy_copy.data1 !== legacy_source.data1
-    @test legacy_copy.data2 !== legacy_source.data2
-    legacy_source.data1[1, 1] = -1
-    legacy_source.data2[1, 1] = -1
-    @test legacy_copy.data1 == expected_legacy_data1
-    @test legacy_copy.data2 == expected_legacy_data2
+    @test GPUFiniteFieldMatrices.modulus(legacy_copy) == 9
+    @test GPUFiniteFieldMatrices.modulus(legacy_copy) !=
+          GPUFiniteFieldMatrices.modulus(legacy_source)
+    @test GPUFiniteFieldMatrices.modulus(legacy_source) == 3
+    @test low_part(legacy_source) == expected_legacy_data1
+    @test high_part(legacy_source) == expected_legacy_data2
+    @test low_part(legacy_copy) == expected_legacy_data1
+    @test high_part(legacy_copy) == expected_legacy_data2
+    @test low_part(legacy_copy) !== low_part(legacy_source)
+    @test high_part(legacy_copy) !== high_part(legacy_source)
+    low_part(legacy_source)[1, 1] = -1
+    high_part(legacy_source)[1, 1] = -1
+    @test low_part(legacy_copy) == expected_legacy_data1
+    @test high_part(legacy_copy) == expected_legacy_data2
 
     # The explicit mul! checks run before CUDA work and can be checked on CPU.
     assert_guard_error_message = function (operation, expected_message)
@@ -383,25 +389,50 @@ end
     @test :modulus in
           Base.kwarg_decl(which(mod.rand, Tuple{Type{mod.CuModVector{Int}},Int}))
     @test !isdefined(mod, :eye)
+    @test all(
+        name in names(mod) for
+        name in (:modulus, :low_modulus, :high_modulus, :low_part, :high_part)
+    )
 
     low = [1 2; 0 1]
     high = [3 4; 5 6]
     wrapped =
         mod.KaratsubaMatrix(low, high; low_modulus = 2, high_modulus = 7, modulus = 19)
-    @test wrapped.data1 === low
-    @test wrapped.data2 === high
-    @test (wrapped.N1, wrapped.N2, wrapped.M) == (2, 7, 19)
+    @test low_part(wrapped) === low
+    @test high_part(wrapped) === high
+    @test (
+        low_modulus(wrapped),
+        high_modulus(wrapped),
+        GPUFiniteFieldMatrices.modulus(wrapped),
+    ) == (2, 7, 19)
+    @test isconcretetype(typeof(wrapped))
+    @test typeof(wrapped).parameters[3] === typeof(low)
+    @test typeof(wrapped).parameters[4] === typeof(low)
+    @test fieldtype(typeof(wrapped), :data1) === Matrix{Int}
+    @test fieldtype(typeof(wrapped), :data2) === Matrix{Int}
+    @test fieldtype(typeof(wrapped), :plan) === Union{Nothing,Matrix{Int}}
+    @test fieldtype(typeof(wrapped), :N1) === Int
+    @test fieldtype(typeof(wrapped), :N2) === Int
+    @test fieldtype(typeof(wrapped), :M) === Int
     @test mod.from_karatsuba(Int, wrapped) == low + 2 .* high
     shorthand = mod.KaratsubaMatrix(low, high; modulus = 19)
-    @test (shorthand.N1, shorthand.N2, shorthand.M) == (19, 19, 19)
+    @test (
+        low_modulus(shorthand),
+        high_modulus(shorthand),
+        GPUFiniteFieldMatrices.modulus(shorthand),
+    ) == (19, 19, 19)
     inferred = mod.KaratsubaVector(Int[1, 2], Int[0, 1])
-    @test (inferred.N1, inferred.N2, inferred.M) == (
+    @test (
+        low_modulus(inferred),
+        high_modulus(inferred),
+        GPUFiniteFieldMatrices.modulus(inferred),
+    ) == (
         mod.find_max_ops_karatsuba(Int, 2),
         mod.find_max_ops_karatsuba(Int, 2),
         mod.find_max_ops_karatsuba(Int, 2),
     )
     auto_split = mod.to_karatsuba(Float64, Float64[1 2; 3 4])
-    @test auto_split.M < 2^51
+    @test GPUFiniteFieldMatrices.modulus(auto_split) < 2^51
     @test mod.from_karatsuba(Float64, auto_split) == Float64[1 2; 3 4]
 
     wide_source = reshape(Int128[Int128(2)^100+17, Int128(2)^99+3], 1, 2)
@@ -412,8 +443,8 @@ end
         high_modulus = 2^50,
         modulus = 19,
     )
-    @test wide_split.data1 isa Matrix{Int64}
-    @test wide_split.data2 isa Matrix{Int64}
+    @test low_part(wide_split) isa Matrix{Int64}
+    @test high_part(wide_split) isa Matrix{Int64}
     @test mod.from_karatsuba(Int128, wide_split) == wide_source
     @test_throws InexactError mod.from_karatsuba(Float64, wide_split)
 
@@ -424,8 +455,8 @@ end
         high_modulus = 2^20,
         modulus = 97,
     )
-    @test typed_float_split.data1 isa Vector{Float32}
-    @test typed_float_split.data2 isa Vector{Float32}
+    @test low_part(typed_float_split) isa Vector{Float32}
+    @test high_part(typed_float_split) isa Vector{Float32}
     @test mod.from_karatsuba(Int128, typed_float_split) == Int128[2^60+123]
     @test_throws InexactError mod.from_karatsuba(Float32, typed_float_split)
     @test_throws InexactError mod.to_karatsuba(
@@ -437,38 +468,230 @@ end
     )
 
     zero_matrix = Base.zeros(
-        mod.KaratsubaMatrix{Float32},
+        mod.KaratsubaMatrix{Float32,Matrix{Float32}},
         2,
         3;
         low_modulus = 3,
         high_modulus = 5,
         modulus = 19,
-        use_gpu = false,
     )
     zero_vector = Base.zeros(
-        mod.KaratsubaVector{Float32},
+        mod.KaratsubaVector{Float32,Vector{Float32}},
         4;
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 19,
+    )
+    @test typeof(zero_matrix) ===
+          mod.KaratsubaMatrix{Float32,Matrix{Float32},Matrix{Float32}}
+    @test typeof(zero_vector) ===
+          mod.KaratsubaVector{Float32,Vector{Float32},Vector{Float32}}
+    @test zero_matrix.plan === nothing
+    @test zero_vector.plan === nothing
+    @test low_part(zero_matrix) isa Matrix{Float32}
+    @test high_part(zero_matrix) isa Matrix{Float32}
+    @test low_part(zero_vector) isa Vector{Float32}
+    @test mod.from_karatsuba(Float32, zero_matrix) == zeros(Float32, 2, 3)
+    @test mod.from_karatsuba(Float32, zero_vector) == zeros(Float32, 4)
+    @test (
+        low_modulus(zero_matrix),
+        high_modulus(zero_matrix),
+        GPUFiniteFieldMatrices.modulus(zero_matrix),
+    ) == (3, 5, 19)
+    zero_shorthand = Base.zeros(mod.KaratsubaVector{Int,Vector{Int}}, 3; modulus = 17)
+    @test (
+        low_modulus(zero_shorthand),
+        high_modulus(zero_shorthand),
+        GPUFiniteFieldMatrices.modulus(zero_shorthand),
+    ) == (17, 17, 17)
+    @test_throws ArgumentError Base.zeros(mod.KaratsubaVector{Int,Vector{Int}}, 3)
+    @test_throws ArgumentError Base.zeros(
+        mod.KaratsubaMatrix{Int,Matrix{Int}},
+        2,
+        2;
+        low_modulus = 3,
+    )
+    @test_throws ArgumentError Base.zeros(
+        mod.KaratsubaMatrix{Float32,Matrix{Float32},mod.CuModMatrix{Float32}},
+        2,
+        2;
+        modulus = 19,
+    )
+    @test_throws MethodError Base.zeros(
+        mod.KaratsubaMatrix{Int,Matrix{Int}},
+        2,
+        2;
         low_modulus = 3,
         high_modulus = 5,
         modulus = 19,
         use_gpu = false,
     )
-    @test zero_matrix.data1 isa Matrix{Float32}
-    @test zero_matrix.data2 isa Matrix{Float32}
-    @test zero_vector.data1 isa Vector{Float32}
-    @test mod.from_karatsuba(Float32, zero_matrix) == zeros(Float32, 2, 3)
-    @test mod.from_karatsuba(Float32, zero_vector) == zeros(Float32, 4)
-    @test (zero_matrix.N1, zero_matrix.N2, zero_matrix.M) == (3, 5, 19)
-    zero_shorthand = Base.zeros(mod.KaratsubaVector{Int}, 3; modulus = 17, use_gpu = false)
-    @test (zero_shorthand.N1, zero_shorthand.N2, zero_shorthand.M) == (17, 17, 17)
-    @test_throws ArgumentError Base.zeros(mod.KaratsubaVector{Int}, 3; use_gpu = false)
-    @test_throws ArgumentError Base.zeros(
-        mod.KaratsubaMatrix{Int},
-        2,
-        2;
-        low_modulus = 3,
-        use_gpu = false,
-    )
     @test !hasmethod(Base.zeros, Tuple{Type{mod.KaratsubaMatrix},Type{Float32},Int,Int})
     @test !isdefined(mod, :KaratsubaZeros)
+end
+
+@testset "Strict CPU Karatsuba storage and inference" begin
+    mod = GPUFiniteFieldMatrices
+    low_matrix = Int[1 2; 3 4]
+    high_matrix = Int[5 6; 7 8]
+    matrix = @inferred mod.KaratsubaArray{Int,2}(
+        low_matrix,
+        high_matrix;
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 11,
+    )
+    concrete_matrix = @inferred mod.KaratsubaMatrix{Int,Matrix{Int},Matrix{Int}}(
+        low_matrix,
+        high_matrix;
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 11,
+    )
+    @test typeof(concrete_matrix) === typeof(matrix)
+    @test_throws ArgumentError mod.KaratsubaMatrix{Int,AbstractArray{Int,2}}(
+        low_matrix,
+        high_matrix;
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 11,
+    )
+    @test_throws ArgumentError mod.KaratsubaMatrix{Int,Matrix{Int},mod.CuModMatrix{Int}}(
+        low_matrix,
+        high_matrix;
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 11,
+    )
+    matrix_value = @inferred mod.from_karatsuba(Int, matrix)
+    @test matrix_value == low_matrix + 2 .* high_matrix
+    @test matrix_value isa Matrix{Int}
+    @test (@inferred mod.initialize_plan!(matrix)) === matrix
+    @test matrix.plan isa Matrix{Int}
+
+    low_vector = Int[1, 2, 3]
+    high_vector = Int[4, 5, 6]
+    vector = @inferred mod.KaratsubaArray{Int,1}(
+        low_vector,
+        high_vector;
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 11,
+    )
+    vector_value = @inferred mod.from_karatsuba(Int, vector)
+    @test vector_value == low_vector + 2 .* high_vector
+    @test vector_value isa Vector{Int}
+    @test (@inferred mod.initialize_plan!(vector)) === vector
+    @test vector.plan isa Vector{Int}
+
+    cpu_zero_matrix = @inferred Base.zeros(
+        mod.KaratsubaMatrix{Float32,Matrix{Float32}},
+        2,
+        3;
+        modulus = 19,
+    )
+    cpu_zero_vector = @inferred Base.zeros(
+        mod.KaratsubaVector{Float32,Vector{Float32}},
+        4;
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 19,
+    )
+    @test typeof(cpu_zero_matrix) ===
+          mod.KaratsubaMatrix{Float32,Matrix{Float32},Matrix{Float32}}
+    @test typeof(cpu_zero_vector) ===
+          mod.KaratsubaVector{Float32,Vector{Float32},Vector{Float32}}
+    @test cpu_zero_matrix.plan === nothing
+    @test cpu_zero_vector.plan === nothing
+    @test (@inferred mod.initialize_plan!(cpu_zero_matrix)) === cpu_zero_matrix
+    @test (@inferred mod.initialize_plan!(cpu_zero_vector)) === cpu_zero_vector
+
+    gpu_kwargs_type = NamedTuple{(:modulus,),Tuple{Int}}
+    gpu_matrix_type = mod.KaratsubaMatrix{Float32,mod.CuModMatrix{Float32}}
+    gpu_vector_type = mod.KaratsubaVector{Float32,mod.CuModVector{Float32}}
+    gpu_matrix_return = Core.Compiler.return_type(
+        Core.kwcall,
+        Tuple{gpu_kwargs_type,typeof(Base.zeros),Type{gpu_matrix_type},Int,Int},
+    )
+    gpu_vector_return = Core.Compiler.return_type(
+        Core.kwcall,
+        Tuple{gpu_kwargs_type,typeof(Base.zeros),Type{gpu_vector_type},Int},
+    )
+    gpu_default_return = Core.Compiler.return_type(
+        Core.kwcall,
+        Tuple{
+            gpu_kwargs_type,
+            typeof(Base.zeros),
+            Type{mod.KaratsubaMatrix{Float32}},
+            Int,
+            Int,
+        },
+    )
+    @test gpu_matrix_return ===
+          mod.KaratsubaMatrix{Float32,mod.CuModMatrix{Float32},mod.CuModMatrix{Float32}}
+    @test gpu_vector_return ===
+          mod.KaratsubaVector{Float32,mod.CuModVector{Float32},mod.CuModVector{Float32}}
+    @test gpu_default_return === gpu_matrix_return
+
+    if CUDA.functional()
+        gpu_zero_matrix = @inferred Base.zeros(
+            mod.KaratsubaMatrix{Float32,mod.CuModMatrix{Float32}},
+            2,
+            3;
+            modulus = 19,
+        )
+        gpu_zero_vector = @inferred Base.zeros(
+            mod.KaratsubaVector{Float32,mod.CuModVector{Float32}},
+            4;
+            modulus = 19,
+        )
+        @test low_part(gpu_zero_matrix) isa mod.CuModMatrix{Float32}
+        @test high_part(gpu_zero_matrix) isa mod.CuModMatrix{Float32}
+        @test low_part(gpu_zero_vector) isa mod.CuModVector{Float32}
+        @test (@inferred mod.initialize_plan!(gpu_zero_matrix)) === gpu_zero_matrix
+        @test (@inferred mod.initialize_plan!(gpu_zero_vector)) === gpu_zero_vector
+    end
+
+    too_large_for_int = BigInt(typemax(Int)) + 1
+    @test_throws InexactError mod.KaratsubaMatrix(
+        low_matrix,
+        high_matrix;
+        low_modulus = too_large_for_int,
+        high_modulus = 3,
+        modulus = 11,
+    )
+    @test_throws InexactError mod.KaratsubaMatrix(
+        low_matrix,
+        high_matrix;
+        low_modulus = 2,
+        high_modulus = too_large_for_int,
+        modulus = 11,
+    )
+    @test_throws InexactError mod.KaratsubaMatrix(
+        low_matrix,
+        high_matrix;
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = too_large_for_int,
+    )
+    @test_throws InexactError Base.zeros(
+        mod.KaratsubaMatrix{Int,Matrix{Int}},
+        1,
+        1;
+        low_modulus = too_large_for_int,
+        high_modulus = 3,
+        modulus = 11,
+    )
+    unsupported_component_type = typeof(view(zeros(Float32, 2, 2), :, :))
+    unsupported_factory_type =
+        Core.apply_type(mod.KaratsubaMatrix{Float32}, unsupported_component_type)
+    @test_throws ArgumentError Base.zeros(unsupported_factory_type, 2, 2; modulus = 19)
+
+    @test_throws ArgumentError mod.KaratsubaMatrix(
+        low_matrix,
+        view(high_matrix, :, :);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 11,
+    )
 end

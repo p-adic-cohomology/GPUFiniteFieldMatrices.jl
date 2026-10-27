@@ -68,9 +68,9 @@ function unsafe_gemm!(
 
     #TODO: convert alpha and beta to floats?
 
-    _CUDA_BLAS.gemm!(tAchar, tBchar, alpha, A.data, B.data, beta, C.data)
+    _CUDA_BLAS.gemm!(tAchar, tBchar, alpha, parent(A), parent(B), beta, parent(C))
 
-    mod!(C.data, C.data, C.N)
+    mod!(parent(C), parent(C), modulus(C))
 end
 
 const _cublas_scalar_cache_f64 = IdDict{Task,Tuple}()
@@ -301,16 +301,16 @@ end
 
 function _stripe_logical_data(A::CuModMatrix)
     m, n = size(A)
-    size(A.data, 1) >= m && size(A.data, 2) >= n ||
+    size(parent(A), 1) >= m && size(parent(A), 2) >= n ||
         throw(DimensionMismatch("matrix storage is smaller than its logical dimensions"))
-    return @view A.data[1:m, 1:n]
+    return @view parent(A)[1:m, 1:n]
 end
 
 function _stripe_logical_data(x::CuModVector)
     n = length(x)
-    length(x.data) >= n ||
+    length(parent(x)) >= n ||
         throw(DimensionMismatch("vector storage is smaller than its logical length"))
-    return @view x.data[1:n]
+    return @view parent(x)[1:n]
 end
 
 function _validate_positive_modulus_override(modulus_override)
@@ -348,8 +348,8 @@ function stripe_mul!(
     input_bound = nothing,
     max_ops = nothing,
 )
-    modulus = _stripe_effective_modulus(A.N, modulus_override)
-    A.N == B.N || throw(
+    effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
+    modulus(A) == modulus(B) || throw(
         CuModArrayModulusMismatchException("Input matrices must have the same modulus N"),
     )
     size(A, 2) == size(B, 1) || throw(
@@ -359,20 +359,27 @@ function stripe_mul!(
     )
     size(C) == (size(A, 1), size(B, 2)) ||
         throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
-    eltype(A.data) === eltype(B.data) === eltype(C.data) ||
+    eltype(parent(A)) === eltype(parent(B)) === eltype(parent(C)) ||
         throw(ArgumentError("matrix product element types do not match"))
     max_ops === nothing ||
         (max_ops isa Integer && max_ops > 0) ||
         throw(ArgumentError("max_ops must be a positive integer"))
 
-    bound = input_bound === nothing ? A.N : input_bound
+    bound = input_bound === nothing ? modulus(A) : input_bound
     Cdata = _stripe_logical_data(C)
     Adata = _stripe_logical_data(A)
     Bdata = _stripe_logical_data(B)
-    _stripe_preflight(Cdata, Adata, Bdata, modulus, bound, max_ops)
+    _stripe_preflight(Cdata, Adata, Bdata, effective_modulus, bound, max_ops)
 
-    fill!(C.data, zero(eltype(C.data)))
-    _stripe_mul!(Cdata, Adata, Bdata; modulus, input_bound = bound, max_ops)
+    fill!(parent(C), zero(eltype(parent(C))))
+    _stripe_mul!(
+        Cdata,
+        Adata,
+        Bdata;
+        modulus = effective_modulus,
+        input_bound = bound,
+        max_ops,
+    )
     return C
 end
 
@@ -388,14 +395,14 @@ function stripe_mul!(
     input_bound = nothing,
     max_ops = nothing,
 )
-    modulus = _stripe_effective_modulus(A.N, modulus_override)
-    A.N == x.N || throw(
+    effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
+    modulus(A) == modulus(x) || throw(
         CuModArrayModulusMismatchException(
             "Matrix and vector inputs must have the same modulus N",
         ),
     )
     modulus_override === nothing &&
-        z.N != A.N &&
+        modulus(z) != modulus(A) &&
         throw(
             CuModArrayModulusMismatchException(
                 "Destination must have the input modulus when no override is supplied",
@@ -405,16 +412,23 @@ function stripe_mul!(
         throw(CuModArraySizeMismatchException("Matrix and vector dimensions do not match"))
     length(z) == size(A, 1) ||
         throw(CuModArraySizeMismatchException("Output vector has incorrect length"))
-    eltype(A.data) === eltype(x.data) === eltype(z.data) ||
+    eltype(parent(A)) === eltype(parent(x)) === eltype(parent(z)) ||
         throw(ArgumentError("matrix-vector product element types do not match"))
 
-    bound = input_bound === nothing ? A.N : input_bound
+    bound = input_bound === nothing ? modulus(A) : input_bound
     zdata = _stripe_logical_data(z)
     Adata = _stripe_logical_data(A)
     xdata = _stripe_logical_data(x)
-    _stripe_preflight(zdata, Adata, xdata, modulus, bound, max_ops)
-    fill!(z.data, zero(eltype(z.data)))
-    _stripe_mul!(zdata, Adata, xdata; modulus, input_bound = bound, max_ops)
+    _stripe_preflight(zdata, Adata, xdata, effective_modulus, bound, max_ops)
+    fill!(parent(z), zero(eltype(parent(z))))
+    _stripe_mul!(
+        zdata,
+        Adata,
+        xdata;
+        modulus = effective_modulus,
+        input_bound = bound,
+        max_ops,
+    )
     return z
 end
 
@@ -431,8 +445,8 @@ function stripe_mul(
     input_bound = nothing,
     max_ops = nothing,
 )
-    modulus = _stripe_effective_modulus(A.N, modulus_override)
-    A.N == B.N || throw(
+    effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
+    modulus(A) == modulus(B) || throw(
         CuModArrayModulusMismatchException("Input matrices must have the same modulus N"),
     )
     size(A, 2) == size(B, 1) || throw(
@@ -440,8 +454,13 @@ function stripe_mul(
             "Matrix dimensions do not match for multiplication",
         ),
     )
-    C = zeros(CuModMatrix{eltype(A.data)}, size(A, 1), size(B, 2); modulus = modulus)
-    return stripe_mul!(C, A, B; modulus_override = modulus, input_bound, max_ops)
+    C = zeros(
+        CuModMatrix{eltype(parent(A))},
+        size(A, 1),
+        size(B, 2);
+        modulus = effective_modulus,
+    )
+    return stripe_mul!(C, A, B; modulus_override = effective_modulus, input_bound, max_ops)
 end
 
 function stripe_mul(
@@ -451,14 +470,14 @@ function stripe_mul(
     input_bound = nothing,
     max_ops = nothing,
 )
-    modulus = _stripe_effective_modulus(A.N, modulus_override)
-    A.N == x.N || throw(
+    effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
+    modulus(A) == modulus(x) || throw(
         CuModArrayModulusMismatchException(
             "Matrix and vector inputs must have the same modulus N",
         ),
     )
     size(A, 2) == length(x) ||
         throw(CuModArraySizeMismatchException("Matrix and vector dimensions do not match"))
-    z = zeros(CuModVector{eltype(A.data)}, size(A, 1); modulus = modulus)
-    return stripe_mul!(z, A, x; modulus_override = modulus, input_bound, max_ops)
+    z = zeros(CuModVector{eltype(parent(A))}, size(A, 1); modulus = effective_modulus)
+    return stripe_mul!(z, A, x; modulus_override = effective_modulus, input_bound, max_ops)
 end

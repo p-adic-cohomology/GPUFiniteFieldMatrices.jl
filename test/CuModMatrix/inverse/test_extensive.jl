@@ -29,7 +29,7 @@ end
 
 function _assert_inverse_identity(A::CuModMatrix, X::CuModMatrix)
     n = size(A, 1)
-    got = mod.(round.(Int, Array(A * X)), A.N)
+    got = mod.(round.(Int, Array(A * X)), GPUFiniteFieldMatrices.modulus(A))
     want = _id_matrix(Int, n)
     @test got == want
 end

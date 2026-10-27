@@ -89,7 +89,7 @@ function test_cuda_blas_compatibility()
             modulus_override = override_modulus,
         )
         @test Array(z_override) == T.(mod.(vector_A_data * vector_x_data, override_modulus))
-        @test z_override.N == N
+        @test GPUFiniteFieldMatrices.modulus(z_override) == N
 
         z_override_different = GPUFiniteFieldMatrices.zeros(
             GPUFiniteFieldMatrices.CuModVector{T},
@@ -104,7 +104,7 @@ function test_cuda_blas_compatibility()
         )
         @test Array(z_override_different) ==
               T.(mod.(BigInt.(vector_A_data) * BigInt.(vector_x_data), override_modulus))
-        @test z_override_different.N == 19
+        @test GPUFiniteFieldMatrices.modulus(z_override_different) == 19
 
         # A different stored destination modulus does not replace the working
         # reduction modulus, and the allocating adapter records that modulus.
@@ -122,11 +122,11 @@ function test_cuda_blas_compatibility()
             input_bound = N,
         )
         @test Array(C_different_modulus) == T.(mod.(A_data * B_data, 31))
-        @test C_different_modulus.N == 19
+        @test GPUFiniteFieldMatrices.modulus(C_different_modulus) == 19
         allocated_override = GPUFiniteFieldMatrices.stripe_mul(A, B; modulus_override = 31)
         @test Array(allocated_override) == T.(mod.(A_data * B_data, 31))
-        @test allocated_override.N == 31
-        @test allocated_override.data !== A.data
+        @test GPUFiniteFieldMatrices.modulus(allocated_override) == 31
+        @test parent(allocated_override) !== parent(A)
 
         z_different_modulus = GPUFiniteFieldMatrices.zeros(
             GPUFiniteFieldMatrices.CuModVector{T},
@@ -140,19 +140,19 @@ function test_cuda_blas_compatibility()
             modulus_override = 31,
         )
         @test Array(z_different_modulus) == T.(mod.(vector_A_data * vector_x_data, 31))
-        @test z_different_modulus.N == 19
+        @test GPUFiniteFieldMatrices.modulus(z_different_modulus) == 19
         allocated_vector_override =
             GPUFiniteFieldMatrices.stripe_mul(vector_A, x; modulus_override = 31)
         @test Array(allocated_vector_override) ==
               T.(mod.(vector_A_data * vector_x_data, 31))
-        @test allocated_vector_override.N == 31
+        @test GPUFiniteFieldMatrices.modulus(allocated_vector_override) == 31
 
         z_reject = GPUFiniteFieldMatrices.zeros(
             GPUFiniteFieldMatrices.CuModVector{T},
             size(vector_A_data, 1);
             modulus = N,
         )
-        z_reject.data[1:length(z_reject)] .= T.([17, 19, 23])
+        parent(z_reject)[1:length(z_reject)] .= T.([17, 19, 23])
         z_before_reject = Array(z_reject)
         matrix_before_reject = Array(C)
         vector_matrix_before_reject = Array(vector_A)
@@ -186,7 +186,7 @@ function test_cuda_blas_compatibility()
             size(vector_A_data, 1) - 1;
             modulus = N,
         )
-        z_bad_length.data[1:length(z_bad_length)] .= T.([17, 19])
+        parent(z_bad_length)[1:length(z_bad_length)] .= T.([17, 19])
         z_bad_length_before = Array(z_bad_length)
         @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException GPUFiniteFieldMatrices.stripe_mul!(
             z_bad_length,
@@ -202,7 +202,7 @@ function test_cuda_blas_compatibility()
             size(vector_A_data, 1);
             modulus = N + 1,
         )
-        z_bad_modulus.data[1:length(z_bad_modulus)] .= T.([17, 19, 23])
+        parent(z_bad_modulus)[1:length(z_bad_modulus)] .= T.([17, 19, 23])
         z_bad_modulus_before = Array(z_bad_modulus)
         @test_throws GPUFiniteFieldMatrices.CuModArrayModulusMismatchException GPUFiniteFieldMatrices.stripe_mul!(
             z_bad_modulus,

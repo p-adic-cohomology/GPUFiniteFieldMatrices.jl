@@ -65,5 +65,5 @@ function test_rectangular_rank_and_failures()
     Fshuffled = pluq(Ashuffled)
     @test Fshuffled.rank == 2
     Xshuffled = right_inverse(Ashuffled)
-    @test mod.(Array(Ashuffled * Xshuffled), p) == _rect_id(eltype(Ashuffled.data), 2)
+    @test mod.(Array(Ashuffled * Xshuffled), p) == _rect_id(eltype(parent(Ashuffled)), 2)
 end

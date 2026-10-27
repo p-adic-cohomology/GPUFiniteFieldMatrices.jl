@@ -1,10 +1,10 @@
 const DEFAULT_THREADS = 256
 
 function Base.similar(A::CuModArray)
-    T = eltype(A.data)
-    D = ndims(A.data)
-    data = similar(A.data)
-    return CuModArray{T,D}(data; modulus = A.N, mod = false, new_size = size(A))
+    T = eltype(parent(A))
+    D = ndims(parent(A))
+    data = similar(parent(A))
+    return CuModArray{T,D}(data; modulus = modulus(A), mod = false, new_size = size(A))
 end
 
 """
@@ -13,8 +13,8 @@ end
 Allocate a same-shaped array with modulus N.
 """
 function similar_with_modulus(A::CuModArray, N::Integer)
-    T = eltype(A.data)
-    D = ndims(A.data)
-    data = similar(A.data)
+    T = eltype(parent(A))
+    D = ndims(parent(A))
+    data = similar(parent(A))
     return CuModArray{T,D}(data; modulus = N, mod = false, new_size = size(A))
 end

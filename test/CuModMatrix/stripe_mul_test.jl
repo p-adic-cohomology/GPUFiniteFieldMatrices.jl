@@ -67,8 +67,8 @@ function test_stripe_budget_semantics()
         )
 
         @test Array(C) == _stripe_budget_bigint_matmul(A_data, B_data, reduction_modulus)
-        @test A.N == input_bound
-        @test B.N == input_bound
+        @test GPUFiniteFieldMatrices.modulus(A) == input_bound
+        @test GPUFiniteFieldMatrices.modulus(B) == input_bound
     end
 
     inner = 5
@@ -96,7 +96,7 @@ function test_stripe_budget_semantics()
         3;
         modulus = reduction_modulus,
     )
-    fill!(unsafe_C.data, 7)
+    fill!(parent(unsafe_C), 7)
     original_C = Array(unsafe_C)
     A_data = [mod(37i + 17k, input_bound) for i = 1:2, k = 1:4]
     B_data = [mod(23k + 11j, input_bound) for k = 1:4, j = 1:3]
@@ -117,7 +117,7 @@ function test_stripe_budget_semantics()
         2;
         modulus = reduction_modulus,
     )
-    fill!(unsafe_z.data, 7)
+    fill!(parent(unsafe_z), 7)
     original_z = Array(unsafe_z)
     x_data = [mod(19k + 5, input_bound) for k = 1:4]
     x = CuModVector{Float32}(x_data; modulus = input_bound)

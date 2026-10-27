@@ -20,8 +20,8 @@ else
 end
 
 using LinearAlgebra: LinearAlgebra, I, mul!, rank
-import Random
-import Random: rand
+
+
 using SparseArrays: SparseArrays
 using IterTools: IterTools
 
@@ -69,6 +69,7 @@ end # @stable default_mode = "disable"
 export CuModArray, CuModMatrix, CuModVector
 export KaratsubaArray, KaratsubaMatrix, KaratsubaVector
 export to_karatsuba, from_karatsuba
+export modulus, low_modulus, high_modulus, low_part, high_part
 export PLUQOptions, PLUQ
 export pluq, pluq!, is_invertible, is_invertible_with_inverse
 export pluq_batched, inverse_batched

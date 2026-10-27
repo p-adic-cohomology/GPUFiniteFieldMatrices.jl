@@ -19,7 +19,7 @@ function test_api_smoke()
     A_inplace = CuModMatrix(copy(Ahost); modulus = N)
     F_inplace = pluq!(A_inplace)
     @test F_inplace.rank == 3
-    @test F_inplace.LU.data === A_inplace.data
+    @test parent(F_inplace.LU) === parent(A_inplace)
     @test GPUFiniteFieldMatrices.pluq_check_identity(F_inplace, A)
 
     Ainv = inv(A)

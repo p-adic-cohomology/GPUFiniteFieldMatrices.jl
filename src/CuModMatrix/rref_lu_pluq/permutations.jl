@@ -9,11 +9,11 @@ INPUTS:
 * "A" -- CuModMatrix, the matrix to permute
 """
 function apply_col_perm!(P::Array{Tuple{Int,Int},1}, A)
-    n = size(A.data, 1)
+    n = size(parent(A), 1)
     P_gpu = CuArray(P)
 
     @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_col_perm_kernel!(
-        A.data,
+        parent(A),
         P_gpu,
         size(A, 2),
     )
@@ -22,11 +22,11 @@ function apply_col_perm!(P::Array{Tuple{Int,Int},1}, A)
 end
 
 function apply_col_inv_perm!(P::Array{Tuple{Int,Int},1}, A)
-    n = size(A.data, 1)
+    n = size(parent(A), 1)
     P_gpu = CuArray(reverse(P))
 
     @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_col_perm_kernel!(
-        A.data,
+        parent(A),
         P_gpu,
         size(A, 2),
     )
@@ -35,9 +35,9 @@ function apply_col_inv_perm!(P::Array{Tuple{Int,Int},1}, A)
 end
 
 function apply_col_perm(P::Array{Tuple{Int,Int},1}, A)
-    n = size(A.data, 1)
+    n = size(parent(A), 1)
     P_gpu = CuArray(P)
-    A_data_copy = copy(A.data)
+    A_data_copy = copy(parent(A))
 
     @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_col_perm_kernel!(
         A_data_copy,
@@ -45,7 +45,7 @@ function apply_col_perm(P::Array{Tuple{Int,Int},1}, A)
         size(A, 2),
     )
 
-    return CuModMatrix(A_data_copy; modulus = A.N, new_size = size(A))
+    return CuModMatrix(A_data_copy; modulus = modulus(A), new_size = size(A))
 end
 
 """
@@ -87,11 +87,11 @@ INPUTS:
 * "A" -- CuModMatrix, the matrix to permute
 """
 function apply_row_perm!(P::Array{Tuple{Int,Int},1}, A::CuModMatrix)
-    n = size(A.data, 2)
+    n = size(parent(A), 2)
     P_gpu = CuArray(P)
 
     @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_row_perm_kernel!(
-        A.data,
+        parent(A),
         P_gpu,
         size(A, 1),
     )
@@ -100,11 +100,11 @@ function apply_row_perm!(P::Array{Tuple{Int,Int},1}, A::CuModMatrix)
 end
 
 function apply_row_inv_perm!(P::Array{Tuple{Int,Int},1}, A)
-    n = size(A.data, 2)
+    n = size(parent(A), 2)
     P_gpu = CuArray(reverse(P))
 
     @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_row_perm_kernel!(
-        A.data,
+        parent(A),
         P_gpu,
         size(A, 1),
     )
@@ -114,9 +114,9 @@ end
 
 function apply_row_perm(P::Array{Tuple{Int,Int},1}, A)
 
-    n = size(A.data, 2)
+    n = size(parent(A), 2)
     P_gpu = CuArray(P)
-    A_data_copy = copy(A.data)
+    A_data_copy = copy(parent(A))
 
     @cuda threads=TILE_WIDTH blocks=div(n, TILE_WIDTH) _apply_row_perm_kernel!(
         A_data_copy,
@@ -124,7 +124,7 @@ function apply_row_perm(P::Array{Tuple{Int,Int},1}, A)
         size(A, 1),
     )
 
-    return CuModMatrix(A_data_copy; modulus = A.N, new_size = size(A))
+    return CuModMatrix(A_data_copy; modulus = modulus(A), new_size = size(A))
 end
 
 """

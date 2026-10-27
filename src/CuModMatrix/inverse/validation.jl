@@ -28,30 +28,30 @@ Returns `true` if the identity holds.
 """
 function pluq_check_identity(F::PLUQ, Aorig::CuModMatrix)
     n = rows(Aorig)
-    N = Aorig.N
+    N = modulus(Aorig)
     pdev = CuArray(Int32.(F.p))
     qdev = CuArray(Int32.(F.q))
-    PAQ = zeros(CuModMatrix{eltype(Aorig.data)}, n, n; modulus = N)
+    PAQ = zeros(CuModMatrix{eltype(parent(Aorig))}, n, n; modulus = N)
     tx = 16
     ty = 16
     @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_apply_paq_kernel!(
-        PAQ.data,
-        Aorig.data,
+        parent(PAQ),
+        parent(Aorig),
         pdev,
         qdev,
         Int32(n),
     )
     L = F.L
     U = F.U
-    LU = zeros(CuModMatrix{eltype(Aorig.data)}, n, n; modulus = N)
+    LU = zeros(CuModMatrix{eltype(parent(Aorig))}, n, n; modulus = N)
     mul!(LU, L, U)
-    D = zeros(CuModMatrix{eltype(Aorig.data)}, n, n; modulus = N)
+    D = zeros(CuModMatrix{eltype(parent(Aorig))}, n, n; modulus = N)
     sub!(D, PAQ, LU)
     flag = CUDA.zeros(Int32, 1)
     threads = 256
     @cuda threads=threads blocks=max(1, cld(n * n, threads)) pluq_nonzero_mod_kernel!(
         flag,
-        D.data,
+        parent(D),
         Int32(n),
         Int32(N),
     )

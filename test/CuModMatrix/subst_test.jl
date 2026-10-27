@@ -31,8 +31,8 @@ function test_sub(p, m, n, debug::Bool = false, assert::Bool = false)
     end
 
     if assert
-        L_copy = CuModMatrix(copy(L.data); modulus = p, new_size = size(L))
-        U_copy = CuModMatrix(copy(U.data); modulus = p, new_size = size(U))
+        L_copy = CuModMatrix(copy(parent(L)); modulus = p, new_size = size(L))
+        U_copy = CuModMatrix(copy(parent(U)); modulus = p, new_size = size(U))
         GPUFiniteFieldMatrices.apply_row_inv_perm!(P, L_copy)
         GPUFiniteFieldMatrices.apply_row_inv_perm!(Q, U_copy)
         if debug

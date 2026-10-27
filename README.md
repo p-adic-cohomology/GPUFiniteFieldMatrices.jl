@@ -90,6 +90,10 @@ take the same type and the modulus as a keyword. For identities, use
 `identity_matrix(CuModMatrix{T}, n; modulus = N)` or
 `CuModMatrix{T}(I, rows, cols; modulus = N)`.
 
+Use `modulus(A)` to inspect the modulus, `size(A)` for the logical dimensions,
+and `parent(A)` for the padded GPU storage. The parent's dimensions may be
+larger than the logical size.
+
 #### LinearAlgebra inversion and PLUQ
 
 The unparameterized CPU-array constructor keeps its Float32 default. Use a type
@@ -111,10 +115,13 @@ access, for example GPUFiniteFieldMatrices.similar_with_modulus(A, 103).
 
 Convert a full array with `to_karatsuba`, or wrap already split component arrays
 with `KaratsubaMatrix(A1, A2; low_modulus = N1, high_modulus = N2,
-modulus = M)`. Reconstruction is always `data1 + N1*data2`; `M` is separate
-representation metadata. Typed splitting checks each component conversion and
-throws `InexactError` rather than losing integer information. Conversion works
-with CPU arrays and preserves the GPU backend for GPU-backed inputs.
+modulus = M)`. Inspect components with `low_part(K)` and `high_part(K)`, and
+inspect their moduli with `low_modulus(K)` and `high_modulus(K)`. Reconstruction
+uses `low_part(K) + low_modulus(K)*high_part(K)`; `modulus(K)` is separate
+representation metadata. The component accessors preserve storage identity;
+the struct fields are internal. Typed splitting checks each component conversion
+and throws `InexactError` rather than losing integer information. Conversion
+works with CPU arrays and preserves the GPU backend for GPU-backed inputs.
 
 Before multiplying, initialize the plans on both inputs and the destination with
 the qualified helper, then call `LinearAlgebra.mul!`:
@@ -135,9 +142,11 @@ from_karatsuba(Float64, C)
 ```
 
 Use `zeros(KaratsubaMatrix{T}, rows, cols; low_modulus, high_modulus,
-modulus, use_gpu = true)` or the corresponding `KaratsubaVector{T}` form for
-zero split buffers. Set `use_gpu = false` to allocate CPU arrays. Plan scratch is
-still initialized separately.
+modulus)` or the corresponding `KaratsubaVector{T}` form for GPU-backed zero
+split buffers. Select CPU storage with `zeros(KaratsubaMatrix{T,Matrix{T}}, ...)`
+or `zeros(KaratsubaVector{T,Vector{T}}, ...)`. The requested component storage
+type selects the backend; the former `use_gpu` keyword has been removed. Plan
+scratch is still initialized separately.
 
 For `LinearAlgebra.mul!`, all three matrices must use the same representation
 modulus, the inner dimensions of `A` and `B` must match, and all three matrices
@@ -150,12 +159,9 @@ For CPU-only data, `to_karatsuba` returns CPU component arrays and
 `CuArray{T}` result. `Base.Array(K)` uses arbitrary-precision integer
 reconstruction to avoid overflowing an intermediate type.
 
-The strict DispatchDoctor test preference currently reports
-`TypeInstabilityError` for `from_karatsuba` because `KaratsubaArray` stores its
-components in abstract array fields and reconstruction can return CPU or GPU
-array types. A separate storage-type parameter change is needed to make that
-result infer as a single concrete array type; the strict preference remains
-enabled in tests.
+`KaratsubaArray` records its component and plan storage types, so
+`from_karatsuba` infers a CPU `Array` or GPU `CuArray` result from the stored
+components. The strict DispatchDoctor test preference remains enabled.
 
 `Base.copy` retains the legacy `Karatsubacopy` metadata behavior: the copied
 representation stores `M = N1*N2`, which can differ from the source's `M`.
@@ -185,7 +191,7 @@ names support matrix-vector products. `*` and `LinearAlgebra.mul!` use this
 shared implementation. An allocating call stores the effective modulus on its
 result. A mutating call reduces with the effective modulus and leaves the
 destination's stored modulus unchanged. For the matrix allocating and mutating
-adapters, an omitted override uses `A.N`; a supplied override must be positive.
+adapters, an omitted override uses `modulus(A)`; a supplied override must be positive.
 Matrix-vector `mul!` follows the same rule. Elementwise and scalar operations
 use a positive override for reduction. Elementwise and scalar multiplication
 reject zero or negative overrides with `ArgumentError`; other elementwise and

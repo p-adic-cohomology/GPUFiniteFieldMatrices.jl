@@ -1,19 +1,38 @@
-mutable struct KaratsubaArray{T,D} <: AbstractArray{T,D}
-    data1::AbstractArray{T,D}
-    data2::AbstractArray{T,D}
-    plan::Union{Nothing,AbstractArray{T,D}}
-    N1::Integer
-    N2::Integer
-    M::Integer
+"""
+    KaratsubaArray{T,D,S,P}
 
-    function KaratsubaArray{T,D}(
-        A::AbstractArray{T,D},
-        B::AbstractArray{T,D},
+An array represented by low and high components of storage type `S`. The
+component arrays must have the same concrete storage type. Use `low_part`,
+`high_part`, `low_modulus`, `high_modulus`, and `modulus` to inspect a value;
+the fields are internal implementation details.
+"""
+mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <:
+               AbstractArray{T,D}
+    data1::S
+    data2::S
+    plan::Union{Nothing,P}
+    N1::Int
+    N2::Int
+    M::Int
+
+    function KaratsubaArray{T,D,S,P}(
+        A::S,
+        B::S,
         ;
         low_modulus::Union{Nothing,Integer} = nothing,
         high_modulus::Union{Nothing,Integer} = nothing,
         modulus::Union{Nothing,Integer} = nothing,
-    ) where {T,D}
+    ) where {T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}}
+        isconcretetype(S) ||
+            throw(ArgumentError("Karatsuba components require a concrete storage type"))
+        isconcretetype(P) ||
+            throw(ArgumentError("Karatsuba plans require a concrete storage type"))
+        expected_plan_type = _karatsuba_plan_type(S)
+        P === expected_plan_type || throw(
+            ArgumentError(
+                "Requested plan storage type $P does not match the plan type $expected_plan_type for component storage $S",
+            ),
+        )
         if size(A) != size(B)
             error("Dimensions of matrices must match")
         end
@@ -36,12 +55,46 @@ mutable struct KaratsubaArray{T,D} <: AbstractArray{T,D}
             error("Modulus too large")
         end
 
-        return new{T,D}(A, B, nothing, N1, N2, M)
+        return new{T,D,S,P}(A, B, nothing, N1, N2, M)
     end
 end
 
 const KaratsubaMatrix{T} = KaratsubaArray{T,2}
 const KaratsubaVector{T} = KaratsubaArray{T,1}
+
+function KaratsubaArray{T,D}(
+    A::AbstractArray{T,D},
+    B::AbstractArray{T,D};
+    kwargs...,
+) where {T,D}
+    typeof(A) === typeof(B) ||
+        throw(ArgumentError("Karatsuba components must have the same storage type"))
+    return KaratsubaArray{T,D,typeof(A)}(A, B; kwargs...)
+end
+
+_karatsuba_plan_type(::Type{S}) where {T,D,S<:CuModArray{T,D}} = S
+_karatsuba_plan_type(::Type{S}) where {T,D,S<:CuArray{T,D}} = S
+_karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} = Array{T,D}
+
+function KaratsubaArray{T,D,S}(A::S, B::S; kwargs...) where {T,D,S<:AbstractArray{T,D}}
+    P = _karatsuba_plan_type(S)
+    return KaratsubaArray{T,D,S,P}(A, B; kwargs...)
+end
+
+"""Return the low component array stored by `K`, preserving object identity."""
+low_part(K::KaratsubaArray) = getfield(K, :data1)
+
+"""Return the high component array stored by `K`, preserving object identity."""
+high_part(K::KaratsubaArray) = getfield(K, :data2)
+
+"""Return the low component modulus stored by `K`."""
+low_modulus(K::KaratsubaArray) = getfield(K, :N1)
+
+"""Return the high component modulus stored by `K`."""
+high_modulus(K::KaratsubaArray) = getfield(K, :N2)
+
+"""Return the represented modulus metadata stored by `K`."""
+modulus(K::KaratsubaArray) = getfield(K, :M)
 
 function KaratsubaArray(A::AbstractArray{T,D}, B::AbstractArray{T,D}; kwargs...) where {T,D}
     _wrap_karatsuba(Val(D), A, B; kwargs...)
@@ -123,31 +176,31 @@ three matrices before multiplying. This matrix path currently supports
 `Float64` storage only.
 """
 function LinearAlgebra.mul!(
-    C::KaratsubaArray{TC,2},
-    A::KaratsubaArray{TA,2},
-    B::KaratsubaArray{TB,2},
-) where {TC,TA,TB}
-    if (A.M != B.M) || (A.M != C.M)
+    C::KaratsubaArray{TC,2,SC,PC},
+    A::KaratsubaArray{TA,2,SA,PA},
+    B::KaratsubaArray{TB,2,SB,PB},
+) where {TC,SC,PC,TA,SA,PA,TB,SB,PB}
+    if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
         error("Matrices must have the same modulus m")
     end
-    if size(A.data1)[2] != size(B.data1)[1]
+    if size(low_part(A))[2] != size(low_part(B))[1]
         error("Matrix dimensions don't work for multiplication")
     end
     if (A.plan == nothing) || (B.plan == nothing) || (C.plan == nothing)
         error("Must initialize plans first")
     end
-    if eltype(A.data1.data) != Float64
+    if eltype(parent(low_part(A))) != Float64
         error("Not implemented for non-Float64 entries")
     end
     # TODO: enable this
-    # maxN = max(A.N1,A.N2)
-    # if find_max_stripe_ops(eltype(A.data1.data), maxN) < size(A,1)
+    # maxN = max(low_modulus(A),high_modulus(A))
+    # if find_max_stripe_ops(eltype(parent(low_part(A))), maxN) < size(A,1)
     #     error("Matrix is too big for a single matmul, this is currently not implemented")
     # end
     #=
     tw = TILE_WIDTH
 
-    totalsize = length(C.data1.data) # the vector length
+    totalsize = length(parent(low_part(C))) # the vector length
 
     threads = tw
     blocks = totalsize ÷ tw
@@ -155,68 +208,68 @@ function LinearAlgebra.mul!(
 
     tw = TILE_WIDTH
 
-    totalsize = length(A.data1.data)
+    totalsize = length(parent(low_part(A)))
 
     threads = tw
     blocks = totalsize ÷ tw
 
-    #A_cols = size(A.data1,2)
+    #A_cols = size(low_part(A),2)
     @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
-        A.plan.data,
-        A.data1.data,
-        A.data2.data,
+        parent(A.plan),
+        parent(low_part(A)),
+        parent(high_part(A)),
         #A_cols,
-        B.plan.data,
-        B.data1.data,
-        B.data2.data,
-        A.N1,
+        parent(B.plan),
+        parent(low_part(B)),
+        parent(high_part(B)),
+        low_modulus(A),
     )
-    # add!(A.plan,A.data1,A.data2; modulus_override=2*A.N1)
-    # add!(B.plan,B.data1,B.data2; modulus_override=2*B.N1)
+    # add!(A.plan,low_part(A),high_part(A); modulus_override=2*low_modulus(A))
+    # add!(B.plan,low_part(B),high_part(B); modulus_override=2*low_modulus(B))
 
     # use gemm
 
     LinearAlgebra.mul!(
-        C.data1,
-        A.data1,
-        B.data1,
-        R = A.N1,
-        P = A.N1^2,
+        low_part(C),
+        low_part(A),
+        low_part(B),
+        R = low_modulus(A),
+        P = low_modulus(A)^2,
         maxopsOverride = false,
     )
 
     LinearAlgebra.mul!(
-        C.data2,
+        high_part(C),
         A.plan,
         B.plan,
-        R = (2*A.N1),
-        P = ((4*A.N1)^2),
+        R = (2*low_modulus(A)),
+        P = ((4*low_modulus(A))^2),
         maxopsOverride = false,
     )
     LinearAlgebra.mul!(
         B.plan,
-        A.data2,
-        B.data2,
-        R = (A.N1),
-        P = A.N1^2,
+        high_part(A),
+        high_part(B),
+        R = (low_modulus(A)),
+        P = low_modulus(A)^2,
         maxopsOverride = false,
     )
 
 
     tw = TILE_WIDTH
 
-    totalsize = length(C.data1.data)
+    totalsize = length(parent(low_part(C)))
 
     threads = tw
     blocks = totalsize ÷ tw
 
 
     @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_2!(
-        C.data1.data,
-        C.data2.data,
-        B.plan.data,
-        C.N1,
-        C.N2,
+        parent(low_part(C)),
+        parent(high_part(C)),
+        parent(B.plan),
+        low_modulus(C),
+        high_modulus(C),
     )
 
 
@@ -265,86 +318,87 @@ supports `Float64` storage only. Initialize plans with `initialize_plan!` before
 calling this function.
 """
 function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
-    if (A.M != B.M) || (A.M != C.M)
+    if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
         error("Matrices must have the same modulus m")
     end
-    if size(A.data1)[2] != size(B.data1)[1]
+    if size(low_part(A))[2] != size(low_part(B))[1]
         error("Matrix dimensions don't work for multiplication")
     end
     if (A.plan == nothing) || (B.plan == nothing) || (C.plan == nothing)
         error("Must initialize plans first")
     end
-    if eltype(A.data1.data) != Float64
+    if eltype(parent(low_part(A))) != Float64
         error("Not implemented for non-Float64 entries")
     end
     # TOD0: enable this
-    # maxN = max(A.N1,A.N2)
-    # if find_max_stripe_ops(eltype(A.data1.data), maxN) < size(A,1)
+    # maxN = max(low_modulus(A),high_modulus(A))
+    # if find_max_stripe_ops(eltype(parent(low_part(A))), maxN) < size(A,1)
     #     error("Matrix is too big for a single matmul, this is currently not implemented")
     # end
 
     tw = TILE_WIDTH
 
-    totalsize = length(A.data1.data)
+    totalsize = length(parent(low_part(A)))
 
     threads = tw
     blocks = totalsize ÷ tw
 
     @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
-        A.plan.data,
-        A.data1.data,
-        A.data2.data,
-        B.plan.data,
-        B.data1.data,
-        B.data2.data,
-        A.N1,
+        parent(A.plan),
+        parent(low_part(A)),
+        parent(high_part(A)),
+        parent(B.plan),
+        parent(low_part(B)),
+        parent(high_part(B)),
+        low_modulus(A),
     )
-    # add!(A.plan,A.data1,A.data2; modulus_override=2*A.N1)
-    # add!(B.plan,B.data1,B.data2; modulus_override=2*B.N1)
+    # add!(A.plan,low_part(A),high_part(A); modulus_override=2*low_modulus(A))
+    # add!(B.plan,low_part(B),high_part(B); modulus_override=2*low_modulus(B))
 
     (zero_ptr, one_ptr) = cublas_scalars_f64()
 
 
-    targets = [C.data1.data, C.data2.data, B.plan.data]
-    mats = [A.data1.data, A.plan.data, A.data2.data]
-    vecs = [B.data1.data, B.plan.data, B.data2.data]
+    targets = [parent(low_part(C)), parent(high_part(C)), parent(B.plan)]
+    mats = [parent(low_part(A)), parent(A.plan), parent(high_part(A))]
+    vecs = [parent(low_part(B)), parent(B.plan), parent(high_part(B))]
     _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
 
-    # CUDA.CUBLAS.gemv!('N',one_ptr,A.data1.data,B.data1.data,zero_ptr,C.data1.data)
-    # CUDA.CUBLAS.gemv!('N',one_ptr,A.plan.data,B.plan.data,zero_ptr,C.data2.data)
-    # CUDA.CUBLAS.gemv!('N',one_ptr,A.data2.data,B.data2.data,zero_ptr,B.plan.data)
+    # CUDA.CUBLAS.gemv!('N',one_ptr,parent(low_part(A)),parent(low_part(B)),zero_ptr,parent(low_part(C)))
+    # CUDA.CUBLAS.gemv!('N',one_ptr,parent(A.plan),parent(B.plan),zero_ptr,parent(high_part(C)))
+    # CUDA.CUBLAS.gemv!('N',one_ptr,parent(high_part(A)),parent(high_part(B)),zero_ptr,parent(B.plan))
 
     tw = TILE_WIDTH
 
-    totalsize = length(C.data1.data)
+    totalsize = length(parent(low_part(C)))
 
     threads = tw
     blocks = totalsize ÷ tw
     @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_2!(
-        C.data1.data,
-        C.data2.data,
-        B.plan.data,
-        C.N1,
-        C.N2,
+        parent(low_part(C)),
+        parent(high_part(C)),
+        parent(B.plan),
+        low_modulus(C),
+        high_modulus(C),
     )
 
 
     C
 end
 
-Base.size(A::KaratsubaArray) = size(A.data1)
+Base.size(A::KaratsubaArray) = size(low_part(A))
 
-Base.getindex(A::KaratsubaArray, i::Int, j::Int) = A.data1[i, j] + A.N1*A.data2[i, j]
-Base.getindex(A::KaratsubaArray, i::Int) = A.data1[i] + A.N1*A.data2[i]
+Base.getindex(A::KaratsubaArray, i::Int, j::Int) =
+    low_part(A)[i, j] + low_modulus(A)*high_part(A)[i, j]
+Base.getindex(A::KaratsubaArray, i::Int) = low_part(A)[i] + low_modulus(A)*high_part(A)[i]
 
 function Base.setindex!(A::KaratsubaArray, v, i::Int, j::Int)
-    A.data1[i, j] = rem(v, A.N1)
-    A.data2[i, j] = div(v, A.N1)
+    low_part(A)[i, j] = rem(v, low_modulus(A))
+    high_part(A)[i, j] = div(v, low_modulus(A))
 end
 
 function Base.setindex!(A::KaratsubaArray, v, i::Int)
-    A.data1[i] = rem(v, A.N1)
-    A.data2[i] = div(v, A.N1)
+    low_part(A)[i] = rem(v, low_modulus(A))
+    high_part(A)[i] = div(v, low_modulus(A))
 end
 
 #Converts KMat to Mat
@@ -353,8 +407,8 @@ function Base.Array(K::KaratsubaArray)
 end
 
 function Base.copy!(B::KaratsubaArray, A::KaratsubaArray)
-    copy!(B.data1, A.data1)
-    copy!(B.data2, A.data2)
+    copy!(low_part(B), low_part(A))
+    copy!(high_part(B), high_part(A))
     if A.plan != nothing && B.plan == nothing
         initialize_plan!(B)
     end
@@ -362,39 +416,47 @@ function Base.copy!(B::KaratsubaArray, A::KaratsubaArray)
 end
 
 function zero!(A::KaratsubaArray)
-    zero!(A.data1)
-    zero!(A.data2)
+    zero!(low_part(A))
+    zero!(high_part(A))
 end
 
 """
     from_karatsuba(T::Type, K::KaratsubaArray)
 
-Reconstruct the full array represented by `K` as `K.data1 + K.N1*K.data2`.
+Reconstruct the full array represented by `K` as
+`low_part(K) + low_modulus(K)*high_part(K)`.
 The returned array has element type `T` and follows the component backend. Each
 integer conversion is checked before returning, so an inexact or overflowing
 conversion throws `InexactError`.
 """
-function from_karatsuba(::Type{T}, K::KaratsubaArray{S,D}) where {T,S,D}
-    if K.data1 isa CuModArray || K.data1 isa CuArray
+function from_karatsuba(
+    ::Type{T},
+    K::KaratsubaArray{S,D,Storage,Plan},
+) where {T,S,D,Storage<:AbstractArray{S,D},Plan<:AbstractArray{S,D}}
+    if Storage <: Union{CuModArray,CuArray}
         return _karatsuba_reconstruct_gpu(T, K)::CUDA.CuArray{T,D}
     end
     return _karatsuba_reconstruct_host(T, K)::Array{T,D}
 end
 
-function _karatsuba_reconstruct_host(::Type{T}, K::KaratsubaArray{S,D}) where {T,S,D}
-    low = _karatsuba_host_array(K.data1)::Array{S,D}
-    high = _karatsuba_host_array(K.data2)::Array{S,D}
+function _karatsuba_reconstruct_host(
+    ::Type{T},
+    K::KaratsubaArray{S,D,Storage,Plan},
+) where {T,S,D,Storage<:AbstractArray{S,D},Plan<:AbstractArray{S,D}}
+    low = _karatsuba_host_array(low_part(K))::Array{S,D}
+    high = _karatsuba_host_array(high_part(K))::Array{S,D}
     result = Base.Array{T,D}(undef, size(low))
     for i in eachindex(result, low, high)
-        value = _karatsuba_bigint(low[i]) + BigInt(K.N1) * _karatsuba_bigint(high[i])
+        value =
+            _karatsuba_bigint(low[i]) + BigInt(low_modulus(K)) * _karatsuba_bigint(high[i])
         result[i] = _karatsuba_exact_convert(T, value)
     end
     return result
 end
 
-_karatsuba_gpu_storage(A::CuModArray) = A.data
+_karatsuba_gpu_storage(A::CuModArray) = parent(A)
 _karatsuba_gpu_storage(A::CUDA.CuArray) = A
-_karatsuba_gpu_strides(A::CuModArray) = strides(A.data)
+_karatsuba_gpu_strides(A::CuModArray) = strides(parent(A))
 _karatsuba_gpu_strides(A::CUDA.CuArray) = strides(A)
 
 function _karatsuba_gpu_float_precision(::Type{Float16})
@@ -545,7 +607,10 @@ function _karatsuba_reconstruct_gpu_kernel!(
     return
 end
 
-function _karatsuba_reconstruct_gpu(::Type{T}, K::KaratsubaArray{S,D}) where {T,S,D}
+function _karatsuba_reconstruct_gpu(
+    ::Type{T},
+    K::KaratsubaArray{S,D,Storage,Plan},
+) where {T,S,D,Storage<:AbstractArray{S,D},Plan<:AbstractArray{S,D}}
     supported(T) = isbitstype(T) && T <: Union{Integer,AbstractFloat} && sizeof(T) <= 8
     supported(S) || throw(
         ArgumentError(
@@ -557,10 +622,10 @@ function _karatsuba_reconstruct_gpu(::Type{T}, K::KaratsubaArray{S,D}) where {T,
             "from_karatsuba GPU output supports isbits integer or floating types up to 64 bits",
         ),
     )
-    K.N1 > 0 ||
+    low_modulus(K) > 0 ||
         throw(ArgumentError("from_karatsuba requires a positive low_modulus on GPU"))
     radix = try
-        Int(K.N1)
+        Int(low_modulus(K))
     catch
         throw(
             ArgumentError(
@@ -584,8 +649,8 @@ function _karatsuba_reconstruct_gpu(::Type{T}, K::KaratsubaArray{S,D}) where {T,
     result = CUDA.CuArray{T,D}(undef, size(K))
     isempty(result) && return result
     valid = CUDA.CuArray{Bool}(undef, length(result))
-    low = _karatsuba_gpu_storage(K.data1)
-    high = _karatsuba_gpu_storage(K.data2)
+    low = _karatsuba_gpu_storage(low_part(K))
+    high = _karatsuba_gpu_storage(high_part(K))
     threads = 256
     blocks = cld(length(result), threads)
     @cuda threads=threads blocks=blocks _karatsuba_reconstruct_gpu_kernel!(
@@ -594,8 +659,8 @@ function _karatsuba_reconstruct_gpu(::Type{T}, K::KaratsubaArray{S,D}) where {T,
         low,
         high,
         size(K),
-        _karatsuba_gpu_strides(K.data1),
-        _karatsuba_gpu_strides(K.data2),
+        _karatsuba_gpu_strides(low_part(K)),
+        _karatsuba_gpu_strides(high_part(K)),
         radix,
     )
     all(valid) || throw(
@@ -725,17 +790,31 @@ end
 
 function _karatsuba_zeros(
     ::Type{T},
+    ::Type{S},
+    ::Type{P},
     dims::Dims{D};
     low_modulus = nothing,
     high_modulus = nothing,
     modulus = nothing,
-    use_gpu::Bool = true,
-) where {T,D}
+) where {T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}}
     explicit = low_modulus !== nothing && high_modulus !== nothing && modulus !== nothing
     shorthand = low_modulus === nothing && high_modulus === nothing && modulus !== nothing
     (explicit || shorthand) || throw(
         ArgumentError("Karatsuba zeros require either modulus or all three split moduli"),
     )
+    isconcretetype(S) || throw(
+        ArgumentError("Karatsuba zero factories require a concrete component storage type"),
+    )
+    isconcretetype(P) || throw(
+        ArgumentError("Karatsuba zero factories require a concrete plan storage type"),
+    )
+    expected_plan_type = _karatsuba_plan_type(S)
+    P === expected_plan_type || throw(
+        ArgumentError(
+            "Requested plan storage type $P does not match the plan type $expected_plan_type for component storage $S",
+        ),
+    )
+
     N1, N2, M = _karatsuba_parameters(
         Base.zeros(T, dims);
         low_modulus = low_modulus,
@@ -743,14 +822,21 @@ function _karatsuba_zeros(
         modulus = modulus,
     )
     (N1 > 0 && N2 > 0 && M > 0) || throw(ArgumentError("Karatsuba moduli must be positive"))
-    if use_gpu
-        first = zeros(CuModArray{T,D}, dims...; modulus = N1)
-        second = zeros(CuModArray{T,D}, dims...; modulus = N2)
-    else
-        first = Base.zeros(T, dims)
-        second = Base.zeros(T, dims)
-    end
-    return KaratsubaArray{T,D}(
+
+    first = _karatsuba_zero_component(S, dims, N1)
+    second = _karatsuba_zero_component(S, dims, N2)
+    typeof(first) === S || throw(
+        ArgumentError(
+            "Storage factory returned $(typeof(first)) for requested component type $S",
+        ),
+    )
+    typeof(second) === S || throw(
+        ArgumentError(
+            "Storage factory returned $(typeof(second)) for requested component type $S",
+        ),
+    )
+
+    return KaratsubaArray{T,D,S,P}(
         first,
         second;
         low_modulus = N1,
@@ -759,18 +845,109 @@ function _karatsuba_zeros(
     )
 end
 
-Base.zeros(::Type{KaratsubaArray{T,2}}, rows::Integer, cols::Integer; kwargs...) where {T} =
-    _karatsuba_zeros(T, (Int(rows), Int(cols)); kwargs...)
-Base.zeros(::Type{KaratsubaArray{T,1}}, length::Integer; kwargs...) where {T} =
-    _karatsuba_zeros(T, (Int(length),); kwargs...)
+function _karatsuba_zeros(
+    ::Type{T},
+    ::Type{S},
+    dims::Dims{D};
+    kwargs...,
+) where {T,D,S<:AbstractArray{T,D}}
+    P = _karatsuba_plan_type(S)
+    return _karatsuba_zeros(T, S, P, dims; kwargs...)
+end
 
-function initialize_plan!(K::KaratsubaArray{T,D}) where {T,D}
-    if K.data1 isa CuModArray
-        K.plan = zeros(CuModArray{T,D}, size(K.data1)...; modulus = Int(K.N1))
-    elseif K.data1 isa CuArray
-        K.plan = CUDA.zeros(T, size(K.data1)...)
+function _karatsuba_zero_component(::Type{Array{T,D}}, dims::Dims{D}, ::Int) where {T,D}
+    return Base.zeros(T, dims)
+end
+
+function _karatsuba_zero_component(
+    ::Type{CuModArray{T,D}},
+    dims::Dims{D},
+    component_modulus::Int,
+) where {T,D}
+    return zeros(CuModArray{T,D}, dims...; modulus = component_modulus)
+end
+
+function _karatsuba_zero_component(
+    ::Type{S},
+    dims::Dims{D},
+    ::Int,
+) where {T,D,S<:CuArray{T,D}}
+    isconcretetype(S) || throw(
+        ArgumentError("CuArray zero factories require a concrete component storage type"),
+    )
+    component = CUDA.zeros(T, dims...)
+    typeof(component) === S || throw(
+        ArgumentError(
+            "CUDA.zeros returned $(typeof(component)) for requested component type $S",
+        ),
+    )
+    return component
+end
+
+function _karatsuba_zero_component(
+    ::Type{S},
+    ::Dims{D},
+    ::Int,
+) where {T,D,S<:AbstractArray{T,D}}
+    throw(
+        ArgumentError("Karatsuba zero factories do not support component storage type $S"),
+    )
+end
+
+function Base.zeros(
+    ::Type{KaratsubaArray{T,2}},
+    rows::Integer,
+    cols::Integer;
+    kwargs...,
+) where {T}
+    return _karatsuba_zeros(T, CuModArray{T,2}, (Int(rows), Int(cols)); kwargs...)
+end
+
+function Base.zeros(::Type{KaratsubaArray{T,1}}, length::Integer; kwargs...) where {T}
+    return _karatsuba_zeros(T, CuModArray{T,1}, (Int(length),); kwargs...)
+end
+
+function Base.zeros(
+    ::Type{KaratsubaArray{T,2,S}},
+    rows::Integer,
+    cols::Integer;
+    kwargs...,
+) where {T,S<:AbstractArray{T,2}}
+    return _karatsuba_zeros(T, S, (Int(rows), Int(cols)); kwargs...)
+end
+
+function Base.zeros(
+    ::Type{KaratsubaArray{T,1,S}},
+    length::Integer;
+    kwargs...,
+) where {T,S<:AbstractArray{T,1}}
+    return _karatsuba_zeros(T, S, (Int(length),); kwargs...)
+end
+
+function Base.zeros(
+    ::Type{KaratsubaArray{T,2,S,P}},
+    rows::Integer,
+    cols::Integer;
+    kwargs...,
+) where {T,S<:AbstractArray{T,2},P<:AbstractArray{T,2}}
+    return _karatsuba_zeros(T, S, P, (Int(rows), Int(cols)); kwargs...)
+end
+
+function Base.zeros(
+    ::Type{KaratsubaArray{T,1,S,P}},
+    length::Integer;
+    kwargs...,
+) where {T,S<:AbstractArray{T,1},P<:AbstractArray{T,1}}
+    return _karatsuba_zeros(T, S, P, (Int(length),); kwargs...)
+end
+
+function initialize_plan!(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
+    if low_part(K) isa CuModArray
+        K.plan = zeros(CuModArray{T,D}, size(low_part(K))...; modulus = Int(low_modulus(K)))
+    elseif low_part(K) isa CuArray
+        K.plan = CUDA.zeros(T, size(low_part(K))...)
     else
-        K.plan = Base.zeros(T, size(K.data1))
+        K.plan = Base.zeros(T, size(low_part(K)))
     end
     return K
 end
@@ -788,31 +965,34 @@ function _karatsuba_zero_component(source, dims::Dims, component_modulus)
     return Base.zeros(T, dims)
 end
 
-function _karatsuba_output_like(source::KaratsubaArray{T,D}, dims::Dims{D}) where {T,D}
-    data1 = _karatsuba_zero_component(source.data1, dims, source.N1)
-    data2 = _karatsuba_zero_component(source.data2, dims, source.N2)
+function _karatsuba_output_like(
+    source::KaratsubaArray{T,D,S,P},
+    dims::Dims{D},
+) where {T,D,S,P}
+    data1 = _karatsuba_zero_component(low_part(source), dims, low_modulus(source))
+    data2 = _karatsuba_zero_component(high_part(source), dims, high_modulus(source))
     return KaratsubaArray(
         data1,
         data2;
-        low_modulus = source.N1,
-        high_modulus = source.N2,
-        modulus = source.M,
+        low_modulus = low_modulus(source),
+        high_modulus = high_modulus(source),
+        modulus = modulus(source),
     )
 end
 
 function +(A::KaratsubaArray, B::KaratsubaArray)
-    K = _karatsuba_output_like(A, size(A.data1))
+    K = _karatsuba_output_like(A, size(low_part(A)))
     add!(K, A, B)
     K
 end
 
 function -(A::KaratsubaArray, B::KaratsubaArray)
-    K = _karatsuba_output_like(A, size(A.data1))
+    K = _karatsuba_output_like(A, size(low_part(A)))
     sub!(K, A, B)
 end
 
 function *(a::Number, A::KaratsubaArray)
-    K = _karatsuba_output_like(A, size(A.data1))
+    K = _karatsuba_output_like(A, size(low_part(A)))
     scalar_multiply!(K, A, a)
     K
 end
@@ -822,22 +1002,22 @@ function *(A::KaratsubaArray, a::Number)
 end
 
 function *(A::KaratsubaArray, B::KaratsubaArray)
-    if occursin("CuMod", string(typeof(A.data1)))
-        dims = (size(A.data1, 1), size(B.data1, 2))
+    if occursin("CuMod", string(typeof(low_part(A))))
+        dims = (size(low_part(A), 1), size(low_part(B), 2))
         K = _karatsuba_output_like(A, dims)
         plan = _karatsuba_output_like(A, dims)
-        #plan = KMatMulPlan(zeros(eltype(A.data1),size(A.data1)...,A.M),zeros(eltype(B.data1),size(B.data1)...,A.M),A.N1,A.N2)
-    elseif occursin("Cu", string(typeof(A.data1)))
-        dims = (size(A.data1, 1), size(B.data1, 2))
+        #plan = KMatMulPlan(zeros(eltype(low_part(A)),size(low_part(A))...,modulus(A)),zeros(eltype(low_part(B)),size(low_part(B))...,modulus(A)),low_modulus(A),high_modulus(A))
+    elseif occursin("Cu", string(typeof(low_part(A))))
+        dims = (size(low_part(A), 1), size(low_part(B), 2))
         K = _karatsuba_output_like(A, dims)
     else
-        dims = (size(A.data1, 1), size(B.data1, 2))
+        dims = (size(low_part(A), 1), size(low_part(B), 2))
         K = _karatsuba_output_like(A, dims)
-        plan = KMatMulPlan{Matrix{eltype(A.data1)}}(
-            zeros(eltype(A.data1), size(A.data1)...),
-            zeros(eltype(B.data1), size(B.data1)...),
-            A.N1,
-            A.N2,
+        plan = KMatMulPlan{Matrix{eltype(low_part(A))}}(
+            zeros(eltype(low_part(A)), size(low_part(A))...),
+            zeros(eltype(low_part(B)), size(low_part(B))...),
+            low_modulus(A),
+            high_modulus(A),
         )
     end
     LinearAlgebra.mul!(K, A, B, plan)
@@ -868,10 +1048,11 @@ end
 # end
 
 function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
-    if (A.M != B.M) || (A.M != K.M)
+    if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
         error("Matrices must have the same modulus m")
     end
-    if (size(A.data1) != size(B.data1)) || (size(A.data1) != (size(K.data1)))
+    if (size(low_part(A)) != size(low_part(B))) ||
+       (size(low_part(A)) != (size(low_part(K))))
         error("Matrix dimensions must match")
     end
 
@@ -882,20 +1063,20 @@ function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
 
     tw = TILE_WIDTH
 
-    totalsize = length(A.data1.data)
+    totalsize = length(parent(low_part(A)))
 
     threads = tw
     blocks = totalsize ÷ tw
 
     @cuda threads=threads blocks=blocks karatsuba_add_kernel!(
-        K.data1.data,
-        K.data2.data,
-        A.data1.data,
-        A.data2.data,
-        B.data1.data,
-        B.data2.data,
-        A.N1,
-        A.N2,
+        parent(low_part(K)),
+        parent(high_part(K)),
+        parent(low_part(A)),
+        parent(high_part(A)),
+        parent(low_part(B)),
+        parent(high_part(B)),
+        low_modulus(A),
+        high_modulus(A),
     )
 
 
@@ -909,87 +1090,88 @@ end
 #This is not safe if K == B, but it is safe if K == A.
 #"""
 #function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
-#    if (A.M != B.M) || (A.M != K.M)
+#    if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
 #        error("Matrices must have the same modulus m")
 #    end
-#    if (size(A.data1) != size(B.data1)) || (size(A.data1) != (size(K.data1)))
+#    if (size(low_part(A)) != size(low_part(B))) || (size(low_part(A)) != (size(low_part(K))))
 #        error("Matrix dimensions must match")
 #    end
 #    if (A.plan == nothing) || (K.plan == nothing)
 #        error("Must initialize plans first before using fallback implementation")
 #    end
 #    #=
-#    K.data2 .= mod.(trunc.((A.data1+B.data1)./A.M),A.N2)
-#    K.data1 .= mod.(A.data1 + B.data1 - A.M*K.data2,A.N1)
-#    K.data2 .= mod.(K.data2 + A.data2 + B.data2,A.N2)
+#    high_part(K) .= mod.(trunc.((low_part(A)+low_part(B))./modulus(A)),high_modulus(A))
+#    low_part(K) .= mod.(low_part(A) + low_part(B) - modulus(A)*high_part(K),low_modulus(A))
+#    high_part(K) .= mod.(high_part(K) + high_part(A) + high_part(B),high_modulus(A))
 #    =#
 
-#    add!(K.plan,A.data1,B.data1,2*A.N1)
-#    divide_elements!(K.plan,K.plan,A.N1)
-#    add!(K.data2,K.plan,A.data2,2*A.N2)
-#    add!(K.data2,K.data2,B.data2,2*A.N2)
-#    LinearAlgebra.mul!(K.plan,K.plan,A.N1,A.N1^2)
-#    sub!(K.plan,B.data1,K.plan,B.N1^2)
-#    add!(K.data1,A.data1,K.plan,A.N1^2)
+#    add!(K.plan,low_part(A),low_part(B),2*low_modulus(A))
+#    divide_elements!(K.plan,K.plan,low_modulus(A))
+#    add!(high_part(K),K.plan,high_part(A),2*high_modulus(A))
+#    add!(high_part(K),high_part(K),high_part(B),2*high_modulus(A))
+#    LinearAlgebra.mul!(K.plan,K.plan,low_modulus(A),low_modulus(A)^2)
+#    sub!(K.plan,low_part(B),K.plan,low_modulus(B)^2)
+#    add!(low_part(K),low_part(A),K.plan,low_modulus(A)^2)
 #    #=
-#    LinearAlgebra.mul!(K.data2,K.data2,1/A.M)
-#    trunc_elements!(K.data2)
+#    LinearAlgebra.mul!(high_part(K),high_part(K),1/modulus(A))
+#    trunc_elements!(high_part(K))
 #    =#
-#    mod_elements!(K.data1; modulus_override=A.N1)
-#    mod_elements!(K.data2; modulus_override=A.N2)
+#    mod_elements!(low_part(K); modulus_override=low_modulus(A))
+#    mod_elements!(high_part(K); modulus_override=high_modulus(A))
 #    #=
-#    add!(K.data1,A.data1,B.data1,2*A.M)
-#    add!(K.data2,A.data2,B.data2)
-#    add!(K.data2,K.data2,divides(K.data1,K.M),K.N2)
-#    mod_elements!(K.data1; modulus_override=K.N1)
+#    add!(low_part(K),low_part(A),low_part(B),2*modulus(A))
+#    add!(high_part(K),high_part(A),high_part(B))
+#    add!(high_part(K),high_part(K),divides(low_part(K),modulus(K)),high_modulus(K))
+#    mod_elements!(low_part(K); modulus_override=low_modulus(K))
 #    =#
 
 #    K
 #end
 
 function sub!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
-    if (A.M != B.M) || (A.M != K.M)
+    if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
         error("Matrices must have the same modulus m")
     end
-    if (size(A.data1) != size(B.data1)) || (size(A.data1) != (size(K.data1)))
+    if (size(low_part(A)) != size(low_part(B))) ||
+       (size(low_part(A)) != (size(low_part(K))))
         error("Matrix dimensions must match")
     end
 
     #=
-    C.data2 .= mod.(trunc.((A.data1-B.data1)./A.M),A.N2)
-    C.data1 .= mod.(A.data1 - B.data1 - A.M*C.data2,A.N1)
-    C.data2 .= mod.(C.data2 + A.data2 - B.data2 - (A.data1.<B.data1),A.N2)
+    high_part(C) .= mod.(trunc.((low_part(A)-low_part(B))./modulus(A)),high_modulus(A))
+    low_part(C) .= mod.(low_part(A) - low_part(B) - modulus(A)*high_part(C),low_modulus(A))
+    high_part(C) .= mod.(high_part(C) + high_part(A) - high_part(B) - (low_part(A).<low_part(B)),high_modulus(A))
 
-    sub!(K.data2,A.data1,B.data1)
-    LinearAlgebra.mul!(K.data2,K.data2,1/A.M)
-    trunc_elements!(K.data2)
-    mod_elements!(K.data2; modulus_override=A.N2)
-    LinearAlgebra.mul!(K.data1,K.data1,A.M,A.M^2)
-    sub!(K.data1,B.data1,K.data1)
-    sub!(K.data1,A.data1,K.data1)
-    mod_elements!(K.data1; modulus_override=A.N1)
-    add!(K.data2,K.data2,A.data2)
-    sub!(K.data2,K.data2,B.data2)
-    sub!(K.data2,K.data2,A.data1.<B.data1)
-    mod_elements!(K.data2; modulus_override=A.N2)
+    sub!(high_part(K),low_part(A),low_part(B))
+    LinearAlgebra.mul!(high_part(K),high_part(K),1/modulus(A))
+    trunc_elements!(high_part(K))
+    mod_elements!(high_part(K); modulus_override=high_modulus(A))
+    LinearAlgebra.mul!(low_part(K),low_part(K),modulus(A),modulus(A)^2)
+    sub!(low_part(K),low_part(B),low_part(K))
+    sub!(low_part(K),low_part(A),low_part(K))
+    mod_elements!(low_part(K); modulus_override=low_modulus(A))
+    add!(high_part(K),high_part(K),high_part(A))
+    sub!(high_part(K),high_part(K),high_part(B))
+    sub!(high_part(K),high_part(K),low_part(A).<low_part(B))
+    mod_elements!(high_part(K); modulus_override=high_modulus(A))
     =#
     tw = TILE_WIDTH
 
-    totalsize = length(A.data1.data)
+    totalsize = length(parent(low_part(A)))
 
     threads = tw
     blocks = totalsize ÷ tw
 
     @cuda threads=threads blocks=blocks karatsuba_sub_kernel!(
-        K.data1.data,
-        K.data2.data,
-        A.data1.data,
-        A.data2.data,
-        B.data1.data,
-        B.data2.data,
-        A.N1,
-        A.N2,
-        A.M,
+        parent(low_part(K)),
+        parent(high_part(K)),
+        parent(low_part(A)),
+        parent(high_part(A)),
+        parent(low_part(B)),
+        parent(high_part(B)),
+        low_modulus(A),
+        high_modulus(A),
+        modulus(A),
     )
 
     # negate!(K,B)
@@ -998,40 +1180,40 @@ function sub!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
 end
 
 function scalar_multiply!(B::KaratsubaArray, A::KaratsubaArray, s::Number)
-    if A.M != B.M
+    if modulus(A) != modulus(B)
         error("Matrices must have the same modulus m")
     end
-    if size(A.data1) != size(B.data1)
+    if size(low_part(A)) != size(low_part(B))
         error("Matrix dimensions must match")
     end
 
-    # LinearAlgebra.mul!(B.data2,A.data1,s,A.N1^2)
-    # divide_elements!(B.data2,B.data2,A.N1)
-    # LinearAlgebra.mul!(B.data1,A.data2,s,A.N2)
-    # add!(B.data2,B.data2,B.data1)
-    # LinearAlgebra.mul!(B.data1,A.data1,s,A.N1)
+    # LinearAlgebra.mul!(high_part(B),low_part(A),s,low_modulus(A)^2)
+    # divide_elements!(high_part(B),high_part(B),low_modulus(A))
+    # LinearAlgebra.mul!(low_part(B),high_part(A),s,high_modulus(A))
+    # add!(high_part(B),high_part(B),low_part(B))
+    # LinearAlgebra.mul!(low_part(B),low_part(A),s,low_modulus(A))
 
     tw = TILE_WIDTH
 
-    totalsize = length(A.data1.data)
+    totalsize = length(parent(low_part(A)))
 
     threads = tw
     blocks = totalsize ÷ tw
 
     @cuda threads=threads blocks=blocks karatsuba_scalar_multiply_kernel!(
-        B.data1.data,
-        B.data2.data,
-        A.data1.data,
-        A.data2.data,
+        parent(low_part(B)),
+        parent(high_part(B)),
+        parent(low_part(A)),
+        parent(high_part(A)),
         s,
-        A.N1,
-        A.N2,
+        low_modulus(A),
+        high_modulus(A),
     )
 
     #=
-    B.data2 .= mod.(trunc.((s*A.data1)/A.M),A.N2)
-    B.data1 .= mod.(s*A.data1 - B.M*B.data2,A.N1)
-    B.data2 .= mod.(B.data2 + s*A.data2,A.N2)
+    high_part(B) .= mod.(trunc.((s*low_part(A))/modulus(A)),high_modulus(A))
+    low_part(B) .= mod.(s*low_part(A) - modulus(B)*high_part(B),low_modulus(A))
+    high_part(B) .= mod.(high_part(B) + s*high_part(A),high_modulus(A))
     =#
     B
 end
@@ -1042,18 +1224,18 @@ end
 
 #     tw = TILE_WIDTH
 
-#     totalsize = length(A.data1.data)
+#     totalsize = length(parent(low_part(A)))
 
 #     threads = tw
 #     blocks = totalsize ÷ tw
 
-# @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(K.data1.data,
-#                                                              K.data2.data,
-#                                                              A.data1.data,
-#                                                              A.data2.data,
-#                                                              A.N1,
-#                                                              A.N2,
-#                                                             A.M)
+# @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(parent(low_part(K)),
+#                                                              parent(high_part(K)),
+#                                                              parent(low_part(A)),
+#                                                              parent(high_part(A)),
+#                                                              low_modulus(A),
+#                                                              high_modulus(A),
+#                                                             modulus(A))
 
 
 #     K
@@ -1062,59 +1244,59 @@ end
 function negate!(K::KaratsubaArray, A::KaratsubaArray)
     tw = TILE_WIDTH
 
-    totalsize = length(A.data1.data)
+    totalsize = length(parent(low_part(A)))
 
     threads = tw
     blocks = totalsize ÷ tw
 
     @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(
-        K.data1.data,
-        K.data2.data,
-        A.data1.data,
-        A.data2.data,
-        A.N1,
-        A.N2,
-        A.M,
+        parent(low_part(K)),
+        parent(high_part(K)),
+        parent(low_part(A)),
+        parent(high_part(A)),
+        low_modulus(A),
+        high_modulus(A),
+        modulus(A),
     )
 
 
 
     #=
-    K.data2 .= trunc.((A.M .- A.data1)/A.M)
-    K.data1 .= mod.(A.M - A.data1 - A.M*K.data2,A.N1)
-    K.data2 .= mod.(mod.(K.data2 + A.M - A.data2 - 1,A.M),A.N2)
+    high_part(K) .= trunc.((modulus(A) .- low_part(A))/modulus(A))
+    low_part(K) .= mod.(modulus(A) - low_part(A) - modulus(A)*high_part(K),low_modulus(A))
+    high_part(K) .= mod.(mod.(high_part(K) + modulus(A) - high_part(A) - 1,modulus(A)),high_modulus(A))
     =#
-    # mul!(K.data2,K.data2,0)
-    # scalar_add!(K.data2,K.data2,A.N1,2*A.N1)
-    # sub!(K.data2,K.data2,A.data1,2*A.N1)
+    # mul!(high_part(K),high_part(K),0)
+    # scalar_add!(high_part(K),high_part(K),low_modulus(A),2*low_modulus(A))
+    # sub!(high_part(K),high_part(K),low_part(A),2*low_modulus(A))
     #=
-    LinearAlgebra.mul!(K.data2,K.data2,1/A.N1)
-    trunc_elements!(K.data2)
+    LinearAlgebra.mul!(high_part(K),high_part(K),1/low_modulus(A))
+    trunc_elements!(high_part(K))
      =#
-    # divide_elements!(K.data2,K.data2,A.N1)
-    # LinearAlgebra.mul!(K.data1,K.data2,A.N1,A.M^2)
-    # add!(K.data1,K.data1,A.data1,A.M^2)
-    # negate!(K.data1,K.data1,A.N1)
-    # mod_elements!(K.data1; modulus_override=A.N1)
-    # scalar_add!(K.data2,K.data2,A.N2,A.M^2)
-    # scalar_sub!(K.data2,K.data2,1,A.M^2)
-    # sub!(K.data2,K.data2,A.data2,A.M)
-    # mod_elements!(K.data2; modulus_override=A.N2)
+    # divide_elements!(high_part(K),high_part(K),low_modulus(A))
+    # LinearAlgebra.mul!(low_part(K),high_part(K),low_modulus(A),modulus(A)^2)
+    # add!(low_part(K),low_part(K),low_part(A),modulus(A)^2)
+    # negate!(low_part(K),low_part(K),low_modulus(A))
+    # mod_elements!(low_part(K); modulus_override=low_modulus(A))
+    # scalar_add!(high_part(K),high_part(K),high_modulus(A),modulus(A)^2)
+    # scalar_sub!(high_part(K),high_part(K),1,modulus(A)^2)
+    # sub!(high_part(K),high_part(K),high_part(A),modulus(A))
+    # mod_elements!(high_part(K); modulus_override=high_modulus(A))
     K
 end
 
 function divide_elements!(B::CuModArray, A::CuModArray, N::Integer)
-    @. B.data = div(A.data, N)
+    parent(B) .= div.(parent(A), N)
     return A
 end
 
-function Base.copy(A::KaratsubaArray{T,D}) where {T,D}
+function Base.copy(A::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
     B = KaratsubaArray{T,D}(
-        copy(A.data1),
-        copy(A.data2);
-        low_modulus = copy(A.N1),
-        high_modulus = copy(A.N2),
-        modulus = A.N1 * A.N2,
+        copy(low_part(A)),
+        copy(high_part(A));
+        low_modulus = copy(low_modulus(A)),
+        high_modulus = copy(high_modulus(A)),
+        modulus = low_modulus(A) * high_modulus(A),
     )
     if !(A.plan==nothing)
         initialize_plan!(B)

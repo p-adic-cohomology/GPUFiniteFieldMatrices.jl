@@ -234,49 +234,54 @@ function upper_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
 
     if rows <= MAX_INVERSE_SIZE
         A_inv_data =
-            CUDA.zeros(eltype(A.data), TILE_WIDTH + size(A, 2), TILE_WIDTH + size(A, 1))
+            CUDA.zeros(eltype(parent(A)), TILE_WIDTH + size(A, 2), TILE_WIDTH + size(A, 1))
         n_active = min(TILE_WIDTH, size(A, 1), size(A, 2))
-        _upper_triangular_inv_32!(A_inv_data, A.data, A.N, 0, 0, n_active)
-        return CuModMatrix(A_inv_data; modulus = A.N, new_size = (size(A, 2), size(A, 1)))
+        _upper_triangular_inv_32!(A_inv_data, parent(A), modulus(A), 0, 0, n_active)
+        return CuModMatrix(
+            A_inv_data;
+            modulus = modulus(A),
+            new_size = (size(A, 2), size(A, 1)),
+        )
     end
 
-    A_inv = zeros(CuModMatrix{eltype(A.data)}, size(A)[2], size(A)[1]; modulus = A.N)
+    A_inv =
+        zeros(CuModMatrix{eltype(parent(A))}, size(A)[2], size(A)[1]; modulus = modulus(A))
 
     if debug
-        println("size(A.data): ", size(A.data))
+        println("size(parent(A)): ", size(parent(A)))
     end
 
     if rows <= cols #square or wide
         _recursive_upper_triangular_inverse_no_copy(
-            A.data,
-            A_inv.data,
+            parent(A),
+            parent(A_inv),
             1,
             rows,
             1,
             cols,
-            A.N;
+            modulus(A);
             debug = debug,
         )
     else #tall
         _recursive_upper_triangular_inverse_no_copy(
-            A.data,
-            A_inv.data,
+            parent(A),
+            parent(A_inv),
             1,
             cols,
             1,
             cols,
-            A.N;
+            modulus(A);
             debug = debug,
         )
     end
 
     if debug
-        println("A.data * A_inv.data:")
-        tmp = A.data * A_inv.data
-        mod!(tmp, tmp, A.N)
+        println("parent(A) * parent(A_inv):")
+        tmp = parent(A) * parent(A_inv)
+        mod!(tmp, tmp, modulus(A))
         display(tmp)
-        println("A_inv.data:")
-        display(A_inv.data)
+        println("parent(A_inv):")
+        display(parent(A_inv))
     end
 
     return A_inv
@@ -538,23 +543,28 @@ function lower_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
 
     if cols <= MAX_INVERSE_SIZE
         A_inv_data =
-            CUDA.zeros(eltype(A.data), TILE_WIDTH + size(A, 2), TILE_WIDTH + size(A, 1))
+            CUDA.zeros(eltype(parent(A)), TILE_WIDTH + size(A, 2), TILE_WIDTH + size(A, 1))
         n_active = min(TILE_WIDTH, size(A, 1), size(A, 2))
-        _lower_triangular_inv_32!(A_inv_data, A.data, A.N, 0, 0, n_active)
-        return CuModMatrix(A_inv_data; modulus = A.N, new_size = (size(A, 2), size(A, 1)))
+        _lower_triangular_inv_32!(A_inv_data, parent(A), modulus(A), 0, 0, n_active)
+        return CuModMatrix(
+            A_inv_data;
+            modulus = modulus(A),
+            new_size = (size(A, 2), size(A, 1)),
+        )
     end
 
-    A_inv = zeros(CuModMatrix{eltype(A.data)}, size(A)[2], size(A)[1]; modulus = A.N)
+    A_inv =
+        zeros(CuModMatrix{eltype(parent(A))}, size(A)[2], size(A)[1]; modulus = modulus(A))
 
     if rows <= cols #square or wide
         _recursive_lower_triangular_inverse_no_copy(
-            A.data,
-            A_inv.data,
+            parent(A),
+            parent(A_inv),
             1,
             rows,
             1,
             cols,
-            A.N;
+            modulus(A);
             debug = debug,
         )
     else #tall
@@ -564,16 +574,16 @@ function lower_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
             ),
         )
         # _recursive_lower_triangular_inverse_no_copy(
-        #     A.data, A_inv.data, 1, rows, 1, rows, A.N; debug=debug)
+        #     parent(A), parent(A_inv), 1, rows, 1, rows, modulus(A); debug=debug)
     end
 
     if debug
-        println("A.data * A_inv.data:")
-        tmp = A.data * A_inv.data
-        mod!(tmp, tmp, A.N)
+        println("parent(A) * parent(A_inv):")
+        tmp = parent(A) * parent(A_inv)
+        mod!(tmp, tmp, modulus(A))
         display(tmp)
-        println("A_inv.data:")
-        display(A_inv.data)
+        println("parent(A_inv):")
+        display(parent(A_inv))
     end
 
     return A_inv

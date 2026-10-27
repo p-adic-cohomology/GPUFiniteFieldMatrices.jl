@@ -216,12 +216,12 @@ function test_triangular_destination_helpers()
 
         lower_gpu = CuModMatrix(recursive_lower; modulus = N)
         lower_inverse = GPUFiniteFieldMatrices.lower_triangular_inverse_no_copy(lower_gpu)
-        @test round.(Int, Array(lower_inverse.data)[1:recursive_n, 1:recursive_n]) ==
+        @test round.(Int, Array(parent(lower_inverse))[1:recursive_n, 1:recursive_n]) ==
               _triangular_inverse_integer_oracle(recursive_lower, N, true)
 
         upper_gpu = CuModMatrix(recursive_upper; modulus = N)
         upper_inverse = GPUFiniteFieldMatrices.upper_triangular_inverse_no_copy(upper_gpu)
-        @test round.(Int, Array(upper_inverse.data)[1:recursive_n, 1:recursive_n]) ==
+        @test round.(Int, Array(parent(upper_inverse))[1:recursive_n, 1:recursive_n]) ==
               _triangular_inverse_integer_oracle(recursive_upper, N, false)
     end
 
