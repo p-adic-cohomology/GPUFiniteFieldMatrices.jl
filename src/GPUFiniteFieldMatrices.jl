@@ -7,10 +7,12 @@ using CUDA:
     CuDeviceMatrix,
     CuDeviceVector,
     CuRef,
+    CuStaticSharedArray,
     CuStream,
     blockDim,
     blockIdx,
     gridDim,
+    sync_threads,
     synchronize,
     threadIdx
 

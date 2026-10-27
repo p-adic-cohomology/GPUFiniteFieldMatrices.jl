@@ -51,6 +51,8 @@ end
     @test nameof(GPUFiniteFieldMatrices._CUDA_BLAS) == expected_blas_name
 end
 
+include("cuda_kernel_bindings_test.jl")
+
 include("CuModMatrix/basic_operations_test.jl")
 include("CuModMatrix/inplace_operations_test.jl")
 include("CuModMatrix/matmul_operations_test.jl")
