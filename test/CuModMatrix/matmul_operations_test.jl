@@ -40,11 +40,11 @@ function test_matmul_operations()
     expected_C = CuModMatrix(C_data .% modulus, modulus)
     @test Array(C) ≈ Array(expected_C)
 
-    # Test using the direct multiplication implementation
-    println("Testing mat_mul_gpu_type direct implementation...")
-    C_direct = GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B)
+    # Test the allocating stripe adapter against ordinary multiplication.
+    println("Testing qualified stripe_mul implementation...")
+    C_direct = GPUFiniteFieldMatrices.stripe_mul(A, B)
 
-    println("GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B) = ")
+    println("GPUFiniteFieldMatrices.stripe_mul(A, B) = ")
     display(C_direct)
     println()
 
@@ -52,12 +52,9 @@ function test_matmul_operations()
 
     # Test multiplication with modulus override
     override_modulus = 7
-    C_mod =
-        GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B; modulus_override = override_modulus)
+    C_mod = GPUFiniteFieldMatrices.stripe_mul(A, B; modulus_override = override_modulus)
 
-    println(
-        "GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B) with modulus $override_modulus = ",
-    )
+    println("GPUFiniteFieldMatrices.stripe_mul(A, B) with modulus $override_modulus = ")
     display(C_mod)
     println()
 
@@ -78,7 +75,7 @@ function test_matmul_operations()
     B_chunk_host = reshape(Float32.(mod.(29 .* (1:(2k)), 101)), k, 2)
     A_chunk = CuModMatrix{Float32}(A_chunk_host, 101)
     B_chunk = CuModMatrix{Float32}(B_chunk_host, 101)
-    C_chunk = GPUFiniteFieldMatrices.mat_mul_gpu_type(A_chunk, B_chunk)
+    C_chunk = GPUFiniteFieldMatrices.stripe_mul(A_chunk, B_chunk)
     expected_chunk = mod.(Int64.(A_chunk_host) * Int64.(B_chunk_host), 101)
     @test round.(Int64, Array(C_chunk)) == expected_chunk
 
@@ -114,10 +111,10 @@ function test_inplace_matmul_operations()
     println()
 
     # Test using the in-place multiplication implementation
-    println("Testing mat_mul_gpu_type...")
-    mat_mul_type_inplace!(C, A, B)
+    println("Testing qualified stripe_mul!...")
+    GPUFiniteFieldMatrices.stripe_mul!(C, A, B)
 
-    println("After GPUFiniteFieldMatrices.mat_mul_type_inplace!(C, A, B):")
+    println("After GPUFiniteFieldMatrices.stripe_mul!(C, A, B):")
     display(C)
     println()
 
@@ -130,7 +127,7 @@ function test_inplace_matmul_operations()
     override_modulus = 3
     C2 = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, modulus)
 
-    mat_mul_type_inplace!(C2, A, B; modulus_override = override_modulus)
+    GPUFiniteFieldMatrices.stripe_mul!(C2, A, B; modulus_override = override_modulus)
 
     println("In-place multiplication with modulus $override_modulus:")
     display(C2)
@@ -142,16 +139,28 @@ function test_inplace_matmul_operations()
     @test Array(C2) ≈ expected_C2
     @test C2.N == modulus
 
-    # Without an override, the in-place direct helper reduces to the
-    # destination's stored modulus and leaves that metadata unchanged.
+    # Without an override, the destination-writing adapter uses C.N while
+    # leaving the destination's stored metadata unchanged.
     default_modulus = 5
     C_default = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, default_modulus)
-    mat_mul_type_inplace!(C_default, A, B)
+    GPUFiniteFieldMatrices.stripe_mul!(C_default, A, B)
     A_values = mod.(A_data, modulus)
     B_values = mod.(B_data, modulus)
     expected_default = mod.(A_values * B_values, default_modulus)
     @test Array(C_default) ≈ expected_default
     @test C_default.N == default_modulus
+
+    for fallback_override in (0, -1)
+        C_fallback = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, default_modulus)
+        GPUFiniteFieldMatrices.stripe_mul!(
+            C_fallback,
+            A,
+            B;
+            modulus_override = fallback_override,
+        )
+        @test Array(C_fallback) ≈ expected_default
+        @test C_fallback.N == default_modulus
+    end
 
     println("All in-place matrix multiplication operations tests passed!")
 end

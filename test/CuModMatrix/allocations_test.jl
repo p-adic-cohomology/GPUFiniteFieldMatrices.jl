@@ -51,6 +51,20 @@ function test_allocations()
     result = CUDA.@timed mul!(z, A, x)
     @test result[:gpu_bytes] < 20
 
+    # A mutating multi-stripe product reuses its destination and does not
+    # allocate a GPU result buffer for each stripe.
+    A_small = CuModMatrix{Float32}([1 2 3 4; 5 6 7 8], 11)
+    B_small = CuModMatrix{Float32}([1 2; 3 4; 5 6; 7 8], 11)
+    C_small = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, 11)
+    GPUFiniteFieldMatrices.stripe_mul!(C_small, A_small, B_small; max_ops = 1)
+    result = CUDA.@timed GPUFiniteFieldMatrices.stripe_mul!(
+        C_small,
+        A_small,
+        B_small;
+        max_ops = 1,
+    )
+    @test result[:gpu_bytes] < 20
+
     A_fl_data = convert.(Float64, A_data)
     trash = CUDA.@timed CuModMatrix{Float64}(A_fl_data, 11) # prime thie jitter
     result = CUDA.@timed CuModMatrix{Float64}(A_fl_data, 11)
