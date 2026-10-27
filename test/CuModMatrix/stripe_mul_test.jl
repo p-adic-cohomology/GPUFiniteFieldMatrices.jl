@@ -65,7 +65,7 @@ function test_stripe_mul()
 
     z_cpu = A_data * x_data .% 11^3
 
-    @test C_cpu == Array(C)
+    @test z_cpu == Array(z)
 
     println("Starting bigger mat-vec-mul example")
 
@@ -86,8 +86,8 @@ function test_stripe_mul()
     CUDA.@sync println("Done with GPU")
 
     println("Multiplying on the CPU...")
-    z_cpu = A_data * x_data .% 11^3
+    z_cpu = A_data * x_data .% 7^4
 
-    @test C_cpu == Array(C)
+    @test z_cpu == Array(z)
     println("Done testing stripe mat-vec-mul")
 end

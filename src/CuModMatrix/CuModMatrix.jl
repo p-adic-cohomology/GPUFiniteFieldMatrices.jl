@@ -505,8 +505,8 @@ end
     elementwise_multiply!(C, A, B; modulus_override = nothing)
 
 In-place element-wise multiplication: C = A .* B mod N. No allocation is performed.
-If `modulus_override` is provided, it is used instead of `C.N` for the reduction
-modulus. The stored modulus on `C` is unchanged.
+Only a positive `modulus_override` replaces `C.N` for the reduction modulus.
+A zero or negative value throws `ArgumentError`. The stored modulus on `C` is unchanged.
 """
 function elementwise_multiply!(
     C::CuModArray,
@@ -515,9 +515,10 @@ function elementwise_multiply!(
     ;
     modulus_override::Union{Nothing,Integer} = nothing,
 )
-    N = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    N = modulus_override === nothing ? C.N : modulus_override
 
-    if (modulus_override === nothing || modulus_override <= 0) && (A.N != B.N || A.N != C.N)
+    if modulus_override === nothing && (A.N != B.N || A.N != C.N)
         throw(
             CuModArrayModulusMismatchException(
                 "All matrices must have the same modulus N or provide a modulus_override",
@@ -536,8 +537,8 @@ end
     neg!(B, A; modulus_override = nothing)
 
 In-place negation: B = -A mod N. No allocation is performed.
-If `modulus_override` is provided, it is used instead of `B.N` for the reduction
-modulus. The stored modulus on `B` is unchanged.
+Only a positive `modulus_override` replaces `B.N` for the reduction modulus.
+Zero or a negative value uses `B.N`. The stored modulus on `B` is unchanged.
 """
 function neg!(
     B::CuModArray,
@@ -664,8 +665,8 @@ zero!(A::CuModArray) = fill!(A.data, zero(eltype(A.data)))
     mod_elements!(A; modulus_override = nothing)
 
 Apply modulus to all elements of A in-place.
-If `modulus_override` is provided, it is used instead of `A.N` for the reduction
-modulus. The stored modulus on `A` is unchanged.
+Only a positive `modulus_override` replaces `A.N` for the reduction modulus.
+Zero or a negative value uses `A.N`. The stored modulus on `A` is unchanged.
 """
 function mod_elements!(A::CuModArray; modulus_override::Union{Nothing,Integer} = nothing)
     N = modulus_override === nothing || modulus_override <= 0 ? A.N : modulus_override
@@ -761,8 +762,9 @@ end
 
 In-place matrix-vector multiplication: `z = A * x`. `input_bound` is the
 exclusive upper bound on nonnegative multiplicands and controls the default
-`max_ops`. `modulus_override` changes the per-call reduction modulus; when
-omitted, `z.N` is used and its stored modulus is unchanged.
+`max_ops`. A supplied `modulus_override` must be positive and sets the per-call
+reduction modulus; when omitted, `z.N` is used and its stored modulus is
+unchanged.
 """
 function LinearAlgebra.mul!(
     z::CuModVector,
@@ -772,7 +774,8 @@ function LinearAlgebra.mul!(
     modulus_override = nothing,
 )
 
-    if (A.N != z.N || A.N != x.N)
+    _validate_positive_modulus_override(modulus_override)
+    if (A.N != x.N || (modulus_override === nothing && A.N != z.N))
         throw(
             CuModArrayModulusMismatchException("All matrices must have the same modulus N"),
         )

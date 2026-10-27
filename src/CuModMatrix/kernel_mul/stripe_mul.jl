@@ -309,20 +309,18 @@ function _stripe_logical_data(x::CuModVector)
     return @view x.data[1:n]
 end
 
-function _stripe_effective_modulus(
-    stored_modulus,
-    modulus_override;
-    fallback_nonpositive = false,
-)
-    modulus = if modulus_override === nothing
-        stored_modulus
-    elseif modulus_override isa Integer && modulus_override <= 0 && fallback_nonpositive
-        stored_modulus
-    else
-        modulus_override
-    end
-    modulus isa Integer && modulus > 0 ||
+function _validate_positive_modulus_override(modulus_override)
+    modulus_override === nothing ||
+        (modulus_override isa Integer && modulus_override > 0) ||
         throw(ArgumentError("modulus_override must be a positive integer"))
+    return modulus_override
+end
+
+function _stripe_effective_modulus(stored_modulus, modulus_override)
+    _validate_positive_modulus_override(modulus_override)
+    modulus = modulus_override === nothing ? stored_modulus : modulus_override
+    modulus isa Integer && modulus > 0 ||
+        throw(ArgumentError("modulus must be a positive integer"))
     return Int(modulus)
 end
 
@@ -331,11 +329,12 @@ end
 
 Multiply matrices into `C` modulo the effective modulus. The destination's
 stored modulus is unchanged. When `modulus_override` is omitted, `C.N` is used
-for reduction. `input_bound` promises that input entries are
-nonnegative and strictly below the given bound. `max_ops` limits product
-contributions per output entry between reductions. For compatibility, an
-explicit matrix `input_bound` selects one stripe; the entire inner dimension
-must fit the exact-integer budget or the call throws `ArgumentError`.
+for reduction. A supplied `modulus_override` must be positive.
+`input_bound` promises that input entries are nonnegative and strictly below
+the given bound. `max_ops` limits product contributions per output entry
+between reductions. For compatibility, an explicit matrix `input_bound`
+selects one stripe; the entire inner dimension must fit the exact-integer
+budget or the call throws `ArgumentError`.
 """
 function stripe_mul!(
     C::CuModMatrix,
@@ -345,6 +344,7 @@ function stripe_mul!(
     input_bound = nothing,
     max_ops = nothing,
 )
+    modulus = _stripe_effective_modulus(C.N, modulus_override)
     A.N == B.N || throw(
         CuModArrayModulusMismatchException("Input matrices must have the same modulus N"),
     )
@@ -361,7 +361,6 @@ function stripe_mul!(
         (max_ops isa Integer && max_ops > 0) ||
         throw(ArgumentError("max_ops must be a positive integer"))
 
-    modulus = _stripe_effective_modulus(C.N, modulus_override; fallback_nonpositive = true)
     bound = input_bound === nothing ? A.N : input_bound
     raw_max_ops = input_bound === nothing ? max_ops : max(size(A, 2), 1)
     Cdata = _stripe_logical_data(C)
@@ -374,8 +373,10 @@ function stripe_mul!(
     return C
 end
 
-"""Multiply a matrix and vector into `z`, preserving its stored modulus.
-`respect_max_ops=false` recomputes the safe stripe budget from `input_bound`.
+"""
+Multiply a matrix and vector into `z`, preserving its stored modulus. A supplied
+`modulus_override` must be positive. `respect_max_ops=false` recomputes the safe
+stripe budget from `input_bound`.
 """
 function stripe_mul!(
     z::CuModVector,
@@ -386,6 +387,7 @@ function stripe_mul!(
     max_ops = nothing,
     respect_max_ops::Bool = true,
 )
+    modulus = _stripe_effective_modulus(A.N, modulus_override)
     A.N == x.N || throw(
         CuModArrayModulusMismatchException(
             "Matrix and vector inputs must have the same modulus N",
@@ -405,12 +407,11 @@ function stripe_mul!(
     eltype(A.data) === eltype(x.data) === eltype(z.data) ||
         throw(ArgumentError("matrix-vector product element types do not match"))
 
-    modulus = _stripe_effective_modulus(A.N, modulus_override)
     bound = input_bound === nothing ? A.N : input_bound
-    effective_max_ops = respect_max_ops ? max_ops : nothing
     zdata = _stripe_logical_data(z)
     Adata = _stripe_logical_data(A)
     xdata = _stripe_logical_data(x)
+    effective_max_ops = respect_max_ops ? max_ops : nothing
     _stripe_preflight(zdata, Adata, xdata, modulus, bound, effective_max_ops)
     fill!(z.data, zero(eltype(z.data)))
     _stripe_mul!(
@@ -437,6 +438,7 @@ function stripe_mul(
     input_bound = nothing,
     max_ops = nothing,
 )
+    modulus = _stripe_effective_modulus(A.N, modulus_override)
     A.N == B.N || throw(
         CuModArrayModulusMismatchException("Input matrices must have the same modulus N"),
     )
@@ -445,7 +447,6 @@ function stripe_mul(
             "Matrix dimensions do not match for multiplication",
         ),
     )
-    modulus = _stripe_effective_modulus(A.N, modulus_override; fallback_nonpositive = true)
     C = zeros(eltype(A.data), size(A, 1), size(B, 2), modulus)
     return stripe_mul!(C, A, B; modulus_override = modulus, input_bound, max_ops)
 end
@@ -457,6 +458,7 @@ function stripe_mul(
     input_bound = nothing,
     max_ops = nothing,
 )
+    modulus = _stripe_effective_modulus(A.N, modulus_override)
     A.N == x.N || throw(
         CuModArrayModulusMismatchException(
             "Matrix and vector inputs must have the same modulus N",
@@ -464,7 +466,6 @@ function stripe_mul(
     )
     size(A, 2) == length(x) ||
         throw(CuModArraySizeMismatchException("Matrix and vector dimensions do not match"))
-    modulus = _stripe_effective_modulus(A.N, modulus_override)
     z = zeros(eltype(A.data), size(A, 1), modulus)
     return stripe_mul!(z, A, x; modulus_override = modulus, input_bound, max_ops)
 end
