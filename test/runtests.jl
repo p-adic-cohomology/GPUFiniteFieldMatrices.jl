@@ -106,6 +106,7 @@ end
 if CUDA.functional()
     @testset "CuModMatrix.jl" begin
         @testset "Triangular Inverse" begin
+            test_triangular_destination_helpers()
             test_upper_triangular_inverse()
             test_lower_triangular_inverse()
         end
