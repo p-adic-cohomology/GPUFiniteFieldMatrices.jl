@@ -2,7 +2,7 @@ function test_upper_triangular_inverse(DEBUG::Bool = false)
 
     function unit_test_upper_triangular_inverse(A::Matrix, N::Int; debug::Bool = false)
         println("Running upper triangular inverse test with size $(size(A)) and N=$N")
-        A_gpu = CuModMatrix(A, N; new_size = size(A))
+        A_gpu = CuModMatrix(A; modulus = N, new_size = size(A))
         A_inv =
             GPUFiniteFieldMatrices.upper_triangular_inverse_no_copy(A_gpu; debug = debug)
         if debug
@@ -52,7 +52,7 @@ function test_lower_triangular_inverse(DEBUG::Bool = false)
 
     function unit_test_lower_triangular_inverse(A::Matrix, N::Int; debug::Bool = false)
         println("Running lower triangular inverse test with size $(size(A)) and N=$N")
-        A_gpu = CuModMatrix(A, N)
+        A_gpu = CuModMatrix(A; modulus = N)
         A_inv =
             GPUFiniteFieldMatrices.lower_triangular_inverse_no_copy(A_gpu; debug = debug)
 
@@ -214,12 +214,12 @@ function test_triangular_destination_helpers()
                 row == col ? row + 1 : row < col ? mod(11row + 5col, N) : 0
         end
 
-        lower_gpu = CuModMatrix(recursive_lower, N)
+        lower_gpu = CuModMatrix(recursive_lower; modulus = N)
         lower_inverse = GPUFiniteFieldMatrices.lower_triangular_inverse_no_copy(lower_gpu)
         @test round.(Int, Array(lower_inverse.data)[1:recursive_n, 1:recursive_n]) ==
               _triangular_inverse_integer_oracle(recursive_lower, N, true)
 
-        upper_gpu = CuModMatrix(recursive_upper, N)
+        upper_gpu = CuModMatrix(recursive_upper; modulus = N)
         upper_inverse = GPUFiniteFieldMatrices.upper_triangular_inverse_no_copy(upper_gpu)
         @test round.(Int, Array(upper_inverse.data)[1:recursive_n, 1:recursive_n]) ==
               _triangular_inverse_integer_oracle(recursive_upper, N, false)

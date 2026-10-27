@@ -169,7 +169,7 @@ precondition on the host before launching GPU kernels.
 """
 function pluq(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     Adata = copy(A.data)
-    Awork = CuModMatrix(Adata, A.N; new_size = size(A))
+    Awork = CuModMatrix(Adata; modulus = A.N, new_size = size(A))
     return pluq!(Awork, options = options)
 end
 
@@ -451,7 +451,7 @@ function Base.inv(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     bx3 = max(1, cld(n, tx))
     by3 = max(1, cld(n, ty))
     @cuda threads=(tx, ty) blocks=(bx3, by3) pluq_copy_block_kernel!(out, invdata, n32)
-    return CuModMatrix(out, N; new_size = (n, n))
+    return CuModMatrix(out; modulus = N, new_size = (n, n))
 end
 
 """
@@ -479,14 +479,14 @@ function inverse_pluq(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     U = F.U
     Linv = lower_triangular_inverse_no_copy(L)
     Uinv = upper_triangular_inverse_no_copy(U)
-    M = zeros(eltype(A.data), n, n, A.N)
+    M = zeros(CuModMatrix{eltype(A.data)}, n, n; modulus = A.N)
     mul!(M, Uinv, Linv)
     # P*A*Q = L*U implies A^-1 = Q*U^-1*L^-1*P.  The stored vectors are
     # gather permutations, so applying Q and P on these opposite sides needs
     # their inverse gather maps.
     pdev = CuArray(Int32.(pluq_inverse_perm(F.q)))
     qdev = CuArray(Int32.(pluq_inverse_perm(F.p)))
-    out = zeros(eltype(A.data), n, n, A.N)
+    out = zeros(CuModMatrix{eltype(A.data)}, n, n; modulus = A.N)
     tx = 16
     ty = 16
     @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_apply_paq_kernel!(
@@ -621,7 +621,7 @@ function _right_inverse_leading_block(A::CuModMatrix, opts::PLUQOptions)
     n = cols(A)
     m == n && return nothing
     T = eltype(A.data)
-    B = zeros(T, m, m, A.N)
+    B = zeros(CuModMatrix{T}, m, m; modulus = A.N)
     tx = 16
     ty = 16
     @cuda threads=(tx, ty) blocks=(max(1, cld(m, tx)), max(1, cld(m, ty))) pluq_copy_rect_block_kernel!(
@@ -638,7 +638,7 @@ function _right_inverse_leading_block(A::CuModMatrix, opts::PLUQOptions)
         end
         rethrow()
     end
-    X = zeros(T, n, m, A.N)
+    X = zeros(CuModMatrix{T}, n, m; modulus = A.N)
     @cuda threads=(tx, ty) blocks=(max(1, cld(m, tx)), max(1, cld(m, ty))) pluq_copy_rect_block_kernel!(
         X.data,
         Binv.data,
@@ -656,7 +656,7 @@ function _right_inverse_selected_columns(A::CuModMatrix, opts::PLUQOptions)
     F.rank == m || return nothing
     qdev = CuArray(Int32.(F.q[1:m]))
     T = eltype(A.data)
-    B = zeros(T, m, m, A.N)
+    B = zeros(CuModMatrix{T}, m, m; modulus = A.N)
     tx = 16
     ty = 16
     @cuda threads=(tx, ty) blocks=(max(1, cld(m, tx)), max(1, cld(m, ty))) pluq_gather_selected_columns_kernel!(
@@ -671,7 +671,7 @@ function _right_inverse_selected_columns(A::CuModMatrix, opts::PLUQOptions)
         err isa InverseNotDefinedException || rethrow()
         return nothing
     end
-    X = zeros(T, n, m, A.N)
+    X = zeros(CuModMatrix{T}, n, m; modulus = A.N)
     @cuda threads=(tx, ty) blocks=(max(1, cld(m, tx)), max(1, cld(m, ty))) pluq_scatter_selected_inverse_kernel!(
         X.data,
         Binv.data,
@@ -699,7 +699,7 @@ precondition on the host before launching GPU kernels.
 
 Example:
 ```julia
-A = CuModMatrix([1 2 3; 0 1 4], 101)
+A = CuModMatrix([1 2 3; 0 1 4]; modulus = 101)
 X = right_inverse(A)
 Array(A * X)
 ```
@@ -861,7 +861,7 @@ function right_inverse(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
         n32,
         m32,
     )
-    return CuModMatrix(X, N; new_size = (n, m))
+    return CuModMatrix(X; modulus = N, new_size = (n, m))
 end
 
 """
@@ -877,7 +877,7 @@ precondition on the host before launching GPU kernels.
 
 Example:
 ```julia
-A = CuModMatrix([1 2; 0 1; 3 4], 101)
+A = CuModMatrix([1 2; 0 1; 3 4]; modulus = 101)
 X = left_inverse(A)
 Array(X * A)
 ```
@@ -889,10 +889,10 @@ function left_inverse(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
         throw(CuModArraySizeMismatchException("left inverse requires rows(A) >= cols(A)"))
     end
     ATdata = permutedims(A.data, (2, 1))
-    AT = CuModMatrix(ATdata, A.N; new_size = (n, m))
+    AT = CuModMatrix(ATdata; modulus = A.N, new_size = (n, m))
     R = right_inverse(AT, options = options)
     Ldata = permutedims(R.data, (2, 1))
-    return CuModMatrix(Ldata, A.N; new_size = (n, m))
+    return CuModMatrix(Ldata; modulus = A.N, new_size = (n, m))
 end
 
 """

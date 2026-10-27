@@ -80,10 +80,15 @@ Execute the following lines in Julia REPL:
 ```julia
 using GPUFiniteFieldMatrices
 
-A = CuModMatrix([1 2; 3 4], 5)
-B = CuModMatrix([2 1; 0 3], 5)
+A = CuModMatrix([1 2; 3 4]; modulus = 5)
+B = CuModMatrix([2 1; 0 3]; modulus = 5)
 A * B
 ```
+
+Choose a storage type with `CuModMatrix{T}`. Typed zero and random factories
+take the same type and the modulus as a keyword. For identities, use
+`identity_matrix(CuModMatrix{T}, n; modulus = N)` or
+`CuModMatrix{T}(I, rows, cols; modulus = N)`.
 
 #### LinearAlgebra inversion and PLUQ
 
@@ -94,7 +99,7 @@ and PLUQ factors are available through F.L and F.U:
     using GPUFiniteFieldMatrices
     using LinearAlgebra
 
-    A = CuModMatrix{Float32}([1 2; 3 4], 101)
+    A = CuModMatrix{Float32}([1 2; 3 4]; modulus = 101)
     Ainv = inv(A)
     F = pluq(A)
     L, U = F.L, F.U
@@ -104,24 +109,35 @@ access, for example GPUFiniteFieldMatrices.similar_with_modulus(A, 103).
 
 #### Karatsuba matrices
 
-Convert a `CuModMatrix` to the split representation with `to_karatsuba(A, M)` and
-convert it back with `from_karatsuba(Float64, K)`. Before multiplying, initialize
-the plans on both inputs and the destination with the qualified helper, then call
-`LinearAlgebra.mul!`:
+Convert a full array with `to_karatsuba`, or wrap already split component arrays
+with `KaratsubaMatrix(A1, A2; low_modulus = N1, high_modulus = N2,
+modulus = M)`. Reconstruction is always `data1 + N1*data2`; `M` is separate
+representation metadata. Typed splitting checks each component conversion and
+throws `InexactError` rather than losing integer information. Conversion works
+with CPU arrays and preserves the GPU backend for GPU-backed inputs.
+
+Before multiplying, initialize the plans on both inputs and the destination with
+the qualified helper, then call `LinearAlgebra.mul!`:
 
 ```julia
 using GPUFiniteFieldMatrices
 using LinearAlgebra
 
-A = CuModMatrix{Float64}([20 30; 40 50], 100)
-B = CuModMatrix{Float64}([20 30; 40 50], 100)
-AK = to_karatsuba(A, 100)
-BK = to_karatsuba(B, 100)
-C = to_karatsuba(CuModMatrix{Float64}(zeros(Float64, 2, 2), 100), 100)
+A = CuModMatrix{Float64}([20 30; 40 50]; modulus = 100)
+B = CuModMatrix{Float64}([20 30; 40 50]; modulus = 100)
+split_options = (low_modulus = 100, high_modulus = 100, modulus = 100^2)
+AK = to_karatsuba(Float64, A; split_options...)
+BK = to_karatsuba(Float64, B; split_options...)
+C = zeros(KaratsubaMatrix{Float64}, 2, 2; split_options...)
 foreach(GPUFiniteFieldMatrices.initialize_plan!, (AK, BK, C))
 mul!(C, AK, BK)
 from_karatsuba(Float64, C)
 ```
+
+Use `zeros(KaratsubaMatrix{T}, rows, cols; low_modulus, high_modulus,
+modulus, use_gpu = true)` or the corresponding `KaratsubaVector{T}` form for
+zero split buffers. Set `use_gpu = false` to allocate CPU arrays. Plan scratch is
+still initialized separately.
 
 For `LinearAlgebra.mul!`, all three matrices must use the same representation
 modulus, the inner dimensions of `A` and `B` must match, and all three matrices
@@ -129,23 +145,22 @@ must have initialized plans. The caller must size `C` to `(size(A, 1), size(B, 2
 this method does not explicitly check the destination dimensions before CUDA
 work begins. This multiplication path currently supports `Float64` storage only.
 
-The example uses the CUDA-backed `CuModMatrix` path. The `AbstractArray`
-`to_karatsuba` overloads do not currently provide a working CPU-only conversion:
-with a plain `Matrix{Float64}` under Julia 1.12.7, each of
-`to_karatsuba(A)`, `to_karatsuba(A, M)`, `to_karatsuba(Float64, A)`, and
-`to_karatsuba(Float64, A, M)` throws `ErrorException("CUDA driver not found")`.
-A direct runtime probe of `from_karatsuba(Float64, K)` reconstructed values
-from a manually split host `KaratsubaArray`, but the strict `Pkg.test()` gate
-rejects that call with `DispatchDoctor.TypeInstabilityError` because its return
-type is inferred as `Any`. The CPU suite therefore has no positive value-level
-conversion assertion, and a complete CPU round trip remains unverified. This
-return-inference limitation remains open, as does the separate CPU
-`initialize_plan!` return-union limitation.
+For CPU-only data, `to_karatsuba` returns CPU component arrays and
+`from_karatsuba(T, K)` returns `Array{T}`. GPU-backed components produce a plain
+`CuArray{T}` result. `Base.Array(K)` uses arbitrary-precision integer
+reconstruction to avoid overflowing an intermediate type.
+
+The strict DispatchDoctor test preference currently reports
+`TypeInstabilityError` for `from_karatsuba` because `KaratsubaArray` stores its
+components in abstract array fields and reconstruction can return CPU or GPU
+array types. A separate storage-type parameter change is needed to make that
+result infer as a single concrete array type; the strict preference remains
+enabled in tests.
 
 `Base.copy` retains the legacy `Karatsubacopy` metadata behavior: the copied
 representation stores `M = N1*N2`, which can differ from the source's `M`.
-In particular, `to_karatsuba(A, M)` stores `M` with split factors `N1 = N2 = M`,
-so copying that representation changes its stored `M` to `M^2`. Multiplication
+In particular, `to_karatsuba(A; modulus = M)` defaults split factors to
+`N1 = N2 = M`, so copying that representation changes its stored `M` to `M^2`. Multiplication
 requires matching stored `M` on all operands; do not mix these copied and
 uncopied representations. The initialized-copy product test uses the existing
 split constructors with a consistent `M = N1*N2`. Correcting this metadata

@@ -237,10 +237,10 @@ function upper_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
             CUDA.zeros(eltype(A.data), TILE_WIDTH + size(A, 2), TILE_WIDTH + size(A, 1))
         n_active = min(TILE_WIDTH, size(A, 1), size(A, 2))
         _upper_triangular_inv_32!(A_inv_data, A.data, A.N, 0, 0, n_active)
-        return CuModMatrix(A_inv_data, A.N; new_size = (size(A, 2), size(A, 1)))
+        return CuModMatrix(A_inv_data; modulus = A.N, new_size = (size(A, 2), size(A, 1)))
     end
 
-    A_inv = zeros(eltype(A.data), size(A)[2], size(A)[1], A.N)
+    A_inv = zeros(CuModMatrix{eltype(A.data)}, size(A)[2], size(A)[1]; modulus = A.N)
 
     if debug
         println("size(A.data): ", size(A.data))
@@ -541,10 +541,10 @@ function lower_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
             CUDA.zeros(eltype(A.data), TILE_WIDTH + size(A, 2), TILE_WIDTH + size(A, 1))
         n_active = min(TILE_WIDTH, size(A, 1), size(A, 2))
         _lower_triangular_inv_32!(A_inv_data, A.data, A.N, 0, 0, n_active)
-        return CuModMatrix(A_inv_data, A.N; new_size = (size(A, 2), size(A, 1)))
+        return CuModMatrix(A_inv_data; modulus = A.N, new_size = (size(A, 2), size(A, 1)))
     end
 
-    A_inv = zeros(eltype(A.data), size(A)[2], size(A)[1], A.N)
+    A_inv = zeros(CuModMatrix{eltype(A.data)}, size(A)[2], size(A)[1]; modulus = A.N)
 
     if rows <= cols #square or wide
         _recursive_lower_triangular_inverse_no_copy(

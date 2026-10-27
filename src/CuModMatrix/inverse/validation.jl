@@ -31,7 +31,7 @@ function pluq_check_identity(F::PLUQ, Aorig::CuModMatrix)
     N = Aorig.N
     pdev = CuArray(Int32.(F.p))
     qdev = CuArray(Int32.(F.q))
-    PAQ = zeros(eltype(Aorig.data), n, n, N)
+    PAQ = zeros(CuModMatrix{eltype(Aorig.data)}, n, n; modulus = N)
     tx = 16
     ty = 16
     @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_apply_paq_kernel!(
@@ -43,9 +43,9 @@ function pluq_check_identity(F::PLUQ, Aorig::CuModMatrix)
     )
     L = F.L
     U = F.U
-    LU = zeros(eltype(Aorig.data), n, n, N)
+    LU = zeros(CuModMatrix{eltype(Aorig.data)}, n, n; modulus = N)
     mul!(LU, L, U)
-    D = zeros(eltype(Aorig.data), n, n, N)
+    D = zeros(CuModMatrix{eltype(Aorig.data)}, n, n; modulus = N)
     sub!(D, PAQ, LU)
     flag = CUDA.zeros(Int32, 1)
     threads = 256

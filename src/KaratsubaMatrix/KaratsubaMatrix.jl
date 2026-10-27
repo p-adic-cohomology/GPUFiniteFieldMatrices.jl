@@ -6,24 +6,14 @@ mutable struct KaratsubaArray{T,D} <: AbstractArray{T,D}
     N2::Integer
     M::Integer
 
-    function KaratsubaArray{T,D}(A::AbstractArray{T,D}, B::AbstractArray{T,D}) where {T,D}
-        if size(A) != size(B)
-            error("Dimensions of matrices must match")
-        end
-
-        M = find_max_ops(eltype(A), max(size(A)..., size(B)...))
-        return new{T,D}(A, B, nothing, M, M, M)
-    end
-
     function KaratsubaArray{T,D}(
         A::AbstractArray{T,D},
         B::AbstractArray{T,D},
-        N1::Integer,
-        N2::Integer,
-        M::Integer,
+        ;
+        low_modulus::Union{Nothing,Integer} = nothing,
+        high_modulus::Union{Nothing,Integer} = nothing,
+        modulus::Union{Nothing,Integer} = nothing,
     ) where {T,D}
-        type = eltype(A)
-
         if size(A) != size(B)
             error("Dimensions of matrices must match")
         end
@@ -32,23 +22,16 @@ mutable struct KaratsubaArray{T,D} <: AbstractArray{T,D}
             error("Cannot have entries larger than modulus in matrices")
         end
         =#
-        if occursin("Float", string(type))
-            bits_dict = Dict("64" => 51, "32" => 22, "16" => 9)
-            bits_match = match(r"\d+", string(type))
-            bits = get(bits_dict, bits_match.match, -1)
-        elseif occursin("UInt", string(type))
-            bits_match = match(r"\d+", string(type))
-            bits = parse(Int, bits_match.match) - 1
-        elseif occursin("Int", string(type))
-            bits_match = match(r"\d+", string(type))
-            bits = parse(Int, bits_match.match)
-        else
-            error("The input type is neither Int, UInt, nor Float.")
-        end
-
-        if bits == -1
-            error("Input type is not recognized.")
-        end
+        N1, N2, M = _karatsuba_parameters(
+            A;
+            parameter_type = T,
+            low_modulus = low_modulus,
+            high_modulus = high_modulus,
+            modulus = modulus,
+        )
+        (N1 > 0 && N2 > 0 && M > 0) ||
+            throw(ArgumentError("Karatsuba moduli must be positive"))
+        bits = T <: AbstractFloat ? get_bits(T) - 2 : get_bits(T)
         if M >= BigInt(2)^bits
             error("Modulus too large")
         end
@@ -60,46 +43,41 @@ end
 const KaratsubaMatrix{T} = KaratsubaArray{T,2}
 const KaratsubaVector{T} = KaratsubaArray{T,1}
 
-function KaratsubaArray(
+function KaratsubaArray(A::AbstractArray{T,D}, B::AbstractArray{T,D}; kwargs...) where {T,D}
+    _wrap_karatsuba(Val(D), A, B; kwargs...)
+end
+
+function _karatsuba_parameters(
+    A::AbstractArray;
+    parameter_type::Type = eltype(A),
+    low_modulus::Union{Nothing,Integer} = nothing,
+    high_modulus::Union{Nothing,Integer} = nothing,
+    modulus::Union{Nothing,Integer} = nothing,
+)
+    inferred =
+        modulus === nothing ? find_max_ops_karatsuba(parameter_type, max(size(A)...)) :
+        modulus
+    N1 = low_modulus === nothing ? inferred : low_modulus
+    N2 = high_modulus === nothing ? inferred : high_modulus
+    return (Int(N1), Int(N2), Int(inferred))
+end
+
+function _wrap_karatsuba(
+    ::Val{D},
     A::AbstractArray{T,D},
-    B::AbstractArray{T,D},
-    N1::Integer,
-    N2::Integer,
-    M::Integer,
+    B::AbstractArray{T,D};
+    kwargs...,
 ) where {T,D}
-    KaratsubaArray{T,D}(A, B, N1, N2, M)
+    N1, N2, M = _karatsuba_parameters(A; kwargs...)
+    return KaratsubaArray{T,D}(A, B; low_modulus = N1, high_modulus = N2, modulus = M)
 end
 
-function KaratsubaMatrix(A::AbstractMatrix{T}, B::AbstractMatrix{T}) where {T}
-    KaratsubaArray{T,2}(A, B)
+function KaratsubaMatrix(A::AbstractMatrix{T}, B::AbstractMatrix{T}; kwargs...) where {T}
+    _wrap_karatsuba(Val(2), A, B; kwargs...)
 end
 
-function KaratsubaMatrix(A::AbstractMatrix{T}, B::AbstractMatrix{T}, M::Integer) where {T}
-    KaratsubaArray{T,2}(A, B, M, M, M)
-end
-
-function KaratsubaMatrix(
-    A::AbstractMatrix{T},
-    B::AbstractMatrix{T},
-    N1::Integer,
-    N2::Integer,
-    M::Integer,
-) where {T}
-    KaratsubaArray{T,2}(A, B, N1, N2, M)
-end
-
-function KaratsubaVector(A::AbstractVector{T}, B::AbstractVector{T}) where {T}
-    KaratsubaArray{T,1}(A, B)
-end
-
-function KaratsubaVector(
-    A::AbstractVector{T},
-    B::AbstractVector{T},
-    N1::Integer,
-    N2::Integer,
-    M::Integer,
-) where {T}
-    KaratsubaArray{T,1}(A, B, N1, N2, M)
+function KaratsubaVector(A::AbstractVector{T}, B::AbstractVector{T}; kwargs...) where {T}
+    _wrap_karatsuba(Val(1), A, B; kwargs...)
 end
 
 #=
@@ -126,32 +104,11 @@ end
 =#
 
 function find_max_ops_karatsuba(type, N)
-
-    if occursin("Float", string(type))
-        bits_dict = Dict("64" => 51, "32" => 22, "16" => 9)
-        bits_match = match(r"\d+", string(type))
-        bits = get(bits_dict, bits_match.match, -1)
-    elseif occursin("UInt", string(type))
-        bits_match = match(r"\d+", string(type))
-        bits = parse(Int, bits_match.match) - 1
-    elseif occursin("Int", string(type))
-        bits_match = match(r"\d+", string(type))
-        bits = parse(Int, bits_match.match)
-    else
-        error("The input type is neither Int, UInt, nor Float.")
-    end
-
-    if bits == -1
-        error("Input type is not recognized.")
-    end
-
-    if 64 ≤ bits
-        floor(BigInt, (BigInt(2)^bits - 1) / N^2) - 1
-    else
-        floor(Int, (2^bits - 1) / N^2) - 1
-    end
-
-
+    N > 0 || throw(ArgumentError("The maximum matrix dimension must be positive"))
+    bits = get_bits(type)
+    safe_bits = type <: AbstractFloat ? max(bits - 2, 1) : bits
+    bound = ((BigInt(1) << safe_bits) - 1) ÷ BigInt(N)^2 - 1
+    return Int(max(1, min(bound, BigInt(typemax(Int)))))
 end
 
 """
@@ -392,23 +349,7 @@ end
 
 #Converts KMat to Mat
 function Base.Array(K::KaratsubaArray)
-    if K.N1*K.N2 < BigInt(2)^(64)
-        type = Int64
-    else
-        type = Int128
-    end
-    A = Base.zeros(Int128, size(K.data1)...)
-    cpudata1 = Base.zeros(eltype(K.data1), size(K.data1)...)
-    cpudata2 = Base.zeros(eltype(K.data1), size(K.data1)...)
-    inds = CartesianIndices(K.data1)
-    copyto!(cpudata1, inds, K.data1.data, inds)
-    copyto!(cpudata2, inds, K.data2.data, inds)
-    intdata1 = convert.(type, cpudata1)
-    intdata2 = convert.(type, cpudata2)
-    A .= intdata1 .+ K.N1 .* intdata2
-    #scalar_multiply!(A,K.data2,K.N1)
-    #add!(A,A,K.data1)
-    A
+    return _karatsuba_reconstruct_host(BigInt, K)
 end
 
 function Base.copy!(B::KaratsubaArray, A::KaratsubaArray)
@@ -429,190 +370,449 @@ end
     from_karatsuba(T::Type, K::KaratsubaArray)
 
 Reconstruct the full array represented by `K` as `K.data1 + K.N1*K.data2`.
-The explicit `T` argument is part of the typed conversion API; this method does
-not convert elements, so the result retains the element type of `K`'s split
-arrays.
+The returned array has element type `T` and follows the component backend. Each
+integer conversion is checked before returning, so an inexact or overflowing
+conversion throws `InexactError`.
 """
-function from_karatsuba(T::Type, K::KaratsubaArray)
-    A = Base.zeros(T, size(K.data1)...)
-    A = K.data1 + K.N1*K.data2
-    A
+function from_karatsuba(::Type{T}, K::KaratsubaArray{S,D}) where {T,S,D}
+    if K.data1 isa CuModArray || K.data1 isa CuArray
+        return _karatsuba_reconstruct_gpu(T, K)::CUDA.CuArray{T,D}
+    end
+    return _karatsuba_reconstruct_host(T, K)::Array{T,D}
+end
+
+function _karatsuba_reconstruct_host(::Type{T}, K::KaratsubaArray{S,D}) where {T,S,D}
+    low = _karatsuba_host_array(K.data1)::Array{S,D}
+    high = _karatsuba_host_array(K.data2)::Array{S,D}
+    result = Base.Array{T,D}(undef, size(low))
+    for i in eachindex(result, low, high)
+        value = _karatsuba_bigint(low[i]) + BigInt(K.N1) * _karatsuba_bigint(high[i])
+        result[i] = _karatsuba_exact_convert(T, value)
+    end
+    return result
+end
+
+_karatsuba_gpu_storage(A::CuModArray) = A.data
+_karatsuba_gpu_storage(A::CUDA.CuArray) = A
+_karatsuba_gpu_strides(A::CuModArray) = strides(A.data)
+_karatsuba_gpu_strides(A::CUDA.CuArray) = strides(A)
+
+function _karatsuba_gpu_float_precision(::Type{Float16})
+    11
+end
+function _karatsuba_gpu_float_precision(::Type{Float32})
+    24
+end
+function _karatsuba_gpu_float_precision(::Type{Float64})
+    53
+end
+
+function _karatsuba_gpu_component(::Type{T}, x::S) where {T<:Integer,S<:Integer}
+    fits = if T <: Signed
+        if S <: Signed
+            sizeof(S) <= sizeof(T) || (x >= typemin(T) && x <= typemax(T))
+        else
+            sizeof(S) < sizeof(T) || x <= typemax(T)
+        end
+    elseif S <: Signed
+        x >= 0 && (sizeof(S) < sizeof(T) || x <= typemax(T))
+    else
+        sizeof(S) <= sizeof(T) || x <= typemax(T)
+    end
+    return fits ? (convert(T, x), true) : (zero(T), false)
+end
+
+function _karatsuba_gpu_component(::Type{T}, x::S) where {T<:AbstractFloat,S<:Integer}
+    converted = T(x)
+    isfinite(converted) || return zero(T), false
+    lower = S <: Signed ? T(typemin(S)) : zero(T)
+    upper = T(typemax(S))
+    upper_ok =
+        _karatsuba_gpu_float_precision(T) >= 8 * sizeof(S) ? converted <= upper :
+        converted < upper
+    (converted >= lower && upper_ok) || return zero(T), false
+    return converted, S(converted) == x
+end
+
+function _karatsuba_gpu_component(::Type{T}, x::S) where {T<:Integer,S<:AbstractFloat}
+    (isfinite(x) && isinteger(x)) || return zero(T), false
+    lower = T <: Signed ? S(typemin(T)) : zero(S)
+    upper = S(typemax(T))
+    upper_ok = _karatsuba_gpu_float_precision(S) >= 8 * sizeof(T) ? x <= upper : x < upper
+    (x >= lower && upper_ok) || return zero(T), false
+    return convert(T, x), true
+end
+
+function _karatsuba_gpu_component(::Type{T}, x::S) where {T<:AbstractFloat,S<:AbstractFloat}
+    (isfinite(x) && isinteger(x)) || return zero(T), false
+    converted = T(x)
+    (isfinite(converted) && S(converted) == x) || return zero(T), false
+    return converted, true
+end
+
+function _karatsuba_gpu_reconstruct(
+    ::Type{T},
+    low::T,
+    high::T,
+    radix::Int,
+) where {T<:Signed}
+    radix > 0 || return zero(T), false
+    if high > 0 && (high > typemax(T) ÷ radix)
+        return zero(T), false
+    elseif high < 0 && (high < typemin(T) ÷ radix)
+        return zero(T), false
+    end
+    product = high * radix
+    if product > 0 && low > typemax(T) - product
+        return zero(T), false
+    elseif product < 0 && low < typemin(T) - product
+        return zero(T), false
+    end
+    return convert(T, low + product), true
+end
+
+function _karatsuba_gpu_reconstruct(
+    ::Type{T},
+    low::T,
+    high::T,
+    radix::Int,
+) where {T<:Unsigned}
+    radix > 0 || return zero(T), false
+    if high != 0
+        radix <= typemax(T) || return zero(T), false
+        high <= typemax(T) ÷ radix || return zero(T), false
+    end
+    product = high == 0 ? zero(T) : high * T(radix)
+    low <= typemax(T) - product || return zero(T), false
+    return low + product, true
+end
+
+function _karatsuba_gpu_reconstruct(
+    ::Type{T},
+    low::T,
+    high::T,
+    radix::Int,
+) where {T<:AbstractFloat}
+    radix > 0 || return zero(T), false
+    radix_value = T(radix)
+    isfinite(radix_value) && isinteger(radix_value) || return zero(T), false
+    product = radix_value * high
+    isfinite(product) || return zero(T), false
+    product_error = fma(radix_value, high, -product)
+    result = product + low
+    isfinite(result) && isinteger(result) || return zero(T), false
+    sum_virtual = result - product
+    sum_error = (product - (result - sum_virtual)) + (low - sum_virtual)
+    return result, product_error == -sum_error
+end
+
+function _karatsuba_gpu_linear_index(
+    k::Int,
+    dims::Dims{D},
+    source_strides::Dims{D},
+) where {D}
+    remaining = k - 1
+    offset = 1
+    @inbounds for d = 1:D
+        coordinate = rem(remaining, dims[d])
+        remaining = div(remaining, dims[d])
+        offset += coordinate * source_strides[d]
+    end
+    return offset
+end
+
+function _karatsuba_reconstruct_gpu_kernel!(
+    result,
+    valid,
+    low,
+    high,
+    dims,
+    low_strides,
+    high_strides,
+    radix,
+)
+    k = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if k <= length(result)
+        low_index = _karatsuba_gpu_linear_index(k, dims, low_strides)
+        high_index = _karatsuba_gpu_linear_index(k, dims, high_strides)
+        low_value, low_ok = _karatsuba_gpu_component(eltype(result), low[low_index])
+        high_value, high_ok = _karatsuba_gpu_component(eltype(result), high[high_index])
+        value, reconstruction_ok =
+            _karatsuba_gpu_reconstruct(eltype(result), low_value, high_value, radix)
+        valid[k] = low_ok && high_ok && reconstruction_ok
+        result[k] = valid[k] ? value : zero(eltype(result))
+    end
+    return
+end
+
+function _karatsuba_reconstruct_gpu(::Type{T}, K::KaratsubaArray{S,D}) where {T,S,D}
+    supported(T) = isbitstype(T) && T <: Union{Integer,AbstractFloat} && sizeof(T) <= 8
+    supported(S) || throw(
+        ArgumentError(
+            "from_karatsuba GPU components support isbits integer or floating types up to 64 bits",
+        ),
+    )
+    supported(T) || throw(
+        ArgumentError(
+            "from_karatsuba GPU output supports isbits integer or floating types up to 64 bits",
+        ),
+    )
+    K.N1 > 0 ||
+        throw(ArgumentError("from_karatsuba requires a positive low_modulus on GPU"))
+    radix = try
+        Int(K.N1)
+    catch
+        throw(
+            ArgumentError(
+                "from_karatsuba GPU reconstruction requires low_modulus to fit in Int",
+            ),
+        )
+    end
+    if T <: AbstractFloat
+        exact_radix = try
+            BigInt(T(radix)) == BigInt(radix)
+        catch
+            false
+        end
+        exact_radix || throw(
+            ArgumentError(
+                "from_karatsuba GPU reconstruction requires low_modulus to be exactly representable in the requested floating type",
+            ),
+        )
+    end
+
+    result = CUDA.CuArray{T,D}(undef, size(K))
+    isempty(result) && return result
+    valid = CUDA.CuArray{Bool}(undef, length(result))
+    low = _karatsuba_gpu_storage(K.data1)
+    high = _karatsuba_gpu_storage(K.data2)
+    threads = 256
+    blocks = cld(length(result), threads)
+    @cuda threads=threads blocks=blocks _karatsuba_reconstruct_gpu_kernel!(
+        result,
+        valid,
+        low,
+        high,
+        size(K),
+        _karatsuba_gpu_strides(K.data1),
+        _karatsuba_gpu_strides(K.data2),
+        radix,
+    )
+    all(valid) || throw(
+        InexactError(
+            :from_karatsuba,
+            T,
+            "GPU components or reconstructed values are not exactly representable",
+        ),
+    )
+    return result
 end
 
 """
     to_karatsuba(A::AbstractArray)
-    to_karatsuba(A::AbstractArray, M::Integer)
+    to_karatsuba(A::AbstractArray; low_modulus, high_modulus, modulus)
     to_karatsuba(T::Type, A::AbstractArray)
-    to_karatsuba(T::Type, A::AbstractArray, M::Integer)
+    to_karatsuba(T::Type, A::AbstractArray; low_modulus, high_modulus, modulus)
 
-Convert `A` to a split Karatsuba representation. When `M` is supplied, it is
-used for both split factors and the representation modulus. When `M` is omitted,
-the untyped overload chooses the split base from `eltype(A)`, while the typed
-overload chooses it from `T`; both use the largest dimension of `A`. The typed
-overloads accept `T` as an explicit type argument but do not convert elements;
-the representation retains `A`'s element type.
+Convert `A` into exact low and high components using `low = mod(x, N1)` and
+`high = fld(x, N1)`. `modulus` is independent metadata; reconstruction always
+uses `low + N1*high`. The typed overload converts each component to `T` exactly
+and throws `InexactError` if that conversion would lose information.
 """
-function to_karatsuba(A::AbstractArray, M::Integer)
-    to_karatsuba(eltype(A), A, M)
+function _karatsuba_bigint(x)
+    if x isa Integer
+        return BigInt(x)
+    elseif x isa AbstractFloat && isfinite(x) && isinteger(x)
+        return BigInt(x)
+    end
+    throw(InexactError(:to_karatsuba, BigInt, x))
 end
 
-function to_karatsuba(A::AbstractArray)
-    M = find_max_ops(eltype(A), max(size(A)...))
-    to_karatsuba(eltype(A), A, M)
+function _karatsuba_exact_convert(::Type{T}, value::BigInt) where {T}
+    converted = try
+        convert(T, value)
+    catch err
+        err isa InexactError && rethrow()
+        throw(InexactError(:convert, T, value))
+    end
+    exact = if T <: Integer
+        BigInt(converted) == value
+    elseif T <: AbstractFloat
+        isfinite(converted) && BigInt(converted) == value
+    else
+        converted == value
+    end
+    exact || throw(InexactError(:convert, T, value))
+    return converted
 end
 
-function to_karatsuba(T::Type, A::AbstractArray, M::Integer)
-    KaratsubaMatrix(T, A, M, M, M)
+function _karatsuba_host_array(A::CuModArray)
+    Array(A)
 end
 
-# right now, this assumes that A is already a CuModMatrix
-function KaratsubaMatrix(T::Type, A::AbstractArray, N1::Integer, N2::Integer, M::Integer)
-    #if occursin("CuMod", string(typeof(A)))
-    K = KaratsubaArray(
-        zeros(eltype(A), size(A)..., N1),
-        zeros(eltype(A), size(A)..., N1),
-        N1,
-        N2,
-        M,
+function _karatsuba_host_array(A::AbstractArray)
+    Array(A)
+end
+
+function _karatsuba_component(
+    ::Type{T},
+    values::AbstractArray,
+    source,
+    component_modulus,
+) where {T}
+    if source isa CuModArray
+        return CuModArray{T,ndims(values)}(
+            values;
+            modulus = Int(component_modulus),
+            mod = false,
+        )
+    elseif source isa CuArray
+        return CUDA.CuArray(values)
+    end
+    return values
+end
+
+function _split_karatsuba(
+    ::Type{T},
+    A::AbstractArray;
+    low_modulus = nothing,
+    high_modulus = nothing,
+    modulus = nothing,
+) where {T}
+    N1, N2, M = _karatsuba_parameters(
+        A;
+        low_modulus = low_modulus,
+        high_modulus = high_modulus,
+        modulus = modulus,
+        parameter_type = T,
     )
-    #=
-    elseif occursin("Cu", string(typeof(A)))
-        K = KaratsubaArray(CUDA.zeros(T,size(A)...),CUDA.zeros(T,size(A)...),N1,N2,M)
-        M = Int(M)
-    else
-        K = KaratsubaArray(zeros(T,size(A)...),zeros(T,size(A)...),N1,N2,M)
+    (N1 > 0 && N2 > 0 && M > 0) || throw(ArgumentError("Karatsuba moduli must be positive"))
+    input = _karatsuba_host_array(A)
+    low = Base.Array{T}(undef, size(input))
+    high = Base.Array{T}(undef, size(input))
+    for i in eachindex(input, low, high)
+        value = _karatsuba_bigint(input[i])
+        hi, lo = fldmod(value, BigInt(N1))
+        low[i] = _karatsuba_exact_convert(T, lo)
+        high[i] = _karatsuba_exact_convert(T, hi)
     end
-    =#
-    #=
-    K.data2 .= mod.(trunc.(A./M),N2)
-    K.data1 .= mod.(A - Int(K.M)*K.data2,N1)
-    =#
-    #=
-    LinearAlgebra.mul!(K.data2, A, 1 / M; modulus_override = N2)
-    trunc_elements!(K.data2)
-    =#
-    divide_elements!(K.data2, A, N1)
-    mod_elements!(K.data2; modulus_override = N2)
-    LinearAlgebra.mul!(K.data1, K.data2, Int(N1))
-    sub!(K.data1, A, K.data1; modulus_override = N1)
-    mod_elements!(K.data1; modulus_override = N1)
-    K
+    component1 = _karatsuba_component(T, low, A, N1)
+    component2 = _karatsuba_component(T, high, A, N2)
+    return KaratsubaArray{T,ndims(A)}(
+        component1,
+        component2;
+        low_modulus = N1,
+        high_modulus = N2,
+        modulus = M,
+    )
 end
 
-function to_karatsuba(T::Type, A::AbstractArray)
-    M = find_max_ops(T, max(size(A)...))
-    to_karatsuba(T, A, M)
+function to_karatsuba(A::AbstractArray; kwargs...)
+    return _split_karatsuba(eltype(A), A; kwargs...)
 end
 
-function KaratsubaZeros(T, rows, cols, N1, N2, M, use_gpu)
-    if use_gpu == true
-        K = KaratsubaMatrix(zeros(T, rows, cols, N1), zeros(T, rows, cols, N1), N1, N2, M)
+function to_karatsuba(::Type{T}, A::AbstractArray; kwargs...) where {T}
+    return _split_karatsuba(T, A; kwargs...)
+end
+
+function KaratsubaMatrix(::Type{T}, A::AbstractMatrix; kwargs...) where {T}
+    return _split_karatsuba(T, A; kwargs...)
+end
+
+function KaratsubaVector(::Type{T}, A::AbstractVector; kwargs...) where {T}
+    return _split_karatsuba(T, A; kwargs...)
+end
+
+function _karatsuba_zeros(
+    ::Type{T},
+    dims::Dims{D};
+    low_modulus = nothing,
+    high_modulus = nothing,
+    modulus = nothing,
+    use_gpu::Bool = true,
+) where {T,D}
+    explicit = low_modulus !== nothing && high_modulus !== nothing && modulus !== nothing
+    shorthand = low_modulus === nothing && high_modulus === nothing && modulus !== nothing
+    (explicit || shorthand) || throw(
+        ArgumentError("Karatsuba zeros require either modulus or all three split moduli"),
+    )
+    N1, N2, M = _karatsuba_parameters(
+        Base.zeros(T, dims);
+        low_modulus = low_modulus,
+        high_modulus = high_modulus,
+        modulus = modulus,
+    )
+    (N1 > 0 && N2 > 0 && M > 0) || throw(ArgumentError("Karatsuba moduli must be positive"))
+    if use_gpu
+        first = zeros(CuModArray{T,D}, dims...; modulus = N1)
+        second = zeros(CuModArray{T,D}, dims...; modulus = N2)
     else
-        K = KaratsubaMatrix(zeros(T, rows, cols), zeros(T, rows, cols), N1, N2, M)
+        first = Base.zeros(T, dims)
+        second = Base.zeros(T, dims)
     end
-    K
+    return KaratsubaArray{T,D}(
+        first,
+        second;
+        low_modulus = N1,
+        high_modulus = N2,
+        modulus = M,
+    )
 end
 
-function KaratsubaZeros(T, length, N1, N2, M, use_gpu)
-    if use_gpu == true
-        K = KaratsubaVector(zeros(T, length, N1), zeros(T, length, N1), N1, N2, M)
+Base.zeros(::Type{KaratsubaArray{T,2}}, rows::Integer, cols::Integer; kwargs...) where {T} =
+    _karatsuba_zeros(T, (Int(rows), Int(cols)); kwargs...)
+Base.zeros(::Type{KaratsubaArray{T,1}}, length::Integer; kwargs...) where {T} =
+    _karatsuba_zeros(T, (Int(length),); kwargs...)
+
+function initialize_plan!(K::KaratsubaArray{T,D}) where {T,D}
+    if K.data1 isa CuModArray
+        K.plan = zeros(CuModArray{T,D}, size(K.data1)...; modulus = Int(K.N1))
+    elseif K.data1 isa CuArray
+        K.plan = CUDA.zeros(T, size(K.data1)...)
     else
-        K = KaratsubaVector(zeros(T, length), zeros(T, length), N1, N2, M)
+        K.plan = Base.zeros(T, size(K.data1))
     end
-    K
-end
-
-function initialize_plan!(K::KaratsubaArray)
-    K.plan = zeros(eltype(K.data1), size(K.data1)..., K.N1)
+    return K
 end
 
 import Base: +, -, *
 
-function +(A::KaratsubaArray, B::KaratsubaArray)
-    if occursin("CuMod", string(typeof(A.data1)))
-        K = KaratsubaMatrix(
-            zeros(eltype(A.data1), size(A.data1)..., A.data1.N),
-            zeros(eltype(A.data1), size(A.data1)..., A.data1.N),
-            A.N1,
-            A.N2,
-            A.M,
-        )
-    elseif occursin("Cu", string(typeof(A.data1)))
-        K = KaratsubaMatrix(
-            CUDA.zeros(eltype(A.data1), size(A.data1)...),
-            CUDA.zeros(eltype(A.data1), size(A.data1)...),
-            A.N1,
-            A.N2,
-            A.M,
-        )
-    else
-        K = KaratsubaMatrix(
-            zeros(eltype(A.data1), size(A.data1)...),
-            zeros(eltype(A.data1), size(A.data1)...),
-            A.N1,
-            A.N2,
-            A.M,
-        )
+function _karatsuba_zero_component(source, dims::Dims, component_modulus)
+    T = eltype(source)
+    D = length(dims)
+    if source isa CuModArray
+        return zeros(CuModArray{T,D}, dims...; modulus = Int(component_modulus))
+    elseif source isa CuArray
+        return CUDA.zeros(T, dims...)
     end
+    return Base.zeros(T, dims)
+end
+
+function _karatsuba_output_like(source::KaratsubaArray{T,D}, dims::Dims{D}) where {T,D}
+    data1 = _karatsuba_zero_component(source.data1, dims, source.N1)
+    data2 = _karatsuba_zero_component(source.data2, dims, source.N2)
+    return KaratsubaArray(
+        data1,
+        data2;
+        low_modulus = source.N1,
+        high_modulus = source.N2,
+        modulus = source.M,
+    )
+end
+
+function +(A::KaratsubaArray, B::KaratsubaArray)
+    K = _karatsuba_output_like(A, size(A.data1))
     add!(K, A, B)
     K
 end
 
 function -(A::KaratsubaArray, B::KaratsubaArray)
-    if occursin("CuMod", string(typeof(A.data1)))
-        K = KaratsubaMatrix(
-            zeros(eltype(A.data1), size(A.data1)..., A.data1.N),
-            zeros(eltype(A.data1), size(A.data1)..., A.data1.N),
-            A.N1,
-            A.N2,
-            A.M,
-        )
-    elseif occursin("Cu", string(typeof(A.data1)))
-        K = KaratsubaMatrix(
-            CUDA.zeros(eltype(A.data1), size(A.data1)...),
-            CUDA.zeros(eltype(A.data1), size(A.data1)...),
-            A.N1,
-            A.N2,
-            A.M,
-        )
-    else
-        K = KaratsubaMatrix(
-            zeros(eltype(A.data1), size(A.data1)...),
-            zeros(eltype(A.data1), size(A.data1)...),
-            A.N1,
-            A.N2,
-            A.M,
-        )
-    end
+    K = _karatsuba_output_like(A, size(A.data1))
     sub!(K, A, B)
 end
 
 function *(a::Number, A::KaratsubaArray)
-    if occursin("CuMod", string(typeof(A.data1)))
-        K = KaratsubaMatrix(
-            zeros(eltype(A.data1), size(A.data1)..., A.data1.N),
-            zeros(eltype(A.data1), size(A.data1)..., A.data1.N),
-            A.N1,
-            A.N2,
-            A.M,
-        )
-    elseif occursin("Cu", string(typeof(A.data1)))
-        K = KaratsubaMatrix(
-            CUDA.zeros(eltype(A.data1), size(A.data1)...),
-            CUDA.zeros(eltype(A.data1), size(A.data1)...),
-            A.N1,
-            A.N2,
-            A.M,
-        )
-    else
-        K = KaratsubaMatrix(
-            zeros(eltype(A.data1), size(A.data1)...),
-            zeros(eltype(A.data1), size(A.data1)...),
-            A.N1,
-            A.N2,
-            A.M,
-        )
-    end
+    K = _karatsuba_output_like(A, size(A.data1))
     scalar_multiply!(K, A, a)
     K
 end
@@ -623,37 +823,16 @@ end
 
 function *(A::KaratsubaArray, B::KaratsubaArray)
     if occursin("CuMod", string(typeof(A.data1)))
-        K = KaratsubaMatrix(
-            zeros(eltype(A.data1), size(A.data1)[1], size(B.data1)[2], A.M),
-            zeros(eltype(A.data1), size(A.data1)[1], size(B.data1)[2], A.M),
-            A.N1,
-            A.N2,
-            A.M,
-        )
-        plan = KaratsubaMatrix(
-            zeros(eltype(A.data1), size(A.data1)[1], size(B.data1)[2], A.M),
-            zeros(eltype(A.data1), size(A.data1)[1], size(B.data1)[2], A.M),
-            A.N1,
-            A.N2,
-            A.M,
-        )
+        dims = (size(A.data1, 1), size(B.data1, 2))
+        K = _karatsuba_output_like(A, dims)
+        plan = _karatsuba_output_like(A, dims)
         #plan = KMatMulPlan(zeros(eltype(A.data1),size(A.data1)...,A.M),zeros(eltype(B.data1),size(B.data1)...,A.M),A.N1,A.N2)
     elseif occursin("Cu", string(typeof(A.data1)))
-        K = KaratsubaMatrix(
-            CUDA.zeros(eltype(A.data1), size(A.data1)...),
-            CUDA.zeros(eltype(A.data1), size(A.data1)...),
-            A.N1,
-            A.N2,
-            A.M,
-        )
+        dims = (size(A.data1, 1), size(B.data1, 2))
+        K = _karatsuba_output_like(A, dims)
     else
-        K = KaratsubaMatrix(
-            zeros(eltype(A.data1), size(A.data1)[1], size(B.data1)[2]),
-            zeros(eltype(A.data1), size(A.data1)[1], size(B.data1)[2]),
-            A.N1,
-            A.N2,
-            A.M,
-        )
+        dims = (size(A.data1, 1), size(B.data1, 2))
+        K = _karatsuba_output_like(A, dims)
         plan = KMatMulPlan{Matrix{eltype(A.data1)}}(
             zeros(eltype(A.data1), size(A.data1)...),
             zeros(eltype(B.data1), size(B.data1)...),
@@ -930,7 +1109,13 @@ function divide_elements!(B::CuModArray, A::CuModArray, N::Integer)
 end
 
 function Base.copy(A::KaratsubaArray{T,D}) where {T,D}
-    B = KaratsubaArray{T,D}(copy(A.data1), copy(A.data2), copy(A.N1), copy(A.N2), A.N1*A.N2)
+    B = KaratsubaArray{T,D}(
+        copy(A.data1),
+        copy(A.data2);
+        low_modulus = copy(A.N1),
+        high_modulus = copy(A.N2),
+        modulus = A.N1 * A.N2,
+    )
     if !(A.plan==nothing)
         initialize_plan!(B)
     end

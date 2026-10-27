@@ -6,7 +6,7 @@ function test_permutations()
         7.0 8.0 9.0
     ]
 
-    A_gpu = CuModMatrix(A, 11)
+    A_gpu = CuModMatrix(A; modulus = 11)
 
     @test size(A_gpu) == (3, 3)
 
@@ -36,7 +36,7 @@ function test_permutations()
         7.0 8.0 9.0
     ]
 
-    A_gpu = CuModMatrix(A, 11)
+    A_gpu = CuModMatrix(A; modulus = 11)
 
     GPUFiniteFieldMatrices.apply_row_perm!(P, A_gpu)
 

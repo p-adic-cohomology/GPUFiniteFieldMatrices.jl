@@ -34,8 +34,8 @@ function compute_inverse_from_nemo_lu(rank::Int, P::Perm, L, U)
     float_entries!(U_float, U)
 
     # Create CuModMatrix versions
-    L_gpu = CuModMatrix(L_float, N; new_size = size(L_float))
-    U_gpu = CuModMatrix(U_float, N; new_size = size(U_float))
+    L_gpu = CuModMatrix(L_float; modulus = N, new_size = size(L_float))
+    U_gpu = CuModMatrix(U_float; modulus = N, new_size = size(U_float))
 
     # Compute inverses using triangular inverse functions
     U_inv = upper_triangular_inverse(U_gpu)

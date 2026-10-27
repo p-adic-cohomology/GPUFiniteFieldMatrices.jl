@@ -151,8 +151,8 @@ function pluq_gpu_kernel(A::CuModMatrix; debug::Bool = false)
     end
 
     # NVTX.@range "End PLUQ" begin
-    U = CuModMatrix(d_A, N; new_size = (rows, cols))
-    L = CuModMatrix(d_L, N; new_size = (rows, rows))
+    U = CuModMatrix(d_A; modulus = N, new_size = (rows, cols))
+    L = CuModMatrix(d_L; modulus = N, new_size = (rows, rows))
     # end
 
     return (

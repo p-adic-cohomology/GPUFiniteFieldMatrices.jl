@@ -4,49 +4,106 @@ function test_karatsuba_public_api_values()
         modulus = 100
         a_values = Float64[20 30; 40 50]
         b_values = Float64[2 1; 0 3]
-        a = mod.CuModMatrix{Float64}(a_values, modulus)
-        b = mod.CuModMatrix{Float64}(b_values, modulus)
+        a = mod.CuModMatrix{Float64}(a_values; modulus = modulus)
+        b = mod.CuModMatrix{Float64}(b_values; modulus = modulus)
 
-        explicit = mod.to_karatsuba(a, modulus)
+        explicit = mod.to_karatsuba(a; modulus = modulus)
         automatic = mod.to_karatsuba(a)
         @test Array(mod.from_karatsuba(Float64, explicit)) == a_values
         @test Array(mod.from_karatsuba(Float64, automatic)) == a_values
 
-        typed_explicit = mod.to_karatsuba(Float64, a, modulus)
+        typed_explicit = mod.to_karatsuba(Float64, a; modulus = modulus)
         typed_automatic = mod.to_karatsuba(Float64, a)
         @test Array(mod.from_karatsuba(Float64, typed_explicit)) == a_values
         @test Array(mod.from_karatsuba(Float64, typed_automatic)) == a_values
 
         different_source_values = Float32[20 30; 40 50]
-        different_source = mod.CuModMatrix{Float32}(different_source_values, modulus)
-        typed_different_source = mod.to_karatsuba(Float64, different_source, modulus)
-        @test eltype(typed_different_source.data1) == Float32
+        different_source =
+            mod.CuModMatrix{Float32}(different_source_values; modulus = modulus)
+        typed_different_source =
+            mod.to_karatsuba(Float64, different_source; modulus = modulus)
+        @test eltype(typed_different_source.data1) == Float64
+        @test typed_different_source.data1 isa mod.CuModMatrix{Float64}
+        @test typed_different_source.data1.data !== different_source.data
         typed_different_roundtrip = mod.from_karatsuba(Float64, typed_different_source)
-        @test eltype(typed_different_roundtrip) == Float32
-        @test Array(typed_different_roundtrip) == different_source_values
+        @test eltype(typed_different_roundtrip) == Float64
+        @test typed_different_roundtrip isa CUDA.CuArray{Float64,2}
+        @test Array(typed_different_roundtrip) == Float64.(different_source_values)
+
+        gpu_wrapped = mod.KaratsubaMatrix(
+            CUDA.CuArray(Int64[1 0]),
+            CUDA.CuArray(Int64[37 0]);
+            low_modulus = 2,
+            high_modulus = 7,
+            modulus = 19,
+        )
+        gpu_reconstructed = mod.from_karatsuba(Int64, gpu_wrapped)
+        @test gpu_reconstructed isa CUDA.CuArray{Int64,2}
+        @test Array(gpu_reconstructed) == Int64[75 0]
+
+        gpu_overflow = mod.KaratsubaVector(
+            CUDA.CuArray(Int64[0]),
+            CUDA.CuArray(Int64[typemax(Int64)]);
+            low_modulus = 2,
+            high_modulus = 7,
+            modulus = 19,
+        )
+        @test_throws InexactError mod.from_karatsuba(Int64, gpu_overflow)
+
+        gpu_float_exact = mod.KaratsubaVector(
+            CUDA.CuArray(Float64[0]),
+            CUDA.CuArray(Float64[2^52]);
+            low_modulus = 2,
+            high_modulus = 7,
+            modulus = 19,
+        )
+        gpu_float_result = mod.from_karatsuba(Float64, gpu_float_exact)
+        @test gpu_float_result isa CUDA.CuArray{Float64,1}
+        @test Array(gpu_float_result) == Float64[2^53]
+
+        gpu_float_inexact = mod.KaratsubaVector(
+            CUDA.CuArray(Float64[1]),
+            CUDA.CuArray(Float64[2^53]);
+            low_modulus = 2,
+            high_modulus = 7,
+            modulus = 19,
+        )
+        @test_throws InexactError mod.from_karatsuba(Float64, gpu_float_inexact)
+
+        gpu_component_inexact = mod.KaratsubaVector(
+            CUDA.CuArray(Float64[0]),
+            CUDA.CuArray(Float64[2^24+1]);
+            low_modulus = 2,
+            high_modulus = 7,
+            modulus = 19,
+        )
+        @test_throws InexactError mod.from_karatsuba(Float32, gpu_component_inexact)
 
         # Keep the initialized-copy product in a coherent split representation.
         # Legacy copying sets M to N1*N2, so all operands here use that M.
         ak = mod.KaratsubaMatrix(
             a,
-            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2), modulus),
-            modulus,
-            modulus,
-            modulus^2,
+            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2); modulus = modulus),
+            ;
+            low_modulus = modulus,
+            high_modulus = modulus,
+            modulus = modulus^2,
         )
         bk = mod.KaratsubaMatrix(
             b,
-            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2), modulus),
-            modulus,
-            modulus,
-            modulus^2,
+            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2); modulus = modulus),
+            ;
+            low_modulus = modulus,
+            high_modulus = modulus,
+            modulus = modulus^2,
         )
         ck = mod.KaratsubaMatrix(
-            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2), modulus),
-            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2), modulus),
-            modulus,
-            modulus,
-            modulus^2,
+            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2); modulus = modulus),
+            mod.CuModMatrix{Float64}(zeros(Float64, 2, 2); modulus = modulus),
+            ;
+            low_modulus = modulus,
+            high_modulus = modulus,
+            modulus = modulus^2,
         )
         foreach(mod.initialize_plan!, (ak, bk, ck))
 
@@ -59,13 +116,14 @@ function test_karatsuba_public_api_values()
 
         rect_a_values = Float64[1 2 3; 4 5 6]
         rect_b_values = Float64[2 1 0 3; 1 2 3 4; 0 1 2 3]
-        rect_a = mod.CuModMatrix{Float64}(rect_a_values, modulus)
-        rect_b = mod.CuModMatrix{Float64}(rect_b_values, modulus)
-        rect_ak = mod.to_karatsuba(rect_a, modulus)
-        rect_bk = mod.to_karatsuba(rect_b, modulus)
+        rect_a = mod.CuModMatrix{Float64}(rect_a_values; modulus = modulus)
+        rect_b = mod.CuModMatrix{Float64}(rect_b_values; modulus = modulus)
+        rect_ak = mod.to_karatsuba(rect_a; modulus = modulus)
+        rect_bk = mod.to_karatsuba(rect_b; modulus = modulus)
         rect_ck = mod.to_karatsuba(
-            mod.CuModMatrix{Float64}(zeros(Float64, 2, 4), modulus),
-            modulus,
+            mod.CuModMatrix{Float64}(zeros(Float64, 2, 4); modulus = modulus),
+            ;
+            modulus = modulus,
         )
         foreach(mod.initialize_plan!, (rect_ak, rect_bk, rect_ck))
 

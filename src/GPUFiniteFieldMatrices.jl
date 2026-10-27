@@ -20,6 +20,8 @@ else
 end
 
 using LinearAlgebra: LinearAlgebra, I, mul!, rank
+import Random
+import Random: rand
 using SparseArrays: SparseArrays
 using IterTools: IterTools
 
@@ -70,7 +72,7 @@ export to_karatsuba, from_karatsuba
 export PLUQOptions, PLUQ
 export pluq, pluq!, is_invertible, is_invertible_with_inverse
 export pluq_batched, inverse_batched
-export right_inverse, left_inverse, change_modulus, eye
+export right_inverse, left_inverse, change_modulus, identity_matrix
 export elementwise_multiply!, scalar_add!, scalar_sub!, mod_elements!
 
 public add!, sub!, neg!, zero!

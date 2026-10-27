@@ -16,8 +16,8 @@ function test_matmul_operations()
     C_data = [58 64; 139 154]  # Expected result A*B mod 11 = [3 9; 7 0]
     modulus = 11  # Prime modulus
 
-    A = CuModMatrix(A_data, modulus)
-    B = CuModMatrix(B_data, modulus)
+    A = CuModMatrix(A_data; modulus = modulus)
+    B = CuModMatrix(B_data; modulus = modulus)
 
     println("Matrix A = ")
     display(A)
@@ -37,7 +37,7 @@ function test_matmul_operations()
 
     # Verify the result matches expected calculation (mod 11)
     # TODO: Note we cast just to check the construtor works (though I think this should be removed)
-    expected_C = CuModMatrix(C_data .% modulus, modulus)
+    expected_C = CuModMatrix(C_data .% modulus; modulus = modulus)
     @test Array(C) ≈ Array(expected_C)
 
     # Test the allocating stripe adapter against ordinary multiplication.
@@ -73,8 +73,8 @@ function test_matmul_operations()
     k = GPUFiniteFieldMatrices.find_max_ops(Float32, 101) + 17
     A_chunk_host = reshape(Float32.(mod.(17 .* (1:(2k)), 101)), 2, k)
     B_chunk_host = reshape(Float32.(mod.(29 .* (1:(2k)), 101)), k, 2)
-    A_chunk = CuModMatrix{Float32}(A_chunk_host, 101)
-    B_chunk = CuModMatrix{Float32}(B_chunk_host, 101)
+    A_chunk = CuModMatrix{Float32}(A_chunk_host; modulus = 101)
+    B_chunk = CuModMatrix{Float32}(B_chunk_host; modulus = 101)
     C_chunk = GPUFiniteFieldMatrices.stripe_mul(A_chunk, B_chunk)
     expected_chunk = mod.(Int64.(A_chunk_host) * Int64.(B_chunk_host), 101)
     @test round.(Int64, Array(C_chunk)) == expected_chunk
@@ -91,12 +91,17 @@ function test_inplace_matmul_operations()
 
     A_data = [1 2 3; 4 5 6]
     B_data = [7 8; 9 10; 11 12]
-    C = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, 9)
+    C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        2,
+        2;
+        modulus = 9,
+    )
     C_data = C.data
     modulus = 9  # Prime modulus
 
-    A = CuModMatrix(A_data, modulus)
-    B = CuModMatrix(B_data, modulus)
+    A = CuModMatrix(A_data; modulus = modulus)
+    B = CuModMatrix(B_data; modulus = modulus)
 
     println("Matrix A = ")
     display(A)
@@ -125,7 +130,12 @@ function test_inplace_matmul_operations()
 
     # Test in-place multiplication with modulus override
     override_modulus = 3
-    C2 = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, modulus)
+    C2 = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        2,
+        2;
+        modulus = modulus,
+    )
 
     GPUFiniteFieldMatrices.stripe_mul!(C2, A, B; modulus_override = override_modulus)
 
@@ -142,7 +152,12 @@ function test_inplace_matmul_operations()
     # Without an override, preserve the prior A.N reduction default while
     # leaving the destination's stored metadata unchanged.
     default_modulus = 5
-    C_default = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, default_modulus)
+    C_default = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        2,
+        2;
+        modulus = default_modulus,
+    )
     GPUFiniteFieldMatrices.stripe_mul!(C_default, A, B)
     A_values = mod.(A_data, modulus)
     B_values = mod.(B_data, modulus)
@@ -151,7 +166,12 @@ function test_inplace_matmul_operations()
     @test C_default.N == default_modulus
 
     for invalid_override in (0, -1)
-        C_invalid = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, default_modulus)
+        C_invalid = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModMatrix{Float32},
+            2,
+            2;
+            modulus = default_modulus,
+        )
         C_invalid.data[1:2, 1:2] .= 7
         C_invalid_before = Array(C_invalid)
         @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(

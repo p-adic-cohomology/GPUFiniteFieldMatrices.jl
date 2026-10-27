@@ -45,7 +45,7 @@ function apply_col_perm(P::Array{Tuple{Int,Int},1}, A)
         size(A, 2),
     )
 
-    return CuModMatrix(A_data_copy, A.N; new_size = size(A))
+    return CuModMatrix(A_data_copy; modulus = A.N, new_size = size(A))
 end
 
 """
@@ -124,7 +124,7 @@ function apply_row_perm(P::Array{Tuple{Int,Int},1}, A)
         size(A, 1),
     )
 
-    return CuModMatrix(A_data_copy, A.N; new_size = size(A))
+    return CuModMatrix(A_data_copy; modulus = A.N, new_size = size(A))
 end
 
 """
@@ -190,5 +190,5 @@ function perm_array_to_matrix(
         end
     end
 
-    return CuModMatrix(P, N; new_size = new_size)
+    return CuModMatrix(P; modulus = N, new_size = new_size)
 end

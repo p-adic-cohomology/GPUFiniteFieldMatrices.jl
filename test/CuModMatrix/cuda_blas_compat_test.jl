@@ -8,15 +8,24 @@ function test_cuda_blas_compatibility()
     vector_expected = mod.(BigInt.(vector_A_data) * BigInt.(vector_x_data), N)
 
     for T in (Float32, Float64), stripe_width in (8, 5, 2, 1)
-        A = GPUFiniteFieldMatrices.CuModMatrix{T}(A_data, N)
-        B = GPUFiniteFieldMatrices.CuModMatrix{T}(B_data, N)
-        C = GPUFiniteFieldMatrices.zeros(T, size(A_data, 1), size(B_data, 2), N)
+        A = GPUFiniteFieldMatrices.CuModMatrix{T}(A_data; modulus = N)
+        B = GPUFiniteFieldMatrices.CuModMatrix{T}(B_data; modulus = N)
+        C = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModMatrix{T},
+            size(A_data, 1),
+            size(B_data, 2);
+            modulus = N,
+        )
 
         CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(C, A, B; max_ops = stripe_width)
         @test Array(C) == T.(matrix_expected)
 
-        C_single_stripe =
-            GPUFiniteFieldMatrices.zeros(T, size(A_data, 1), size(B_data, 2), N)
+        C_single_stripe = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModMatrix{T},
+            size(A_data, 1),
+            size(B_data, 2);
+            modulus = N,
+        )
         CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
             C_single_stripe,
             A,
@@ -26,9 +35,13 @@ function test_cuda_blas_compatibility()
         )
         @test Array(C_single_stripe) == T.(matrix_expected)
 
-        vector_A = GPUFiniteFieldMatrices.CuModMatrix{T}(vector_A_data, N)
-        x = GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data, N)
-        z = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N)
+        vector_A = GPUFiniteFieldMatrices.CuModMatrix{T}(vector_A_data; modulus = N)
+        x = GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data; modulus = N)
+        z = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModVector{T},
+            size(vector_A_data, 1);
+            modulus = N,
+        )
 
         CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
             z,
@@ -38,7 +51,11 @@ function test_cuda_blas_compatibility()
         )
         @test Array(z) == T.(vector_expected)
 
-        z_recomputed = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N)
+        z_recomputed = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModVector{T},
+            size(vector_A_data, 1);
+            modulus = N,
+        )
         CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
             z_recomputed,
             vector_A,
@@ -58,7 +75,11 @@ function test_cuda_blas_compatibility()
             )
         end
 
-        z_override = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N)
+        z_override = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModVector{T},
+            size(vector_A_data, 1);
+            modulus = N,
+        )
         override_modulus = 31
         CUDA.@sync LinearAlgebra.mul!(
             z_override,
@@ -70,7 +91,11 @@ function test_cuda_blas_compatibility()
         @test Array(z_override) == T.(mod.(vector_A_data * vector_x_data, override_modulus))
         @test z_override.N == N
 
-        z_override_different = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), 19)
+        z_override_different = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModVector{T},
+            size(vector_A_data, 1);
+            modulus = 19,
+        )
         CUDA.@sync LinearAlgebra.mul!(
             z_override_different,
             vector_A,
@@ -83,7 +108,12 @@ function test_cuda_blas_compatibility()
 
         # A different stored destination modulus does not replace the working
         # reduction modulus, and the allocating adapter records that modulus.
-        C_different_modulus = GPUFiniteFieldMatrices.zeros(T, 3, 2, 19)
+        C_different_modulus = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModMatrix{T},
+            3,
+            2;
+            modulus = 19,
+        )
         CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
             C_different_modulus,
             A,
@@ -98,7 +128,11 @@ function test_cuda_blas_compatibility()
         @test allocated_override.N == 31
         @test allocated_override.data !== A.data
 
-        z_different_modulus = GPUFiniteFieldMatrices.zeros(T, 3, 19)
+        z_different_modulus = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModVector{T},
+            3;
+            modulus = 19,
+        )
         CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
             z_different_modulus,
             vector_A,
@@ -113,14 +147,19 @@ function test_cuda_blas_compatibility()
               T.(mod.(vector_A_data * vector_x_data, 31))
         @test allocated_vector_override.N == 31
 
-        z_reject = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N)
+        z_reject = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModVector{T},
+            size(vector_A_data, 1);
+            modulus = N,
+        )
         z_reject.data[1:length(z_reject)] .= T.([17, 19, 23])
         z_before_reject = Array(z_reject)
         matrix_before_reject = Array(C)
         vector_matrix_before_reject = Array(vector_A)
         vector_before_reject = Array(x)
 
-        x_bad_modulus = GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data, N + 1)
+        x_bad_modulus =
+            GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data; modulus = N + 1)
         x_bad_modulus_before = Array(x_bad_modulus)
         @test_throws GPUFiniteFieldMatrices.CuModArrayModulusMismatchException GPUFiniteFieldMatrices.stripe_mul!(
             z_reject,
@@ -131,7 +170,8 @@ function test_cuda_blas_compatibility()
         @test Array(vector_A) == vector_matrix_before_reject
         @test Array(x_bad_modulus) == x_bad_modulus_before
 
-        x_bad_length = GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data[1:(end-1)], N)
+        x_bad_length =
+            GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data[1:(end-1)]; modulus = N)
         x_bad_length_before = Array(x_bad_length)
         @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException GPUFiniteFieldMatrices.stripe_mul!(
             z_reject,
@@ -141,7 +181,11 @@ function test_cuda_blas_compatibility()
         @test Array(z_reject) == z_before_reject
         @test Array(x_bad_length) == x_bad_length_before
 
-        z_bad_length = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1) - 1, N)
+        z_bad_length = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModVector{T},
+            size(vector_A_data, 1) - 1;
+            modulus = N,
+        )
         z_bad_length.data[1:length(z_bad_length)] .= T.([17, 19])
         z_bad_length_before = Array(z_bad_length)
         @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException GPUFiniteFieldMatrices.stripe_mul!(
@@ -153,7 +197,11 @@ function test_cuda_blas_compatibility()
         @test Array(vector_A) == vector_matrix_before_reject
         @test Array(x) == vector_before_reject
 
-        z_bad_modulus = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N + 1)
+        z_bad_modulus = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModVector{T},
+            size(vector_A_data, 1);
+            modulus = N + 1,
+        )
         z_bad_modulus.data[1:length(z_bad_modulus)] .= T.([17, 19, 23])
         z_bad_modulus_before = Array(z_bad_modulus)
         @test_throws GPUFiniteFieldMatrices.CuModArrayModulusMismatchException GPUFiniteFieldMatrices.stripe_mul!(
@@ -287,11 +335,19 @@ function test_cuda_blas_compatibility()
     precision_inner_dim = 2 * precision_max_ops + 1
     precision_A_values = fill(precision_bound - 1, 2, precision_inner_dim)
     precision_x_values = fill(precision_bound - 1, precision_inner_dim)
-    precision_A =
-        GPUFiniteFieldMatrices.CuModMatrix{Float32}(precision_A_values, precision_bound)
-    precision_x =
-        GPUFiniteFieldMatrices.CuModVector{Float32}(precision_x_values, precision_bound)
-    precision_z = GPUFiniteFieldMatrices.zeros(Float32, 2, precision_bound)
+    precision_A = GPUFiniteFieldMatrices.CuModMatrix{Float32}(
+        precision_A_values;
+        modulus = precision_bound,
+    )
+    precision_x = GPUFiniteFieldMatrices.CuModVector{Float32}(
+        precision_x_values;
+        modulus = precision_bound,
+    )
+    precision_z = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModVector{Float32},
+        2;
+        modulus = precision_bound,
+    )
 
     CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
         precision_z,
@@ -307,9 +363,16 @@ function test_cuda_blas_compatibility()
 
     # Exercise matrix-matrix stripe reductions at the computed Float32 budget.
     precision_B_values = fill(precision_bound - 1, precision_inner_dim, 2)
-    precision_B =
-        GPUFiniteFieldMatrices.CuModMatrix{Float32}(precision_B_values, precision_bound)
-    precision_C = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, precision_bound)
+    precision_B = GPUFiniteFieldMatrices.CuModMatrix{Float32}(
+        precision_B_values;
+        modulus = precision_bound,
+    )
+    precision_C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        2,
+        2;
+        modulus = precision_bound,
+    )
 
     CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
         precision_C,
@@ -383,13 +446,31 @@ function test_cuda_blas_compatibility()
     x1_data = mod.(vector_indices .+ 1, N1)
     x2_data = mod.(3 .* vector_indices .+ 1, N2)
 
-    A1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A1_data, N1)
-    A2 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A2_data, N2)
-    x1 = GPUFiniteFieldMatrices.CuModVector{Float64}(x1_data, N1)
-    x2 = GPUFiniteFieldMatrices.CuModVector{Float64}(x2_data, N2)
-    A = GPUFiniteFieldMatrices.KaratsubaMatrix(A1, A2, N1, N2, modulus)
-    x = GPUFiniteFieldMatrices.KaratsubaVector(x1, x2, N1, N2, modulus)
-    y = GPUFiniteFieldMatrices.KaratsubaZeros(Float64, n, N1, N2, modulus, true)
+    A1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A1_data; modulus = N1)
+    A2 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A2_data; modulus = N2)
+    x1 = GPUFiniteFieldMatrices.CuModVector{Float64}(x1_data; modulus = N1)
+    x2 = GPUFiniteFieldMatrices.CuModVector{Float64}(x2_data; modulus = N2)
+    A = GPUFiniteFieldMatrices.KaratsubaMatrix(
+        A1,
+        A2;
+        low_modulus = N1,
+        high_modulus = N2,
+        modulus = modulus,
+    )
+    x = GPUFiniteFieldMatrices.KaratsubaVector(
+        x1,
+        x2;
+        low_modulus = N1,
+        high_modulus = N2,
+        modulus = modulus,
+    )
+    y = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.KaratsubaVector{Float64},
+        n;
+        low_modulus = N1,
+        high_modulus = N2,
+        modulus = modulus,
+    )
 
     GPUFiniteFieldMatrices.initialize_plan!(A)
     GPUFiniteFieldMatrices.initialize_plan!(x)

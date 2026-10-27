@@ -5,7 +5,7 @@ function test_api_smoke()
         2 4 9
         1 8 6
     ]
-    A = CuModMatrix(Ahost, N)
+    A = CuModMatrix(Ahost; modulus = N)
     F = pluq(A)
     @test length(F.p) == 3
     @test length(F.q) == 3
@@ -16,7 +16,7 @@ function test_api_smoke()
     @test F.U isa CuModMatrix
     @test GPUFiniteFieldMatrices.pluq_check_identity(F, A)
 
-    A_inplace = CuModMatrix(copy(Ahost), N)
+    A_inplace = CuModMatrix(copy(Ahost); modulus = N)
     F_inplace = pluq!(A_inplace)
     @test F_inplace.rank == 3
     @test F_inplace.LU.data === A_inplace.data
@@ -41,7 +41,7 @@ end
 
 function test_batch_fallbacks()
     N = 101
-    square = [CuModMatrix(Matrix{Float32}(I, 33, 33), N) for _ = 1:2]
+    square = [CuModMatrix(Matrix{Float32}(I, 33, 33); modulus = N) for _ = 1:2]
     Fs = GPUFiniteFieldMatrices.pluq_batched(
         square,
         options = PLUQOptions(batch_streams = 2),
@@ -53,8 +53,8 @@ function test_batch_fallbacks()
     )
     @test all(X -> mod.(round.(Int, Array(square[1] * X)), N) == Matrix{Int}(I, 33, 33), Xs)
 
-    wide = CuModMatrix(Float32[1 0 0; 0 1 0], N)
-    tall = CuModMatrix(Float32[1 0; 0 1; 0 0], N)
+    wide = CuModMatrix(Float32[1 0 0; 0 1 0]; modulus = N)
+    tall = CuModMatrix(Float32[1 0; 0 1; 0 0]; modulus = N)
     mixed = GPUFiniteFieldMatrices.inverse_batched(
         [wide, tall],
         options = PLUQOptions(batch_streams = 2),

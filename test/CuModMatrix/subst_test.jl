@@ -13,7 +13,7 @@ function test_sub(p, m, n, debug::Bool = false, assert::Bool = false)
     # end
 
     # NVTX.@range "Init d_A p=$p, m=$m, n=$n" begin
-    d_A = CuModMatrix(A, p)
+    d_A = CuModMatrix(A; modulus = p)
     # end
 
     # NVTX.@range "Setup PLUQ p=$p, m=$m, n=$n" begin
@@ -31,8 +31,8 @@ function test_sub(p, m, n, debug::Bool = false, assert::Bool = false)
     end
 
     if assert
-        L_copy = CuModMatrix(copy(L.data), p, new_size = size(L))
-        U_copy = CuModMatrix(copy(U.data), p, new_size = size(U))
+        L_copy = CuModMatrix(copy(L.data); modulus = p, new_size = size(L))
+        U_copy = CuModMatrix(copy(U.data); modulus = p, new_size = size(U))
         GPUFiniteFieldMatrices.apply_row_inv_perm!(P, L_copy)
         GPUFiniteFieldMatrices.apply_row_inv_perm!(Q, U_copy)
         if debug

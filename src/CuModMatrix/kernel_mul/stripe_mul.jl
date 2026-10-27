@@ -440,7 +440,7 @@ function stripe_mul(
             "Matrix dimensions do not match for multiplication",
         ),
     )
-    C = zeros(eltype(A.data), size(A, 1), size(B, 2), modulus)
+    C = zeros(CuModMatrix{eltype(A.data)}, size(A, 1), size(B, 2); modulus = modulus)
     return stripe_mul!(C, A, B; modulus_override = modulus, input_bound, max_ops)
 end
 
@@ -459,6 +459,6 @@ function stripe_mul(
     )
     size(A, 2) == length(x) ||
         throw(CuModArraySizeMismatchException("Matrix and vector dimensions do not match"))
-    z = zeros(eltype(A.data), size(A, 1), modulus)
+    z = zeros(CuModVector{eltype(A.data)}, size(A, 1); modulus = modulus)
     return stripe_mul!(z, A, x; modulus_override = modulus, input_bound, max_ops)
 end

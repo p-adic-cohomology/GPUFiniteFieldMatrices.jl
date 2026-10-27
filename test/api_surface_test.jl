@@ -23,7 +23,7 @@
         :right_inverse,
         :left_inverse,
         :change_modulus,
-        :eye,
+        :identity_matrix,
         :elementwise_multiply!,
         :scalar_add!,
         :scalar_sub!,
@@ -104,8 +104,11 @@
     )
     @test all(name -> !isdefined(mod, name), removed)
 
-    @test which(mod.CuModMatrix, Tuple{Matrix{Int},Int}).module === mod
-    @test which(mod.CuModMatrix{Float64}, Tuple{Matrix{Int},Int}).module === mod
+    @test !hasmethod(mod.CuModMatrix, Tuple{Matrix{Int},Int})
+    @test !hasmethod(mod.CuModMatrix{Float64}, Tuple{Matrix{Int},Int})
+    @test !hasmethod(mod.KaratsubaMatrix, Tuple{Matrix{Int},Matrix{Int},Int})
+    @test !hasmethod(mod.KaratsubaMatrix, Tuple{Matrix{Int},Matrix{Int},Int,Int,Int})
+    @test !hasmethod(mod.KaratsubaVector, Tuple{Vector{Int},Vector{Int},Int,Int,Int})
     @test which(Base.copy, Tuple{matrix_type}).module === mod
     @test which(Base.inv, Tuple{matrix_type}).module === mod
     @test which(mod.pluq, Tuple{matrix_type}).module === mod
@@ -124,8 +127,10 @@
         mod.karatsuba_gemv!,
         Tuple{karatsuba_type,karatsuba_type,karatsuba_type},
     ).module === mod
-    @test which(mod.to_karatsuba, Tuple{Matrix{Int},Int}).module === mod
-    @test which(mod.to_karatsuba, Tuple{Type{Int},Matrix{Int},Int}).module === mod
+    @test which(mod.to_karatsuba, Tuple{Matrix{Int}}).module === mod
+    @test which(mod.to_karatsuba, Tuple{Type{Int},Matrix{Int}}).module === mod
+    @test !hasmethod(mod.to_karatsuba, Tuple{Matrix{Int},Int})
+    @test !hasmethod(mod.to_karatsuba, Tuple{Type{Int},Matrix{Int},Int})
     @test which(mod.from_karatsuba, Tuple{Type{Int},karatsuba_type}).module === mod
     @test which(LinearAlgebra.rmul!, Tuple{matrix_type,Float64}).module === mod
     @test which(LinearAlgebra.lmul!, Tuple{Float64,matrix_type}).module === mod
@@ -249,9 +254,19 @@
 
     # Unsupported elem_type keywords fail in keyword dispatch before the
     # constructor body can allocate a GPU array.
-    @test_throws MethodError mod.CuModMatrix(Float32[1 2; 3 4], 101; elem_type = Float32)
+    @test_throws MethodError mod.CuModMatrix(
+        Float32[1 2; 3 4];
+        modulus = 101,
+        elem_type = Float32,
+    )
 
-    K = karatsuba_type([1 2; 3 4], [5 6; 7 8], 3, 5, 15)
+    K = karatsuba_type(
+        [1 2; 3 4],
+        [5 6; 7 8];
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 15,
+    )
     Kcopy = copy(K)
     @test Kcopy !== K
     @test Kcopy.data1 == K.data1
@@ -264,7 +279,13 @@
     legacy_data2 = zeros(Int, 2, 2)
     expected_legacy_data1 = copy(legacy_data1)
     expected_legacy_data2 = copy(legacy_data2)
-    legacy_source = karatsuba_type(legacy_data1, legacy_data2, 3, 3, 3)
+    legacy_source = karatsuba_type(
+        legacy_data1,
+        legacy_data2;
+        low_modulus = 3,
+        high_modulus = 3,
+        modulus = 3,
+    )
     legacy_copy = copy(legacy_source)
     @test legacy_copy.M == 9
     @test legacy_copy.M != legacy_source.M
@@ -293,30 +314,161 @@
             @test sprint(showerror, err) == expected_message
         end
     end
-    mul_left =
-        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
-    mul_right_wrong_modulus =
-        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 16)
-    mul_dest =
-        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
+    mul_left = mod.KaratsubaArray{Float64,2}(
+        zeros(Float64, 2, 2),
+        zeros(Float64, 2, 2);
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 15,
+    )
+    mul_right_wrong_modulus = mod.KaratsubaArray{Float64,2}(
+        zeros(Float64, 2, 2),
+        zeros(Float64, 2, 2);
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 16,
+    )
+    mul_dest = mod.KaratsubaArray{Float64,2}(
+        zeros(Float64, 2, 2),
+        zeros(Float64, 2, 2);
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 15,
+    )
     assert_guard_error_message(
         () -> LinearAlgebra.mul!(mul_dest, mul_left, mul_right_wrong_modulus),
         "Matrices must have the same modulus m",
     )
 
-    mul_left_wrong_shape =
-        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 3), zeros(Float64, 2, 3), 3, 5, 15)
-    mul_right_wrong_shape =
-        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
+    mul_left_wrong_shape = mod.KaratsubaArray{Float64,2}(
+        zeros(Float64, 2, 3),
+        zeros(Float64, 2, 3);
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 15,
+    )
+    mul_right_wrong_shape = mod.KaratsubaArray{Float64,2}(
+        zeros(Float64, 2, 2),
+        zeros(Float64, 2, 2);
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 15,
+    )
     assert_guard_error_message(
         () -> LinearAlgebra.mul!(mul_dest, mul_left_wrong_shape, mul_right_wrong_shape),
         "Matrix dimensions don't work for multiplication",
     )
 
-    mul_unplanned_right =
-        mod.KaratsubaArray{Float64,2}(zeros(Float64, 2, 2), zeros(Float64, 2, 2), 3, 5, 15)
+    mul_unplanned_right = mod.KaratsubaArray{Float64,2}(
+        zeros(Float64, 2, 2),
+        zeros(Float64, 2, 2);
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 15,
+    )
     assert_guard_error_message(
         () -> LinearAlgebra.mul!(mul_dest, mul_left, mul_unplanned_right),
         "Must initialize plans first",
     )
+end
+
+@testset "CPU constructor and exact Karatsuba conversion" begin
+    mod = GPUFiniteFieldMatrices
+
+    identity_ctor = which(mod.CuModMatrix{Int}, Tuple{LinearAlgebra.UniformScaling,Int,Int})
+    @test :modulus in Base.kwarg_decl(identity_ctor)
+    @test which(mod.identity_matrix, Tuple{Type{mod.CuModMatrix{Int}},Int}).module === mod
+    @test :modulus in
+          Base.kwarg_decl(which(Base.zeros, Tuple{Type{mod.CuModMatrix{Int}},Int,Int}))
+    @test :modulus in
+          Base.kwarg_decl(which(mod.rand, Tuple{Type{mod.CuModVector{Int}},Int}))
+    @test !isdefined(mod, :eye)
+
+    low = [1 2; 0 1]
+    high = [3 4; 5 6]
+    wrapped =
+        mod.KaratsubaMatrix(low, high; low_modulus = 2, high_modulus = 7, modulus = 19)
+    @test wrapped.data1 === low
+    @test wrapped.data2 === high
+    @test (wrapped.N1, wrapped.N2, wrapped.M) == (2, 7, 19)
+    @test mod.from_karatsuba(Int, wrapped) == low + 2 .* high
+    shorthand = mod.KaratsubaMatrix(low, high; modulus = 19)
+    @test (shorthand.N1, shorthand.N2, shorthand.M) == (19, 19, 19)
+    inferred = mod.KaratsubaVector(Int[1, 2], Int[0, 1])
+    @test (inferred.N1, inferred.N2, inferred.M) == (
+        mod.find_max_ops_karatsuba(Int, 2),
+        mod.find_max_ops_karatsuba(Int, 2),
+        mod.find_max_ops_karatsuba(Int, 2),
+    )
+    auto_split = mod.to_karatsuba(Float64, Float64[1 2; 3 4])
+    @test auto_split.M < 2^51
+    @test mod.from_karatsuba(Float64, auto_split) == Float64[1 2; 3 4]
+
+    wide_source = reshape(Int128[Int128(2)^100+17, Int128(2)^99+3], 1, 2)
+    wide_split = mod.to_karatsuba(
+        Int64,
+        wide_source;
+        low_modulus = 2^50,
+        high_modulus = 2^50,
+        modulus = 19,
+    )
+    @test wide_split.data1 isa Matrix{Int64}
+    @test wide_split.data2 isa Matrix{Int64}
+    @test mod.from_karatsuba(Int128, wide_split) == wide_source
+    @test_throws InexactError mod.from_karatsuba(Float64, wide_split)
+
+    typed_float_split = mod.to_karatsuba(
+        Float32,
+        Int128[2^60+123];
+        low_modulus = 2^40,
+        high_modulus = 2^20,
+        modulus = 97,
+    )
+    @test typed_float_split.data1 isa Vector{Float32}
+    @test typed_float_split.data2 isa Vector{Float32}
+    @test mod.from_karatsuba(Int128, typed_float_split) == Int128[2^60+123]
+    @test_throws InexactError mod.from_karatsuba(Float32, typed_float_split)
+    @test_throws InexactError mod.to_karatsuba(
+        Int8,
+        BigInt[256];
+        low_modulus = 1,
+        high_modulus = 1,
+        modulus = 97,
+    )
+
+    zero_matrix = Base.zeros(
+        mod.KaratsubaMatrix{Float32},
+        2,
+        3;
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 19,
+        use_gpu = false,
+    )
+    zero_vector = Base.zeros(
+        mod.KaratsubaVector{Float32},
+        4;
+        low_modulus = 3,
+        high_modulus = 5,
+        modulus = 19,
+        use_gpu = false,
+    )
+    @test zero_matrix.data1 isa Matrix{Float32}
+    @test zero_matrix.data2 isa Matrix{Float32}
+    @test zero_vector.data1 isa Vector{Float32}
+    @test mod.from_karatsuba(Float32, zero_matrix) == zeros(Float32, 2, 3)
+    @test mod.from_karatsuba(Float32, zero_vector) == zeros(Float32, 4)
+    @test (zero_matrix.N1, zero_matrix.N2, zero_matrix.M) == (3, 5, 19)
+    zero_shorthand = Base.zeros(mod.KaratsubaVector{Int}, 3; modulus = 17, use_gpu = false)
+    @test (zero_shorthand.N1, zero_shorthand.N2, zero_shorthand.M) == (17, 17, 17)
+    @test_throws ArgumentError Base.zeros(mod.KaratsubaVector{Int}, 3; use_gpu = false)
+    @test_throws ArgumentError Base.zeros(
+        mod.KaratsubaMatrix{Int},
+        2,
+        2;
+        low_modulus = 3,
+        use_gpu = false,
+    )
+    @test !hasmethod(Base.zeros, Tuple{Type{mod.KaratsubaMatrix},Type{Float32},Int,Int})
+    @test !isdefined(mod, :KaratsubaZeros)
 end

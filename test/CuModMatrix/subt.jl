@@ -7,7 +7,7 @@ function test_sub(p, i)
     # end
 
     # NVTX.@range "Init d_A p=$p, i=$i" begin
-    d_A = CuModMatrix(A, p)
+    d_A = CuModMatrix(A; modulus = p)
     # end
 
     # NVTX.@range "Setup PLUQ p=$p, i=$i" begin

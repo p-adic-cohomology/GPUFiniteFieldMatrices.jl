@@ -48,9 +48,14 @@ function test_stripe_budget_semantics()
     for (inner, explicit_max_ops) in ((2, nothing), (4, nothing), (5, nothing), (4, 1))
         A_data = [mod(37i + 17k, input_bound) for i = 1:2, k = 1:inner]
         B_data = [mod(23k + 11j, input_bound) for k = 1:inner, j = 1:3]
-        A = CuModMatrix{Float32}(A_data, input_bound)
-        B = CuModMatrix{Float32}(B_data, input_bound)
-        C = GPUFiniteFieldMatrices.zeros(Float32, 2, 3, reduction_modulus)
+        A = CuModMatrix{Float32}(A_data; modulus = input_bound)
+        B = CuModMatrix{Float32}(B_data; modulus = input_bound)
+        C = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModMatrix{Float32},
+            2,
+            3;
+            modulus = reduction_modulus,
+        )
 
         GPUFiniteFieldMatrices.stripe_mul!(
             C,
@@ -69,9 +74,13 @@ function test_stripe_budget_semantics()
     inner = 5
     A_data = [mod(31i + 13k, input_bound) for i = 1:2, k = 1:inner]
     x_data = [mod(19k + 5, input_bound) for k = 1:inner]
-    A = CuModMatrix{Float32}(A_data, input_bound)
-    x = CuModVector{Float32}(x_data, input_bound)
-    z = GPUFiniteFieldMatrices.zeros(Float32, 2, reduction_modulus)
+    A = CuModMatrix{Float32}(A_data; modulus = input_bound)
+    x = CuModVector{Float32}(x_data; modulus = input_bound)
+    z = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModVector{Float32},
+        2;
+        modulus = reduction_modulus,
+    )
     GPUFiniteFieldMatrices.stripe_mul!(
         z,
         A,
@@ -81,13 +90,18 @@ function test_stripe_budget_semantics()
     )
     @test Array(z) == _stripe_budget_bigint_matvec(A_data, x_data, reduction_modulus)
 
-    unsafe_C = GPUFiniteFieldMatrices.zeros(Float32, 2, 3, reduction_modulus)
+    unsafe_C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        2,
+        3;
+        modulus = reduction_modulus,
+    )
     fill!(unsafe_C.data, 7)
     original_C = Array(unsafe_C)
     A_data = [mod(37i + 17k, input_bound) for i = 1:2, k = 1:4]
     B_data = [mod(23k + 11j, input_bound) for k = 1:4, j = 1:3]
-    A = CuModMatrix{Float32}(A_data, input_bound)
-    B = CuModMatrix{Float32}(B_data, input_bound)
+    A = CuModMatrix{Float32}(A_data; modulus = input_bound)
+    B = CuModMatrix{Float32}(B_data; modulus = input_bound)
     @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
         unsafe_C,
         A,
@@ -98,11 +112,15 @@ function test_stripe_budget_semantics()
     )
     @test Array(unsafe_C) == original_C
 
-    unsafe_z = GPUFiniteFieldMatrices.zeros(Float32, 2, reduction_modulus)
+    unsafe_z = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModVector{Float32},
+        2;
+        modulus = reduction_modulus,
+    )
     fill!(unsafe_z.data, 7)
     original_z = Array(unsafe_z)
     x_data = [mod(19k + 5, input_bound) for k = 1:4]
-    x = CuModVector{Float32}(x_data, input_bound)
+    x = CuModVector{Float32}(x_data; modulus = input_bound)
     @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
         unsafe_z,
         A,
@@ -116,9 +134,14 @@ function test_stripe_budget_semantics()
     # Empty inner dimensions produce zero outputs without entering cuBLAS.
     A_empty_data = zeros(Int, 2, 0)
     B_empty_data = zeros(Int, 0, 3)
-    A_empty = CuModMatrix{Float32}(A_empty_data, input_bound)
-    B_empty = CuModMatrix{Float32}(B_empty_data, input_bound)
-    C_empty = GPUFiniteFieldMatrices.zeros(Float32, 2, 3, reduction_modulus)
+    A_empty = CuModMatrix{Float32}(A_empty_data; modulus = input_bound)
+    B_empty = CuModMatrix{Float32}(B_empty_data; modulus = input_bound)
+    C_empty = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        2,
+        3;
+        modulus = reduction_modulus,
+    )
     GPUFiniteFieldMatrices.stripe_mul!(
         C_empty,
         A_empty,
@@ -128,8 +151,12 @@ function test_stripe_budget_semantics()
     )
     @test Array(C_empty) == zeros(Int, 2, 3)
 
-    x_empty = CuModVector{Float32}(Int[], input_bound)
-    z_empty = GPUFiniteFieldMatrices.zeros(Float32, 2, reduction_modulus)
+    x_empty = CuModVector{Float32}(Int[]; modulus = input_bound)
+    z_empty = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModVector{Float32},
+        2;
+        modulus = reduction_modulus,
+    )
     GPUFiniteFieldMatrices.stripe_mul!(
         z_empty,
         A_empty,
@@ -145,9 +172,14 @@ function test_stripe_mul()
 
     A_data = Base.rand(1:100, 100, 100)
     B_data = Base.rand(1:100, 100, 100)
-    A = CuModMatrix{Float32}(A_data, 2^11)
-    B = CuModMatrix{Float32}(B_data, 2^11)
-    C = GPUFiniteFieldMatrices.zeros(Float32, 100, 100, 2^11)
+    A = CuModMatrix{Float32}(A_data; modulus = 2^11)
+    B = CuModMatrix{Float32}(B_data; modulus = 2^11)
+    C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        100,
+        100;
+        modulus = 2^11,
+    )
 
     GPUFiniteFieldMatrices.stripe_mul!(C, A, B)
 
@@ -160,9 +192,14 @@ function test_stripe_mul()
     A_data[5, 5] = 11^3 - 5
     B_data[95, 95] = 11^3 - 23
 
-    A = CuModMatrix{Float32}(A_data, 11^3)
-    B = CuModMatrix{Float32}(B_data, 11^3)
-    C = GPUFiniteFieldMatrices.zeros(Float32, 100, 100, 11^3)
+    A = CuModMatrix{Float32}(A_data; modulus = 11^3)
+    B = CuModMatrix{Float32}(B_data; modulus = 11^3)
+    C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        100,
+        100;
+        modulus = 11^3,
+    )
 
     GPUFiniteFieldMatrices.stripe_mul!(C, A, B)
 
@@ -179,9 +216,14 @@ function test_stripe_mul()
     A_data[5, 5] = 11^3 - 5
     B_data[95, 95] = 11^3 - 23
 
-    A = CuModMatrix{Float32}(A_data, 11^3)
-    B = CuModMatrix{Float32}(B_data, 11^3)
-    C = GPUFiniteFieldMatrices.zeros(Float32, s, s, 11^3)
+    A = CuModMatrix{Float32}(A_data; modulus = 11^3)
+    B = CuModMatrix{Float32}(B_data; modulus = 11^3)
+    C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        s,
+        s;
+        modulus = 11^3,
+    )
 
     println("Multiplying on the GPU...")
     CUDA.@time GPUFiniteFieldMatrices.stripe_mul!(C, A, B)
@@ -200,9 +242,13 @@ function test_stripe_mul()
     A_data[95, 95] = 11^3 - 23
     x_data = Base.rand(1:100, 100)
 
-    A = CuModMatrix{Float32}(A_data, 11^3)
-    x = CuModVector{Float32}(x_data, 11^3)
-    z = GPUFiniteFieldMatrices.zeros(Float32, 100, 11^3)
+    A = CuModMatrix{Float32}(A_data; modulus = 11^3)
+    x = CuModVector{Float32}(x_data; modulus = 11^3)
+    z = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModVector{Float32},
+        100;
+        modulus = 11^3,
+    )
 
     GPUFiniteFieldMatrices.stripe_mul!(z, A, x)
 
@@ -220,9 +266,13 @@ function test_stripe_mul()
     A_data[5, 5] = 7^4 - 5
     A_data[95, 95] = 7^4 - 23
 
-    A = CuModMatrix{Float32}(A_data, 7^4)
-    x = CuModVector{Float32}(x_data, 7^4)
-    z = GPUFiniteFieldMatrices.zeros(Float32, s, 7^4)
+    A = CuModMatrix{Float32}(A_data; modulus = 7^4)
+    x = CuModVector{Float32}(x_data; modulus = 7^4)
+    z = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModVector{Float32},
+        s;
+        modulus = 7^4,
+    )
 
     println("Multiplying on the GPU...")
     CUDA.@time GPUFiniteFieldMatrices.stripe_mul!(z, A, x)

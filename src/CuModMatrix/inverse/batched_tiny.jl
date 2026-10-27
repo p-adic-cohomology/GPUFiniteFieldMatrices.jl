@@ -268,7 +268,7 @@ function _inverse_batched_tiny(mats::AbstractVector{<:CuModMatrix}, n::Int)
         end
         data = CUDA.zeros(T, size(mats[i].data, 1), size(mats[i].data, 2))
         data[1:n, 1:n] .= @view invA[:, :, i]
-        out[i] = CuModMatrix(data, N; new_size = (n, n))
+        out[i] = CuModMatrix(data; modulus = N, new_size = (n, n))
     end
     return out
 end
