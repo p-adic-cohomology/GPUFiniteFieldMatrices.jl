@@ -9,7 +9,8 @@ function _check_cumod_display(A, type_name)
     text = isempty(contents) ? compact * ":" : compact * ":\n" * contents
 
     @test sprint(show, A) == compact
-    @test repr(A) == text
+    @test repr(A) == compact
+    @test repr(MIME"text/plain"(), A) == text
     @test sprint(show, MIME"text/plain"(), A) == text
     @test "$(A)" == compact
     @test !occursin("0.0", text) # These fixtures are nonzero; padded storage must stay hidden.
