@@ -154,7 +154,7 @@ function find_max_ops_karatsuba(type, N)
 
 end
 
-function KMatMul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
+function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (A.M != B.M) || (A.M != C.M)
         error("Matrices must have the same modulus m")
     end
@@ -282,8 +282,8 @@ const nKMuls = 3
 # target_ptrs_host = CUDA.pin(Vector{CuPtr{Float64}}(undef,nKMuls))
 
 
-# the stuff in this function should apply to the general KMatMul!, but with gemm instead of gemv
-function KMatMul_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
+# the stuff in this function should apply to the general mul!, but with gemm instead of gemv
+function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (A.M != B.M) || (A.M != C.M)
         error("Matrices must have the same modulus m")
     end
@@ -401,22 +401,22 @@ function zero!(A::KaratsubaArray)
     zero!(A.data2)
 end
 
-function KMatToMat(T::Type, K::KaratsubaArray)
+function from_karatsuba(T::Type, K::KaratsubaArray)
     A = Base.zeros(T, size(K.data1)...)
     A = K.data1 + K.N1*K.data2
     A
 end
 
-function MatToKMat(A::AbstractArray, M::Integer)
-    MatToKMat(eltype(A), A, M)
+function to_karatsuba(A::AbstractArray, M::Integer)
+    to_karatsuba(eltype(A), A, M)
 end
 
-function MatToKMat(A::AbstractArray)
+function to_karatsuba(A::AbstractArray)
     M = find_max_ops(eltype(A), max(size(A)...))
-    MatToKMat(eltype(A), A, M)
+    to_karatsuba(eltype(A), A, M)
 end
 
-function MatToKMat(T::Type, A::AbstractArray, M::Integer)
+function to_karatsuba(T::Type, A::AbstractArray, M::Integer)
     KaratsubaMatrix(T, A, M, M, M)
 end
 
@@ -454,9 +454,9 @@ function KaratsubaMatrix(T::Type, A::AbstractArray, N1::Integer, N2::Integer, M:
     K
 end
 
-function MatToKMat(T::Type, A::AbstractArray)
+function to_karatsuba(T::Type, A::AbstractArray)
     M = find_max_ops(T, max(size(A)...))
-    MatToKMat(T, A, M)
+    to_karatsuba(T, A, M)
 end
 
 function KaratsubaZeros(T, rows, cols, N1, N2, M, use_gpu)
@@ -616,7 +616,7 @@ function *(A::KaratsubaArray, B::KaratsubaArray)
             A.N2,
         )
     end
-    KMatMul!(K, A, B, plan)
+    LinearAlgebra.mul!(K, A, B, plan)
     K
 end
 
@@ -884,7 +884,7 @@ function divide_elements!(B::CuModArray, A::CuModArray, N::Integer)
     return A
 end
 
-function Karatsubacopy(A::KaratsubaArray{T,D}) where {T,D}
+function Base.copy(A::KaratsubaArray{T,D}) where {T,D}
     B = KaratsubaArray{T,D}(copy(A.data1), copy(A.data2), copy(A.N1), copy(A.N2), A.N1*A.N2)
     if !(A.plan==nothing)
         initialize_plan!(B)

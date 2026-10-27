@@ -66,6 +66,7 @@ end # @stable default_mode = "disable"
 # Public API
 export CuModArray, CuModMatrix, CuModVector
 export KaratsubaArray, KaratsubaMatrix, KaratsubaVector
+export to_karatsuba, from_karatsuba
 export PLUQOptions, PLUQ
 export pluq, pluq!, is_invertible, is_invertible_with_inverse
 export pluq_batched, inverse_batched
@@ -74,6 +75,7 @@ export elementwise_multiply!, scalar_add!, scalar_sub!, mod_elements!
 
 public add!, sub!, neg!, zero!
 public zeros, rand, similar_with_modulus, change_modulus_no_alloc!, mod_inv
+public karatsuba_gemv!
 public inverse_pluq
 public pluq_batched_4x4!, pluq_batched_8x8!, pluq_batched_16x16!, pluq_batched_32x32!
 public inverse_batched_4x4!,
