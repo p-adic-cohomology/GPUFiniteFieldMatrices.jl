@@ -2,7 +2,9 @@
     KaratsubaArray{T,D,S,P}
 
 An array represented by low and high components of storage type `S`. The
-component arrays must have the same concrete storage type. Use `low_part`,
+component arrays must have the same concrete storage type. `P` is independent
+of `S`: the factory-created plan type is `CuModArray{T,D}` for every component
+backend, matching the original padded GPU workspace behavior. Use `low_part`,
 `high_part`, `low_modulus`, `high_modulus`, and `modulus` to inspect a value;
 the fields are internal implementation details.
 """
@@ -27,12 +29,6 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
             throw(ArgumentError("Karatsuba components require a concrete storage type"))
         isconcretetype(P) ||
             throw(ArgumentError("Karatsuba plans require a concrete storage type"))
-        expected_plan_type = _karatsuba_plan_type(S)
-        P === expected_plan_type || throw(
-            ArgumentError(
-                "Requested plan storage type $P does not match the plan type $expected_plan_type for component storage $S",
-            ),
-        )
         if size(A) != size(B)
             error("Dimensions of matrices must match")
         end
@@ -72,9 +68,7 @@ function KaratsubaArray{T,D}(
     return KaratsubaArray{T,D,typeof(A)}(A, B; kwargs...)
 end
 
-_karatsuba_plan_type(::Type{S}) where {T,D,S<:CuModArray{T,D}} = S
-_karatsuba_plan_type(::Type{S}) where {T,D,S<:CuArray{T,D}} = S
-_karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} = Array{T,D}
+_karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} = CuModArray{T,D}
 
 function KaratsubaArray{T,D,S}(A::S, B::S; kwargs...) where {T,D,S<:AbstractArray{T,D}}
     P = _karatsuba_plan_type(S)
@@ -942,13 +936,13 @@ function Base.zeros(
 end
 
 function initialize_plan!(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
-    if low_part(K) isa CuModArray
-        K.plan = zeros(CuModArray{T,D}, size(low_part(K))...; modulus = Int(low_modulus(K)))
-    elseif low_part(K) isa CuArray
-        K.plan = CUDA.zeros(T, size(low_part(K))...)
-    else
-        K.plan = Base.zeros(T, size(low_part(K)))
-    end
+    expected_plan_type = _karatsuba_plan_type(S)
+    P === expected_plan_type || throw(
+        ArgumentError(
+            "initialize_plan! requires plan storage type $expected_plan_type, got $P",
+        ),
+    )
+    K.plan = zeros(expected_plan_type, size(low_part(K))...; modulus = Int(low_modulus(K)))
     return K
 end
 
@@ -1291,7 +1285,7 @@ function divide_elements!(B::CuModArray, A::CuModArray, N::Integer)
 end
 
 function Base.copy(A::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
-    B = KaratsubaArray{T,D}(
+    B = KaratsubaArray{T,D,S,P}(
         copy(low_part(A)),
         copy(high_part(A));
         low_modulus = copy(low_modulus(A)),

@@ -56,7 +56,12 @@ function test_karatsuba_public_api_values()
             mod.modulus(gpu_wrapped),
         ) == (2, 7, 19)
         @test (@inferred mod.initialize_plan!(gpu_wrapped)) === gpu_wrapped
-        @test gpu_wrapped.plan isa CUDA.CuArray{Int64,2}
+        @test gpu_wrapped.plan isa mod.CuModMatrix{Int64}
+        @test size(gpu_wrapped.plan) == size(gpu_wrapped)
+        @test size(parent(gpu_wrapped.plan)) ==
+              (size(gpu_wrapped, 1) + mod.TILE_WIDTH, size(gpu_wrapped, 2) + mod.TILE_WIDTH)
+        @test mod.modulus(gpu_wrapped.plan) == mod.low_modulus(gpu_wrapped)
+        @test CUDA.device(parent(gpu_wrapped.plan)) == CUDA.device()
         gpu_reconstructed = @inferred mod.from_karatsuba(Int64, gpu_wrapped)
         @test gpu_reconstructed isa CUDA.CuArray{Int64,2}
         @test Array(gpu_reconstructed) == Int64[75 0]
