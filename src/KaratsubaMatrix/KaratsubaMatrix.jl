@@ -885,13 +885,7 @@ function divide_elements!(B::CuModArray, A::CuModArray, N::Integer)
 end
 
 function Karatsubacopy(A::KaratsubaArray{T,D}) where {T,D}
-    B = KaratsubaArray{T,D}(
-        CuModcopy(A.data1),
-        CuModcopy(A.data2),
-        copy(A.N1),
-        copy(A.N2),
-        A.N1*A.N2,
-    )
+    B = KaratsubaArray{T,D}(copy(A.data1), copy(A.data2), copy(A.N1), copy(A.N2), A.N1*A.N2)
     if !(A.plan==nothing)
         initialize_plan!(B)
     end

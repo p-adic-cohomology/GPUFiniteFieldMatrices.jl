@@ -170,7 +170,7 @@ function test_matrix_operations()
 
     # TODO: FIX INVERSES!
     # # Test inverse
-    # G_inv = inverse(G)
+    # G_inv = inv(G)
     # println("G^(-1) = ")
     # display(G_inv)
     # println()

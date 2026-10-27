@@ -42,9 +42,9 @@ function test_matmul_operations()
 
     # Test using the direct multiplication implementation
     println("Testing mat_mul_gpu_type direct implementation...")
-    C_direct = mat_mul_gpu_type(A, B)
+    C_direct = GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B)
 
-    println("mat_mul_gpu_type(A, B) = ")
+    println("GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B) = ")
     display(C_direct)
     println()
 
@@ -52,9 +52,11 @@ function test_matmul_operations()
 
     # Test multiplication with modulus override
     override_modulus = 7
-    C_mod = mat_mul_gpu_type(A, B, override_modulus)
+    C_mod = GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B, override_modulus)
 
-    println("mat_mul_gpu_type(A, B) with modulus $override_modulus = ")
+    println(
+        "GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B) with modulus $override_modulus = ",
+    )
     display(C_mod)
     println()
 
@@ -72,9 +74,9 @@ function test_matmul_operations()
     k = GPUFiniteFieldMatrices.find_max_ops(Float32, 101) + 17
     A_chunk_host = reshape(Float32.(mod.(17 .* (1:(2k)), 101)), 2, k)
     B_chunk_host = reshape(Float32.(mod.(29 .* (1:(2k)), 101)), k, 2)
-    A_chunk = CuModMatrix(A_chunk_host, 101; elem_type = Float32)
-    B_chunk = CuModMatrix(B_chunk_host, 101; elem_type = Float32)
-    C_chunk = mat_mul_gpu_type(A_chunk, B_chunk)
+    A_chunk = CuModMatrix{Float32}(A_chunk_host, 101)
+    B_chunk = CuModMatrix{Float32}(B_chunk_host, 101)
+    C_chunk = GPUFiniteFieldMatrices.mat_mul_gpu_type(A_chunk, B_chunk)
     expected_chunk = mod.(Int64.(A_chunk_host) * Int64.(B_chunk_host), 101)
     @test round.(Int64, Array(C_chunk)) == expected_chunk
 
@@ -113,7 +115,7 @@ function test_inplace_matmul_operations()
     println("Testing mat_mul_gpu_type...")
     mat_mul_type_inplace!(C, A, B)
 
-    println("After mat_mul_gpu_type(A, B, C):")
+    println("After GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B, C):")
     display(C)
     println()
 

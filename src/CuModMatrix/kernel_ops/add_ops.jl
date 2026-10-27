@@ -52,19 +52,19 @@ function scalar_add!(
 end
 
 function +(A::CuModArray, B::CuModArray)
-    C = similar(A, A.N)
+    C = similar_with_modulus(A, A.N)
     add!(C, A, B)
     return C
 end
 
 function +(A::CuModArray, s::Number)
-    C = similar(A, A.N)
+    C = similar_with_modulus(A, A.N)
     scalar_add!(C, A, s)
     return C
 end
 
 function +(s::Number, A::CuModArray)
-    C = similar(A, A.N)
+    C = similar_with_modulus(A, A.N)
     scalar_add!(C, A, s)
     return C
 end

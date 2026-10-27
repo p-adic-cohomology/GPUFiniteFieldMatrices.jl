@@ -8,15 +8,15 @@ function test_cuda_blas_compatibility()
     vector_expected = mod.(vector_A_data * vector_x_data, N)
 
     for T in (Float32, Float64), stripe_width in (8, 2)
-        A = GPUFiniteFieldMatrices.CuModMatrix(A_data, N, elem_type = T)
-        B = GPUFiniteFieldMatrices.CuModMatrix(B_data, N, elem_type = T)
+        A = GPUFiniteFieldMatrices.CuModMatrix{T}(A_data, N)
+        B = GPUFiniteFieldMatrices.CuModMatrix{T}(B_data, N)
         C = GPUFiniteFieldMatrices.zeros(T, size(A_data, 1), size(B_data, 2), N)
 
         CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(C, A, B; M = stripe_width)
         @test Array(C) == T.(matrix_expected)
 
-        vector_A = GPUFiniteFieldMatrices.CuModMatrix(vector_A_data, N, elem_type = T)
-        x = GPUFiniteFieldMatrices.CuModVector(vector_x_data, N, elem_type = T)
+        vector_A = GPUFiniteFieldMatrices.CuModMatrix{T}(vector_A_data, N)
+        x = GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data, N)
         z = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N)
 
         CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(z, vector_A, x; M = stripe_width)

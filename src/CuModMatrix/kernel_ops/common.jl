@@ -7,7 +7,12 @@ function Base.similar(A::CuModArray)
     return CuModArray{T,D}(data, A.N; mod = false, new_size = size(A))
 end
 
-function Base.similar(A::CuModArray, N::Integer)
+"""
+    similar_with_modulus(A, N)
+
+Allocate a same-shaped array with modulus N.
+"""
+function similar_with_modulus(A::CuModArray, N::Integer)
     T = eltype(A.data)
     D = ndims(A.data)
     data = similar(A.data)

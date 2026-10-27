@@ -5,7 +5,7 @@
 # overhead low.
 using Preferences: set_preferences!
 set_preferences!(
-    "GPUFiniteFieldMatrices",
+    (Base.UUID("465031f1-b347-4f72-85f6-baf667cdf853"), "GPUFiniteFieldMatrices"),
     "dispatch_doctor_mode" => "error",
     "dispatch_doctor_codegen_level" => "min";
     force = true,
@@ -21,9 +21,11 @@ using Aqua
 using ExplicitImports
 using GPUFiniteFieldMatrices
 
+include("api_surface_test.jl")
+
 # Exercise the return type check on CPU, even when CUDA is unavailable.
 @testset "DispatchDoctor — return type stability" begin
-    @test mod_inv(3, 7) == 5
+    @test GPUFiniteFieldMatrices.mod_inv(3, 7) == 5
     @test GPUFiniteFieldMatrices.inverse_permutation([2, 3, 1]) == [3, 1, 2]
     @test GPUFiniteFieldMatrices.gcd(12, 18) == 6
 end

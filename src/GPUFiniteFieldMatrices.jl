@@ -63,35 +63,23 @@ const DEBUG = false
 
 end # @stable default_mode = "disable"
 
-# Export the main type and its operations
+# Public API
 export CuModArray, CuModMatrix, CuModVector
-export inverse
-
 export KaratsubaArray, KaratsubaMatrix, KaratsubaVector
+export PLUQOptions, PLUQ
+export pluq, pluq!, is_invertible, is_invertible_with_inverse
+export pluq_batched, inverse_batched
+export right_inverse, left_inverse, change_modulus, eye
+export elementwise_multiply!, scalar_add!, scalar_sub!, mod_elements!
 
-# Export utility functions
-export eye
-export change_modulus, change_modulus_no_alloc!
-export elementwise_multiply!, negate!
-export scalar_add!, scalar_sub!, rmul!, lmul!
-export mod_elements!, fill!
-
-# do not export: add!, sub!, zero!, is_invertible, is_invertible_with_inverse
-#     (since they conflict with AbstractAlgebra
-
-# Export GPU operations
-export mat_mul_gpu_type, mat_mul_type_inplace!
-export is_invertible, inverse, is_invertible_with_inverse
-export mod_inv
-export upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
-export forward_sub_gpu_type_32, backward_sub_gpu_type_32
-export PLUQOptions, PLUQFactorization
-export pluq_new, pluq_new!, inverse_new, inverse_pluq_new, is_invertible_new
-export pluq_new_batch, inverse_new_batch
-export pluq_batched_4x4!, pluq_batched_8x8!, pluq_batched_16x16!, pluq_batched_32x32!
-export inverse_batched_4x4!,
+public add!, sub!, neg!, zero!
+public zeros, rand, similar_with_modulus, change_modulus_no_alloc!, mod_inv
+public inverse_pluq
+public pluq_batched_4x4!, pluq_batched_8x8!, pluq_batched_16x16!, pluq_batched_32x32!
+public inverse_batched_4x4!,
     inverse_batched_8x8!, inverse_batched_16x16!, inverse_batched_32x32!
-export right_inverse_new, left_inverse_new
-export pluq_extract_L, pluq_extract_U, pluq_check_identity
+public upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
+public forward_sub_gpu_type_32, backward_sub_gpu_type_32
+public mat_mul_gpu_type, mat_mul_type_inplace!, stripe_mul!, TILE_WIDTH
 
 end

@@ -58,8 +58,8 @@ function test_inplace_basic_operations()
     expected = mod.(A_data .* B_data, modulus)
     @test Array(C) == expected
 
-    # Test negate!
-    negate!(D, A)
+    # Test neg!
+    GPUFiniteFieldMatrices.neg!(D, A)
     println("D = -A (in-place) = ")
     display(D)
     println()

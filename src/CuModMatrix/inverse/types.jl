@@ -151,7 +151,7 @@ function PLUQOptions(;
 end
 
 """
-    PLUQFactorization{T}
+    PLUQ{T}
 
 Result container for GPU PLUQ:
 - `LU`: packed in-place factor storage
@@ -159,9 +159,19 @@ Result container for GPU PLUQ:
 - `q`: column permutation vector
 - `rank`: computed rank over `mod N`
 """
-struct PLUQFactorization{T}
+struct PLUQ{T}
     LU::CuModMatrix{T}
     p::Vector{Int}
     q::Vector{Int}
     rank::Int
+end
+
+function Base.getproperty(F::PLUQ, name::Symbol)
+    name === :L && return _pluq_extract_L(F)
+    name === :U && return _pluq_extract_U(F)
+    return getfield(F, name)
+end
+
+function Base.propertynames(F::PLUQ, private::Bool = false)
+    return (fieldnames(typeof(F))..., :L, :U)
 end
