@@ -1102,6 +1102,94 @@ end
     @test !isdefined(mod, :KaratsubaZeros)
 end
 
+@testset "Fixed-width precision budgets" begin
+    mod = GPUFiniteFieldMatrices
+    type_budgets = (
+        (Float16, 11, 9),
+        (Float32, 24, 22),
+        (Float64, 53, 51),
+        (Int8, 7, 7),
+        (Int16, 15, 15),
+        (Int32, 31, 31),
+        (Int64, 63, 63),
+        (Int128, 127, 127),
+        (UInt8, 8, 8),
+        (UInt16, 16, 16),
+        (UInt32, 32, 32),
+        (UInt64, 64, 64),
+        (UInt128, 128, 128),
+    )
+
+    expected_karatsuba =
+        (bits, n) -> begin
+            bound = ((BigInt(1) << bits) - 1) ÷ BigInt(n)^2 - 1
+            Int(max(1, min(bound, BigInt(typemax(Int)))))
+        end
+    expected_cumod = (bits, n) -> begin
+        maxterm = BigInt(max(n - 1, 1))^2
+        value = ((BigInt(1) << bits) - 1) ÷ maxterm - 1
+        Int(max(0, min(value, BigInt(typemax(Int)))))
+    end
+
+    for (T, shared_bits, karatsuba_bits) in type_budgets
+        @test mod.get_bits(T) == shared_bits
+        @test mod.find_max_ops_karatsuba(T, 4) == expected_karatsuba(karatsuba_bits, 4)
+        @test mod.find_max_ops(T, 5) == expected_cumod(shared_bits, 5)
+
+        low = fill(zero(T), 1, 1)
+        high = fill(one(T), 1, 1)
+        wrapped =
+            mod.KaratsubaMatrix(low, high; low_modulus = 2, high_modulus = 3, modulus = 5)
+        @test low_part(wrapped) === low
+        @test high_part(wrapped) === high
+        @test wrapped.plan === nothing
+        @test typeof(wrapped).parameters[3] === Matrix{T}
+        @test typeof(wrapped).parameters[4] === mod.CuModArray{T,2}
+    end
+
+    @test mod.get_bits(Int) == 8 * sizeof(Int) - 1
+    @test mod.get_bits(UInt) == 8 * sizeof(UInt)
+    @test mod.find_max_ops_karatsuba(Int64, 2) == expected_karatsuba(63, 2)
+    @test mod.find_max_ops_karatsuba(UInt64, 2) == expected_karatsuba(64, 2)
+    @test mod.find_max_ops(Int64, 2) == expected_cumod(63, 2)
+    @test mod.find_max_ops(UInt64, 2) == expected_cumod(64, 2)
+    @test mod.find_max_ops_karatsuba(Int64, 2) == 2^61 - 2
+    @test mod.find_max_ops_karatsuba(UInt64, 2) == 2^62 - 2
+    @test mod.find_max_ops(Int64, 2) == typemax(Int) - 1
+    @test mod.find_max_ops(UInt64, 2) == typemax(Int)
+    @test mod.find_max_ops_karatsuba(Int128, 1) == typemax(Int)
+    @test mod.find_max_ops_karatsuba(UInt128, 1) == typemax(Int)
+    @test mod.find_max_ops(Int128, 2) == typemax(Int)
+    @test mod.find_max_ops(UInt128, 2) == typemax(Int)
+
+    factory_zero = Base.zeros(
+        mod.KaratsubaMatrix{UInt64,Matrix{UInt64}},
+        1,
+        1;
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    @test typeof(factory_zero) ===
+          mod.KaratsubaMatrix{UInt64,Matrix{UInt64},mod.CuModArray{UInt64,2}}
+    @test factory_zero.plan === nothing
+
+    for unsupported in (BigInt, BigFloat, Bool, ComplexF64, AbstractFloat, Signed, Unsigned)
+        unsupported_error = try
+            mod.get_bits(unsupported)
+            nothing
+        catch err
+            err
+        end
+        @test unsupported_error isa ErrorException
+        if unsupported_error isa Exception
+            @test occursin(string(unsupported), sprint(showerror, unsupported_error))
+        end
+    end
+    @test_throws ErrorException mod.find_max_ops_karatsuba(BigInt, 2)
+    @test_throws ErrorException mod.find_max_ops(BigFloat, 2)
+end
+
 @testset "Strict CPU Karatsuba storage and inference" begin
     mod = GPUFiniteFieldMatrices
     low_matrix = Int[1 2; 3 4]
