@@ -60,12 +60,12 @@ Materialize explicit `L` on GPU from packed `F.LU`.
 function _pluq_extract_L(F::PLUQ)
     n = rows(F.LU)
     n32 = Int32(n)
-    L = zeros(eltype(F.LU.data), n, n, F.LU.N)
+    L = zeros(CuModMatrix{eltype(parent(F.LU))}, n, n; modulus = modulus(F.LU))
     tx = 16
     ty = 16
     @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_extract_l_kernel!(
-        L.data,
-        F.LU.data,
+        parent(L),
+        parent(F.LU),
         n32,
     )
     return L
@@ -85,12 +85,12 @@ U = F.U
 function _pluq_extract_U(F::PLUQ)
     n = rows(F.LU)
     n32 = Int32(n)
-    U = zeros(eltype(F.LU.data), n, n, F.LU.N)
+    U = zeros(CuModMatrix{eltype(parent(F.LU))}, n, n; modulus = modulus(F.LU))
     tx = 16
     ty = 16
     @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_extract_u_kernel!(
-        U.data,
-        F.LU.data,
+        parent(U),
+        parent(F.LU),
         n32,
     )
     return U
