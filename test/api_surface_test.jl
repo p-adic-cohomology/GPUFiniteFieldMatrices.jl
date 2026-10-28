@@ -175,6 +175,10 @@
     @test !hasmethod(mod.div!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
     @test :modulus_override in
           keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,Float64})
+    scalar_mul_keywords =
+        keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,Int})
+    @test :mod_N ∉ scalar_mul_keywords
+    @test !hasmethod(LinearAlgebra.mul!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
     @test :input_bound in
           keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type})
     @test :max_ops in

@@ -349,7 +349,7 @@ function stripe_mul!(
     input_bound = nothing,
     max_ops = nothing,
 )
-    modulus = _stripe_effective_modulus(modulus(C), modulus_override)
+    effective_modulus = _stripe_effective_modulus(modulus(C), modulus_override)
     modulus(A) == modulus(B) || throw(
         CuModArrayModulusMismatchException("Input matrices must have the same modulus N"),
     )
@@ -423,13 +423,13 @@ function stripe_mul!(
     Adata = _stripe_logical_data(A)
     xdata = _stripe_logical_data(x)
     effective_max_ops = respect_max_ops ? max_ops : nothing
-    _stripe_preflight(zdata, Adata, xdata, modulus, bound, effective_max_ops)
+    _stripe_preflight(zdata, Adata, xdata, effective_modulus, bound, effective_max_ops)
     fill!(parent(z), zero(eltype(parent(z))))
     _stripe_mul!(
         zdata,
         Adata,
         xdata;
-        modulus,
+        modulus = effective_modulus,
         input_bound = bound,
         max_ops = effective_max_ops,
     )

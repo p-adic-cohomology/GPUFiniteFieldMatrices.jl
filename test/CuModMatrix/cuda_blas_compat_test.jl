@@ -17,8 +17,21 @@ function test_cuda_blas_compatibility()
             modulus = N,
         )
 
-        CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(C, A, B; max_ops = stripe_width)
+        stripe_result =
+            CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(C, A, B; max_ops = stripe_width)
+        @test stripe_result === C
         @test Array(C) == T.(matrix_expected)
+
+        C_linear_algebra = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModMatrix{T},
+            size(A_data, 1),
+            size(B_data, 2);
+            modulus = N,
+        )
+        linear_result = CUDA.@sync LinearAlgebra.mul!(C_linear_algebra, A, B)
+        @test linear_result === C_linear_algebra
+        @test Array(C_linear_algebra) == T.(matrix_expected)
+        @test GPUFiniteFieldMatrices.modulus(C_linear_algebra) == N
 
         C_single_stripe = GPUFiniteFieldMatrices.zeros(
             GPUFiniteFieldMatrices.CuModMatrix{T},
@@ -43,13 +56,24 @@ function test_cuda_blas_compatibility()
             modulus = N,
         )
 
-        CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
+        vector_stripe_result = CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
             z,
             vector_A,
             x;
             max_ops = stripe_width,
         )
+        @test vector_stripe_result === z
         @test Array(z) == T.(vector_expected)
+
+        z_linear_algebra = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModVector{T},
+            size(vector_A_data, 1);
+            modulus = N,
+        )
+        vector_linear_result = CUDA.@sync LinearAlgebra.mul!(z_linear_algebra, vector_A, x)
+        @test vector_linear_result === z_linear_algebra
+        @test Array(z_linear_algebra) == T.(vector_expected)
+        @test GPUFiniteFieldMatrices.modulus(z_linear_algebra) == N
 
         z_recomputed = GPUFiniteFieldMatrices.zeros(
             GPUFiniteFieldMatrices.CuModVector{T},
@@ -97,7 +121,8 @@ function test_cuda_blas_compatibility()
             input_bound = N,
             modulus_override = override_modulus,
         )
-        @test Array(z_override) == T.(mod.(vector_A_data * vector_x_data, override_modulus))
+        @test Array(z_override) ==
+              T.(mod.(BigInt.(vector_A_data) * BigInt.(vector_x_data), override_modulus))
         @test GPUFiniteFieldMatrices.modulus(z_override) == N
 
         z_override_different = GPUFiniteFieldMatrices.zeros(
@@ -130,12 +155,28 @@ function test_cuda_blas_compatibility()
             modulus_override = 31,
             input_bound = N,
         )
-        @test Array(C_different_modulus) == T.(mod.(A_data * B_data, 31))
+        @test Array(C_different_modulus) == T.(mod.(BigInt.(A_data) * BigInt.(B_data), 31))
         @test GPUFiniteFieldMatrices.modulus(C_different_modulus) == 19
         allocated_override = GPUFiniteFieldMatrices.stripe_mul(A, B; modulus_override = 31)
-        @test Array(allocated_override) == T.(mod.(A_data * B_data, 31))
+        @test Array(allocated_override) == T.(mod.(BigInt.(A_data) * BigInt.(B_data), 31))
         @test GPUFiniteFieldMatrices.modulus(allocated_override) == 31
         @test parent(allocated_override) !== parent(A)
+
+        C_bad_override = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModMatrix{T},
+            3,
+            2;
+            modulus = N,
+        )
+        fill!(parent(C_bad_override), T(47))
+        C_bad_override_before = Array(C_bad_override)
+        @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
+            C_bad_override,
+            A,
+            B;
+            modulus_override = 0,
+        )
+        @test Array(C_bad_override) == C_bad_override_before
 
         z_different_modulus = GPUFiniteFieldMatrices.zeros(
             GPUFiniteFieldMatrices.CuModVector{T},
@@ -148,13 +189,29 @@ function test_cuda_blas_compatibility()
             x;
             modulus_override = 31,
         )
-        @test Array(z_different_modulus) == T.(mod.(vector_A_data * vector_x_data, 31))
+        @test Array(z_different_modulus) ==
+              T.(mod.(BigInt.(vector_A_data) * BigInt.(vector_x_data), 31))
         @test GPUFiniteFieldMatrices.modulus(z_different_modulus) == 19
         allocated_vector_override =
             GPUFiniteFieldMatrices.stripe_mul(vector_A, x; modulus_override = 31)
         @test Array(allocated_vector_override) ==
-              T.(mod.(vector_A_data * vector_x_data, 31))
+              T.(mod.(BigInt.(vector_A_data) * BigInt.(vector_x_data), 31))
         @test GPUFiniteFieldMatrices.modulus(allocated_vector_override) == 31
+
+        z_bad_override = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.CuModVector{T},
+            3;
+            modulus = N,
+        )
+        fill!(parent(z_bad_override), T(53))
+        z_bad_override_before = Array(z_bad_override)
+        @test_throws ArgumentError LinearAlgebra.mul!(
+            z_bad_override,
+            vector_A,
+            x;
+            modulus_override = 0,
+        )
+        @test Array(z_bad_override) == z_bad_override_before
 
         z_reject = GPUFiniteFieldMatrices.zeros(
             GPUFiniteFieldMatrices.CuModVector{T},
