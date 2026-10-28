@@ -5,6 +5,16 @@ function test_karatsuba_api_regressions()
         a_values = Float64[20 30; 40 50]
         b_values = Float64[2 1; 0 3]
         a = mod.CuModMatrix{Float64}(a_values; modulus = q)
+        @test mod.modulus(a) == q
+        @test size(a) == size(a_values)
+
+        # Keep the public logical-size wrapper contract over padded CUDA storage.
+        backing = CUDA.CuArray(zeros(Float64, 5, 6))
+        wrapped_backing = mod.CuModMatrix{Float64}(backing; modulus = q, new_size = (2, 3))
+        @test Base.parent(wrapped_backing) === backing
+        @test size(wrapped_backing) == (2, 3)
+        @test size(Base.parent(wrapped_backing)) == (5, 6)
+        @test mod.modulus(wrapped_backing) == q
 
         explicit = mod.to_karatsuba(a; modulus = q)
         automatic = mod.to_karatsuba(a)
