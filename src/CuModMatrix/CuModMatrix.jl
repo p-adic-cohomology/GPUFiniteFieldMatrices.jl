@@ -674,24 +674,23 @@ end
 In-place copy: B = A. No allocation is performed.
 B is updated with the contents of A.
 
-This copies the source backing storage, including available padding. If raw
-wrappers have different backing lengths, only indices present in both arrays
-are written. The operation does not test the modulus or normalize entries;
-padding contents are not guaranteed to be zero after the copy.
+This copies all logical entries across valid backing layouts. Padding is outside
+the copy and is left unchanged in the destination. The operation does not test
+the modulus or normalize entries.
 """
 function Base.copy!(B::CuModArray, A::CuModArray)
     if size(A) != size(B)
         throw(CuModArraySizeMismatchException("Matrix dimensions must match"))
     end
 
+    source = _logical_view(parent(A), size(A))
+    destination = _logical_view(parent(B), size(B))
     threads = TILE_WIDTH
-    count = length(parent(A))
+    count = length(source)
     if count > 0
         blocks = cld(count, threads)
-        @cuda threads=threads blocks=blocks dumb_copy_kernel!(parent(B), parent(A))
+        @cuda threads=threads blocks=blocks dumb_copy_kernel!(destination, source)
     end
-
-    # CUDA.copy!(parent(B), parent(A))
 
     return B
 end

@@ -541,19 +541,13 @@ function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray
 
 
     Bplan_logical = _logical_view(parent(B.plan), size(B.plan))
-    # Preserve the existing B.plan scratch reuse when its logical extent is
-    # large enough. Tall GEMV needs a separate logical output vector rather
-    # than relying on the input plan's physical padding.
-    Bplan_output_data = if rows <= length(Bplan_logical)
-        parent(B.plan)
-    else
-        CUDA.zeros(eltype(parent(B.plan)), rows)
-    end
-    Bplan_output = view(Bplan_output_data, 1:rows)
+    # C.plan is the independent, output-sized destination for the third
+    # product. B.plan remains the second product's input sum.
+    Cplan_output = _logical_view(parent(C.plan), size(C.plan))
     targets = [
         _logical_view(parent(low_part(C)), size(low_part(C))),
         _logical_view(parent(high_part(C)), size(high_part(C))),
-        Bplan_output,
+        Cplan_output,
     ]
     mats = [
         _logical_view(parent(low_part(A)), size(low_part(A))),
@@ -565,7 +559,20 @@ function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray
         Bplan_logical,
         _logical_view(parent(high_part(B)), size(high_part(B))),
     ]
-    _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
+    lda = stride(mats[1], 2)
+    incx = stride(vecs[1], 1)
+    incy = stride(targets[1], 1)
+    uniform_strides =
+        all(stride(matrix, 2) == lda for matrix in mats) &&
+        all(stride(vector, 1) == incx for vector in vecs) &&
+        all(stride(target, 1) == incy for target in targets)
+    if uniform_strides
+        _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
+    else
+        for i in eachindex(mats)
+            _CUDA_BLAS.gemv!('N', one_ptr, mats[i], vecs[i], zero_ptr, targets[i])
+        end
+    end
 
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(low_part(A)),parent(low_part(B)),zero_ptr,parent(low_part(C)))
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(A.plan),parent(B.plan),zero_ptr,parent(high_part(C)))
@@ -578,7 +585,7 @@ function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray
         @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_2!(
             _logical_view(parent(low_part(C)), size(low_part(C))),
             _logical_view(parent(high_part(C)), size(high_part(C))),
-            Bplan_output,
+            Cplan_output,
             low_modulus(C),
             high_modulus(C),
         )
@@ -661,6 +668,8 @@ _karatsuba_gpu_storage(A::CuModArray) = parent(A)
 _karatsuba_gpu_storage(A::CUDA.CuArray) = A
 _karatsuba_gpu_strides(A::CuModArray) = strides(parent(A))
 _karatsuba_gpu_strides(A::CUDA.CuArray) = strides(A)
+_karatsuba_logical_view(A::CuModArray) = _logical_view(parent(A), size(A))
+_karatsuba_logical_view(A::CUDA.CuArray) = A
 
 function _karatsuba_gpu_float_precision(::Type{Float16})
     11
@@ -1290,18 +1299,18 @@ function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
 
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
     if totalsize > 0
         blocks = cld(totalsize, tw)
         @cuda threads=threads blocks=blocks karatsuba_add_kernel!(
-            parent(low_part(K)),
-            parent(high_part(K)),
-            parent(low_part(A)),
-            parent(high_part(A)),
-            parent(low_part(B)),
-            parent(high_part(B)),
+            _karatsuba_logical_view(low_part(K)),
+            _karatsuba_logical_view(high_part(K)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
+            _karatsuba_logical_view(low_part(B)),
+            _karatsuba_logical_view(high_part(B)),
             low_modulus(A),
             high_modulus(A),
         )
@@ -1385,18 +1394,18 @@ function sub!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     =#
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
     if totalsize > 0
         blocks = cld(totalsize, tw)
         @cuda threads=threads blocks=blocks karatsuba_sub_kernel!(
-            parent(low_part(K)),
-            parent(high_part(K)),
-            parent(low_part(A)),
-            parent(high_part(A)),
-            parent(low_part(B)),
-            parent(high_part(B)),
+            _karatsuba_logical_view(low_part(K)),
+            _karatsuba_logical_view(high_part(K)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
+            _karatsuba_logical_view(low_part(B)),
+            _karatsuba_logical_view(high_part(B)),
             low_modulus(A),
             high_modulus(A),
             modulus(A),
@@ -1424,16 +1433,16 @@ function scalar_multiply!(B::KaratsubaArray, A::KaratsubaArray, s::Number)
 
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
     if totalsize > 0
         blocks = cld(totalsize, tw)
         @cuda threads=threads blocks=blocks karatsuba_scalar_multiply_kernel!(
-            parent(low_part(B)),
-            parent(high_part(B)),
-            parent(low_part(A)),
-            parent(high_part(A)),
+            _karatsuba_logical_view(low_part(B)),
+            _karatsuba_logical_view(high_part(B)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
             s,
             low_modulus(A),
             high_modulus(A),
@@ -1474,16 +1483,16 @@ end
 function negate!(K::KaratsubaArray, A::KaratsubaArray)
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
     if totalsize > 0
         blocks = cld(totalsize, tw)
         @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(
-            parent(low_part(K)),
-            parent(high_part(K)),
-            parent(low_part(A)),
-            parent(high_part(A)),
+            _karatsuba_logical_view(low_part(K)),
+            _karatsuba_logical_view(high_part(K)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
             low_modulus(A),
             high_modulus(A),
             modulus(A),

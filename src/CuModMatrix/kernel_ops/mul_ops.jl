@@ -31,9 +31,14 @@ function mul_elementwise!(
     _validate_positive_modulus_override(modulus_override)
     m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
-    len = length(parent(A))
-    blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_mul_matrix!(parent(C), parent(A), parent(B), mT)
+    output = _logical_view(parent(C), size(C))
+    left = _logical_view(parent(A), size(A))
+    right = _logical_view(parent(B), size(B))
+    len = length(left)
+    if len > 0
+        blocks = min(cld(len, threads), 65535)
+        @cuda threads=threads blocks=blocks k_mul_matrix!(output, left, right, mT)
+    end
     return C
 end
 
@@ -49,9 +54,13 @@ function LinearAlgebra.mul!(
     m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s)
-    len = length(parent(A))
-    blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_mul_scalar!(parent(C), parent(A), sT, mT)
+    output = _logical_view(parent(C), size(C))
+    input = _logical_view(parent(A), size(A))
+    len = length(input)
+    if len > 0
+        blocks = min(cld(len, threads), 65535)
+        @cuda threads=threads blocks=blocks k_mul_scalar!(output, input, sT, mT)
+    end
     return C
 end
 

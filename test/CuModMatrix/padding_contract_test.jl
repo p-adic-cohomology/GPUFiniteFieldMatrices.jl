@@ -61,6 +61,45 @@ function _dirty_padding_for_test!(A::GPUFiniteFieldMatrices.CuModArray, value)
     return A
 end
 
+function _wrapped_cumod_for_test(
+    values::Array{Float64,D},
+    backing_dims::Dims{D},
+    q,
+    padding,
+) where {D}
+    mod = GPUFiniteFieldMatrices
+    storage = CUDA.fill(Float64(padding), backing_dims...)
+    logical_ranges = ntuple(d -> 1:size(values, d), D)
+    storage[logical_ranges...] .= values
+    return mod.CuModArray{Float64,D}(
+        storage;
+        modulus = Int(q),
+        mod = false,
+        new_size = size(values),
+    )
+end
+
+function _wrapped_karatsuba_matrix_for_test(
+    low_values,
+    high_values,
+    low_backing_dims,
+    high_backing_dims;
+    low_modulus = 11,
+    high_modulus = 13,
+    modulus = 143,
+)
+    mod = GPUFiniteFieldMatrices
+    low = _wrapped_cumod_for_test(low_values, low_backing_dims, low_modulus, -901.0)
+    high = _wrapped_cumod_for_test(high_values, high_backing_dims, high_modulus, -902.0)
+    return mod.KaratsubaMatrix(
+        low,
+        high;
+        low_modulus = low_modulus,
+        high_modulus = high_modulus,
+        modulus = modulus,
+    )
+end
+
 function _raw_karatsuba_vector(low_values, high_values)
     mod = GPUFiniteFieldMatrices
     low = CUDA.CuArray(Float64.(low_values))
@@ -170,16 +209,35 @@ if CUDA.functional()
         @test isempty(parent(empty_dst))
 
         raw_copy_values = Float64.(1:64)
+        raw_copy_destination =
+            mod.CuModVector{Float64}(CUDA.fill(-444.0, 40); modulus = q, new_size = (35,))
         raw_copy_source = mod.CuModVector{Float64}(
             CUDA.CuArray(raw_copy_values);
             modulus = q,
-            new_size = (5,),
+            new_size = (35,),
         )
-        raw_copy_destination =
-            mod.CuModVector{Float64}(CUDA.zeros(Float64, 35); modulus = q, new_size = (5,))
         @test copy!(raw_copy_destination, raw_copy_source) === raw_copy_destination
-        @test Array(parent(raw_copy_destination)) == raw_copy_values[1:35]
-        @test Array(raw_copy_destination) == raw_copy_values[1:5]
+        @test Array(parent(raw_copy_destination))[1:35] == raw_copy_values[1:35]
+        @test all(==(-444.0), Array(parent(raw_copy_destination))[36:40])
+        @test Array(raw_copy_destination) == raw_copy_values[1:35]
+
+        matrix_copy_source_storage = CUDA.fill(991.0, 3, 3)
+        matrix_copy_source_storage[1:2, 1:2] .= [1.0 2.0; 3.0 4.0]
+        matrix_copy_destination_storage = CUDA.fill(-555.0, 4, 4)
+        matrix_copy_source = mod.CuModMatrix{Float64}(
+            matrix_copy_source_storage;
+            modulus = q,
+            new_size = (2, 2),
+        )
+        matrix_copy_destination = mod.CuModMatrix{Float64}(
+            matrix_copy_destination_storage;
+            modulus = q,
+            new_size = (2, 2),
+        )
+        @test copy!(matrix_copy_destination, matrix_copy_source) === matrix_copy_destination
+        @test Array(matrix_copy_destination) == [1.0 2.0; 3.0 4.0]
+        @test all(==(-555.0), _padding_values_for_test(matrix_copy_destination))
+        @test all(==(991.0), _padding_values_for_test(matrix_copy_source))
 
         raw_low_source = mod.CuModVector{Float64}(
             CUDA.CuArray(Float64.(Base.mod.(0:34, 11)));
@@ -241,6 +299,175 @@ if CUDA.functional()
         dirty_result = mod.zeros(mod.CuModMatrix{Float64}, n, n; modulus = q)
         CUDA.@sync LinearAlgebra.mul!(dirty_result, A, B)
         @test Array(dirty_result) == expected
+    end
+
+    @testset "CuMod logical operations across backing pitches" begin
+        mod = GPUFiniteFieldMatrices
+        q = 101
+        left_values = [1.0 2.0; 3.0 4.0]
+        right_values = [5.0 7.0; 6.0 8.0]
+        left = _wrapped_cumod_for_test(left_values, (64, 64), q, -1111.0)
+        right = _wrapped_cumod_for_test(right_values, (35, 41), q, -2222.0)
+        expected_sum = Float64.(Base.mod.(left_values .+ right_values, q))
+        expected_difference = Float64.(Base.mod.(left_values .- right_values, q))
+
+        @test parent(left) !== parent(right)
+        @test size(left) == size(right) == (2, 2)
+        @test size(parent(left)) == (64, 64)
+        @test size(parent(right)) == (35, 41)
+
+        destination = _wrapped_cumod_for_test(zeros(2, 2), (4, 5), q, -3333.0)
+        @test mod.add!(destination, left, right) === destination
+        @test Array(destination) == expected_sum
+        @test all(==(-3333.0), _padding_values_for_test(destination))
+        @test Array(left + right) == expected_sum
+        @test size(parent(left + right)) == (32, 32)
+
+        destination = _wrapped_cumod_for_test(zeros(2, 2), (5, 4), q, -4444.0)
+        @test mod.sub!(destination, left, right) === destination
+        @test Array(destination) == expected_difference
+        @test Array(left - right) == expected_difference
+
+        expected_scalar_add = Float64.(Base.mod.(left_values .+ 9, q))
+        expected_scalar_sub = Float64.(Base.mod.(left_values .- 9, q))
+        expected_reverse_sub = Float64.(Base.mod.(9 .- left_values, q))
+        destination = similar(left)
+        @test mod.scalar_add!(destination, left, 9) === destination
+        @test Array(destination) == expected_scalar_add
+        @test Array(left + 9) == expected_scalar_add
+        @test Array(9 + left) == expected_scalar_add
+
+        @test mod.scalar_sub!(destination, left, 9) === destination
+        @test Array(destination) == expected_scalar_sub
+        @test Array(left - 9) == expected_scalar_sub
+        @test mod.rscalar_sub!(destination, left, 9) === destination
+        @test Array(destination) == expected_reverse_sub
+        @test Array(9 - left) == expected_reverse_sub
+
+        expected_elementwise = Float64.(Base.mod.(left_values .* right_values, q))
+        @test mod.mul_elementwise!(destination, left, right) === destination
+        @test Array(destination) == expected_elementwise
+        expected_scaled = Float64.(Base.mod.(left_values .* 7, q))
+        @test mod.LinearAlgebra.mul!(destination, left, 7) === destination
+        @test Array(destination) == expected_scaled
+        @test Array(left * 7) == expected_scaled
+        @test Array(7 * left) == expected_scaled
+
+        expected_divided =
+            Float64.(Base.mod.(BigInt.(left_values) .* invmod(3, q), BigInt(q)))
+        @test mod.div!(destination, left, 3) === destination
+        @test Array(destination) == expected_divided
+        @test Array(left / 3) == expected_divided
+
+        @test mod.mod!(destination, left, 13) === destination
+        @test Array(destination) == Float64.(Base.mod.(left_values, 13))
+
+        vector_left_values = Float64.(1:35)
+        vector_right_values = Float64.(2:36)
+        vector_left = _wrapped_cumod_for_test(vector_left_values, (64,), q, -5555.0)
+        vector_right = _wrapped_cumod_for_test(vector_right_values, (40,), q, -6666.0)
+        vector_sum = similar(vector_left)
+        @test mod.add!(vector_sum, vector_left, vector_right) === vector_sum
+        @test Array(vector_sum) ==
+              Float64.(Base.mod.(vector_left_values .+ vector_right_values, q))
+        @test Array(vector_sum)[end] ==
+              Base.mod(vector_left_values[end] + vector_right_values[end], q)
+    end
+
+    @testset "Karatsuba logical operations across component pitches" begin
+        mod = GPUFiniteFieldMatrices
+        N1, N2, M = 11, 13, 143
+        a_low = [1.0 2.0; 3.0 4.0]
+        a_high = [2.0 1.0; 4.0 3.0]
+        b_low = [5.0 4.0; 3.0 2.0]
+        b_high = [1.0 3.0; 2.0 4.0]
+        A = _wrapped_karatsuba_matrix_for_test(
+            a_low,
+            a_high,
+            (3, 3),
+            (4, 5);
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = M,
+        )
+        B = _wrapped_karatsuba_matrix_for_test(
+            b_low,
+            b_high,
+            (5, 4),
+            (3, 4);
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = M,
+        )
+        value_a = BigInt.(a_low) .+ BigInt(N1) .* BigInt.(a_high)
+        value_b = BigInt.(b_low) .+ BigInt(N1) .* BigInt.(b_high)
+        represented(K) =
+            BigInt.(Array(mod.low_part(K))) .+
+            BigInt(N1) .* BigInt.(Array(mod.high_part(K)))
+
+        sum_result = _wrapped_karatsuba_matrix_for_test(
+            zeros(2, 2),
+            zeros(2, 2),
+            (4, 5),
+            (5, 4);
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = M,
+        )
+        @test mod.add!(sum_result, A, B) === sum_result
+        @test represented(sum_result) == Base.mod.(value_a .+ value_b, BigInt(M))
+        @test all(==(-901.0), _padding_values_for_test(mod.low_part(sum_result)))
+        @test all(==(-902.0), _padding_values_for_test(mod.high_part(sum_result)))
+
+        difference_result = _wrapped_karatsuba_matrix_for_test(
+            zeros(2, 2),
+            zeros(2, 2),
+            (5, 4),
+            (4, 5);
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = M,
+        )
+        @test mod.sub!(difference_result, A, B) === difference_result
+        @test represented(difference_result) == Base.mod.(value_a .- value_b, BigInt(M))
+
+        scaled_result = _wrapped_karatsuba_matrix_for_test(
+            zeros(2, 2),
+            zeros(2, 2),
+            (4, 4),
+            (5, 5);
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = M,
+        )
+        @test mod.scalar_multiply!(scaled_result, A, 3) === scaled_result
+        @test represented(scaled_result) == Base.mod.(3 .* value_a, BigInt(M))
+
+        negative_result = _wrapped_karatsuba_matrix_for_test(
+            zeros(2, 2),
+            zeros(2, 2),
+            (5, 5),
+            (4, 4);
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = M,
+        )
+        @test mod.negate!(negative_result, A) === negative_result
+        @test represented(negative_result) == Base.mod.(-value_a, BigInt(M))
+
+        copy_result = _wrapped_karatsuba_matrix_for_test(
+            zeros(2, 2),
+            zeros(2, 2),
+            (4, 5),
+            (5, 4);
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = M,
+        )
+        @test copy!(copy_result, A) === copy_result
+        @test represented(copy_result) == value_a
+        @test all(==(-901.0), _padding_values_for_test(mod.low_part(copy_result)))
+        @test all(==(-902.0), _padding_values_for_test(mod.high_part(copy_result)))
     end
 
     @testset "Karatsuba factories, raw tails, and dirty-padding GEMV" begin
@@ -309,8 +536,9 @@ if CUDA.functional()
         @test all(==(777.0), Array(raw_wrapper_low))
         @test all(==(888.0), Array(raw_wrapper_high))
 
-        values = reshape(Float64.(1:(33*31)), 33, 31)
-        source = mod.CuModMatrix{Float64}(values; modulus = M)
+        input_values = reshape(Float64.(1:(33*31)), 33, 31)
+        source = mod.CuModMatrix{Float64}(input_values; modulus = M)
+        values = Float64.(Base.mod.(input_values, M))
         converted = mod.to_karatsuba(
             Float64,
             source;
@@ -359,48 +587,78 @@ if CUDA.functional()
         empty_out = _raw_karatsuba_vector(Float64[], Float64[])
         @test add!(empty_out, empty, empty) === empty_out
 
-        function make_gemv_case(matrix_low, matrix_high, vector_low, vector_high)
-            A1 = mod.CuModMatrix{Float64}(matrix_low; modulus = N1, mod = false)
-            A2 = mod.CuModMatrix{Float64}(matrix_high; modulus = N2, mod = false)
-            x1 = mod.CuModVector{Float64}(vector_low; modulus = N1, mod = false)
-            x2 = mod.CuModVector{Float64}(vector_high; modulus = N2, mod = false)
+        function make_gemv_case(
+            matrix_low,
+            matrix_high,
+            vector_low,
+            vector_high;
+            raw_components = false,
+            low_radix = 11,
+            high_radix = 11,
+            represented_modulus = 121,
+        )
+            if raw_components
+                A1 = CUDA.CuArray(matrix_low)
+                A2 = CUDA.CuArray(matrix_high)
+                x1 = CUDA.CuArray(vector_low)
+                x2 = CUDA.CuArray(vector_high)
+            else
+                A1 = mod.CuModMatrix{Float64}(matrix_low; modulus = low_radix, mod = false)
+                A2 =
+                    mod.CuModMatrix{Float64}(matrix_high; modulus = high_radix, mod = false)
+                x1 = mod.CuModVector{Float64}(vector_low; modulus = low_radix, mod = false)
+                x2 =
+                    mod.CuModVector{Float64}(vector_high; modulus = high_radix, mod = false)
+            end
             A = mod.KaratsubaMatrix(
                 A1,
                 A2;
-                low_modulus = N1,
-                high_modulus = N2,
-                modulus = M,
+                low_modulus = low_radix,
+                high_modulus = high_radix,
+                modulus = represented_modulus,
             )
             x = mod.KaratsubaVector(
                 x1,
                 x2;
-                low_modulus = N1,
-                high_modulus = N2,
-                modulus = M,
+                low_modulus = low_radix,
+                high_modulus = high_radix,
+                modulus = represented_modulus,
             )
             y = mod.zeros(
                 mod.KaratsubaVector{Float64},
                 size(matrix_low, 1);
-                low_modulus = N1,
-                high_modulus = N2,
-                modulus = M,
+                low_modulus = low_radix,
+                high_modulus = high_radix,
+                modulus = represented_modulus,
             )
             foreach(mod.initialize_plan!, (A, x, y))
             return (A = A, x = x, y = y)
         end
 
-        for (rows, cols) in ((33, 33), (33, 31))
-            matrix_low = reshape(Float64.(Base.mod.(0:(rows*cols-1), N1)), rows, cols)
-            matrix_high =
-                reshape(Float64.(Base.mod.(3 .* (0:(rows*cols-1)) .+ 1, N2)), rows, cols)
-            vector_low = Float64.(Base.mod.(1:cols, N1))
-            vector_high = Float64.(Base.mod.(3 .* (1:cols) .+ 1, N2))
-            expected_matrix = BigInt.(matrix_low) .+ BigInt(N1) .* BigInt.(matrix_high)
-            expected_vector = BigInt.(vector_low) .+ BigInt(N1) .* BigInt.(vector_high)
+        for (rows, cols) in ((33, 33), (33, 31), (33, 35))
+            matrix_low = zeros(Float64, rows, cols)
+            matrix_high = zeros(Float64, rows, cols)
+            matrix_low[:, 1] .= 1.0
+            matrix_high[:, 1] .= 1.0
+            vector_low = zeros(Float64, cols)
+            vector_high = zeros(Float64, cols)
+            vector_low[1] = 1.0
+            vector_high[1] = 9.0
+            gemv_radix = 11
+            gemv_modulus = 121
+            expected_matrix =
+                BigInt.(matrix_low) .+ BigInt(gemv_radix) .* BigInt.(matrix_high)
+            expected_vector =
+                BigInt.(vector_low) .+ BigInt(gemv_radix) .* BigInt.(vector_high)
             expected_gemv =
-                Float64.(Base.mod.(expected_matrix * expected_vector, BigInt(M)))
+                Float64.(Base.mod.(expected_matrix * expected_vector, BigInt(gemv_modulus)))
+            @test all(==(111.0), expected_gemv)
 
             clean = make_gemv_case(matrix_low, matrix_high, vector_low, vector_high)
+            @test stride(parent(mod.low_part(clean.A)), 2) == 64
+            @test stride(parent(clean.A.plan), 2) == 64
+            @test parent(clean.x.plan) !== parent(clean.y.plan)
+            @test !mod._stripe_mightalias(parent(clean.x.plan), parent(clean.y.plan))
             CUDA.@sync mod.karatsuba_gemv!(clean.y, clean.A, clean.x)
             @test Array(clean.y) == expected_gemv
 
@@ -417,6 +675,45 @@ if CUDA.functional()
             @test all(==(sentinel), _padding_values_for_test(dirty.x.plan))
             @test all(==(sentinel), _padding_values_for_test(mod.low_part(dirty.y)))
             @test all(==(sentinel), _padding_values_for_test(mod.high_part(dirty.y)))
+            @test all(==(sentinel), _padding_values_for_test(dirty.y.plan))
+
+            raw_clean = make_gemv_case(
+                matrix_low,
+                matrix_high,
+                vector_low,
+                vector_high;
+                raw_components = true,
+            )
+            @test stride(mod.low_part(raw_clean.A), 2) == rows
+            @test stride(parent(raw_clean.A.plan), 2) == 64
+            @test parent(raw_clean.x.plan) !== parent(raw_clean.y.plan)
+            @test !mod._stripe_mightalias(
+                parent(raw_clean.x.plan),
+                parent(raw_clean.y.plan),
+            )
+            CUDA.@sync mod.karatsuba_gemv!(raw_clean.y, raw_clean.A, raw_clean.x)
+            @test Array(raw_clean.y) == expected_gemv
+
+            raw_dirty = make_gemv_case(
+                matrix_low,
+                matrix_high,
+                vector_low,
+                vector_high;
+                raw_components = true,
+            )
+            sentinel = 9011.0
+            for K in (raw_dirty.A, raw_dirty.x, raw_dirty.y)
+                for component in (mod.low_part(K), mod.high_part(K))
+                    component isa mod.CuModArray &&
+                        _dirty_padding_for_test!(component, sentinel)
+                end
+                _dirty_padding_for_test!(K.plan, sentinel)
+            end
+            CUDA.@sync mod.karatsuba_gemv!(raw_dirty.y, raw_dirty.A, raw_dirty.x)
+            @test Array(raw_dirty.y) == expected_gemv
+            @test all(==(sentinel), _padding_values_for_test(raw_dirty.A.plan))
+            @test all(==(sentinel), _padding_values_for_test(raw_dirty.x.plan))
+            @test all(==(sentinel), _padding_values_for_test(raw_dirty.y.plan))
         end
     end
 end

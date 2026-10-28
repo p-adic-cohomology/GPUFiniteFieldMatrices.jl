@@ -9,8 +9,9 @@ of 32 and starts with zero padding. Later elementwise operations may dirty
 padding, which logical operations ignore. Wrapping existing `CuArray` or
 Karatsuba component storage keeps its original shape, backend, and contents.
 Allocating `copy` and `change_modulus` preserve logical values and metadata
-while using the new padded geometry and zero padding. In-place `copy!` still
-copies the complete backing storage.
+while using the new padded geometry and zero padding. In-place `copy!` copies
+all logical entries across valid backing layouts and leaves destination padding
+unchanged.
 
 ### Breaking: API renames
 

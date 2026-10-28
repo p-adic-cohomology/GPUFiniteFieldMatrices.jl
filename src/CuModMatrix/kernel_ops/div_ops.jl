@@ -24,9 +24,13 @@ function div!(
     s_inv = mod_inv(s, m)
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s_inv)
-    len = length(parent(A))
-    blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_div_scalar!(parent(C), parent(A), sT, mT)
+    output = _logical_view(parent(C), size(C))
+    input = _logical_view(parent(A), size(A))
+    len = length(input)
+    if len > 0
+        blocks = min(cld(len, threads), 65535)
+        @cuda threads=threads blocks=blocks k_div_scalar!(output, input, sT, mT)
+    end
     return C
 end
 
