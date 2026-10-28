@@ -148,6 +148,25 @@
           mod
     @test which(LinearAlgebra.mul!, Tuple{karatsuba_type,karatsuba_type,karatsuba_type}).module ===
           mod
+    allocating_karatsuba_type =
+        mod.KaratsubaArray{Float64,2,mod.CuModMatrix{Float64},mod.CuModMatrix{Float64}}
+    @test which(Base.:*, Tuple{allocating_karatsuba_type,allocating_karatsuba_type}).module ===
+          mod
+    cpu_karatsuba_a = mod.KaratsubaMatrix(
+        zeros(Float64, 1, 1),
+        zeros(Float64, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    cpu_karatsuba_b = mod.KaratsubaMatrix(
+        zeros(Float64, 1, 1),
+        zeros(Float64, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    @test_throws ArgumentError cpu_karatsuba_a * cpu_karatsuba_b
     @test which(Base.copy, Tuple{karatsuba_type}).module === mod
     @test which(
         mod.karatsuba_gemv!,

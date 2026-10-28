@@ -364,6 +364,185 @@ function test_karatsuba_api_regressions()
         @test Array(parent(mod.high_part(bk))) == inputs_before[4]
         @test all(plane -> all(==(plane[2]), padding_values(plane[1])), padding_sentinels)
 
+        @testset "Karatsuba allocating product owns private scratch" begin
+            input_snapshot =
+                K -> (
+                    low = mod.low_part(K),
+                    high = mod.high_part(K),
+                    low_parent = Array(parent(mod.low_part(K))),
+                    high_parent = Array(parent(mod.high_part(K))),
+                    plan = K.plan,
+                    plan_parent = K.plan === nothing ? nothing : Array(parent(K.plan)),
+                    low_modulus = mod.low_modulus(K),
+                    high_modulus = mod.high_modulus(K),
+                    modulus = mod.modulus(K),
+                )
+            assert_input_unchanged = function (K, before)
+                @test mod.low_part(K) === before.low
+                @test mod.high_part(K) === before.high
+                @test Array(parent(mod.low_part(K))) == before.low_parent
+                @test Array(parent(mod.high_part(K))) == before.high_parent
+                @test K.plan === before.plan
+                @test (K.plan === nothing ? nothing : Array(parent(K.plan))) ==
+                      before.plan_parent
+                @test mod.low_modulus(K) == before.low_modulus
+                @test mod.high_modulus(K) == before.high_modulus
+                @test mod.modulus(K) == before.modulus
+                return nothing
+            end
+            work_wrapper =
+                K -> mod.KaratsubaMatrix(
+                    mod.low_part(K),
+                    mod.high_part(K);
+                    low_modulus = mod.low_modulus(K),
+                    high_modulus = mod.high_modulus(K),
+                    modulus = mod.modulus(K),
+                )
+
+            unplanned_a = mod.KaratsubaMatrix(
+                a_low,
+                a_high;
+                low_modulus = radix,
+                high_modulus = 2,
+                modulus = 211,
+            )
+            unplanned_b = mod.KaratsubaMatrix(
+                b_low,
+                b_high;
+                low_modulus = radix,
+                high_modulus = 3,
+                modulus = 211,
+            )
+            @test unplanned_a.plan === nothing
+            @test unplanned_b.plan === nothing
+            @test mod.high_modulus(unplanned_a) != mod.high_modulus(unplanned_b)
+            @test which(Base.:*, Tuple{typeof(unplanned_a),typeof(unplanned_b)}).module ===
+                  mod
+            @test size(parent(mod.low_part(unplanned_a))) != size(mod.low_part(unplanned_a))
+            unplanned_a_before = input_snapshot(unplanned_a)
+            unplanned_b_before = input_snapshot(unplanned_b)
+
+            allocated = unplanned_a * unplanned_b
+            output_capacity =
+                BigInt(mod.low_modulus(unplanned_a)) * BigInt(mod.high_modulus(unplanned_a))
+            allocating_expected =
+                Base.mod.(a_reconstructed * b_reconstructed, output_capacity)
+            @test allocated !== unplanned_a
+            @test allocated !== unplanned_b
+            @test allocated isa typeof(unplanned_a)
+            @test size(allocated) == (2, 4)
+            @test mod.low_modulus(allocated) == mod.low_modulus(unplanned_a)
+            @test mod.high_modulus(allocated) == mod.high_modulus(unplanned_a)
+            @test mod.modulus(allocated) == mod.modulus(unplanned_a) == 211
+            @test output_capacity != BigInt(mod.modulus(allocated))
+            @test mod.low_part(allocated) !== mod.low_part(unplanned_a)
+            @test mod.high_part(allocated) !== mod.high_part(unplanned_a)
+            @test parent(mod.low_part(allocated)) isa CUDA.CuArray{Float64,2}
+            @test parent(mod.high_part(allocated)) isa CUDA.CuArray{Float64,2}
+            @test allocated.plan isa mod.CuModMatrix{Float64}
+            @test typeof(allocated.plan) === mod.CuModMatrix{Float64}
+            @test Array(allocated) == allocating_expected
+            @test any(value -> !iszero(value), Array(mod.high_part(allocated)))
+            assert_input_unchanged(unplanned_a, unplanned_a_before)
+            assert_input_unchanged(unplanned_b, unplanned_b_before)
+
+            # Compare the allocating operator with the same mutating core on
+            # separately wrapped inputs and an independently initialized C.
+            mutating_a = work_wrapper(unplanned_a)
+            mutating_b = work_wrapper(unplanned_b)
+            mutating_c = mod.zeros(
+                mod.KaratsubaMatrix{Float64},
+                2,
+                4;
+                low_modulus = radix,
+                high_modulus = 2,
+                modulus = 211,
+            )
+            foreach(mod.initialize_plan!, (mutating_a, mutating_b, mutating_c))
+            @test LinearAlgebra.mul!(mutating_c, mutating_a, mutating_b) === mutating_c
+            @test Array(mutating_c) == allocating_expected
+            @test Array(allocated) == Array(mutating_c)
+
+            # Existing caller plans, including all physical padding, remain
+            # byte-for-byte unchanged when the allocating form is used.
+            initialized_a_before = input_snapshot(ak)
+            initialized_b_before = input_snapshot(bk)
+            initialized_allocated = ak * bk
+            @test size(initialized_allocated) == (2, 4)
+            @test Array(initialized_allocated) == allocating_expected
+            @test initialized_allocated.plan isa mod.CuModMatrix{Float64}
+            @test parent(initialized_allocated.plan) !== parent(ak.plan)
+            assert_input_unchanged(ak, initialized_a_before)
+            assert_input_unchanged(bk, initialized_b_before)
+
+            # A === B gets distinct operation-owned plans while retaining the
+            # caller's original plan and components.
+            square_before = input_snapshot(ak_copy)
+            square_allocated = ak_copy * ak_copy
+            square_capacity =
+                BigInt(mod.low_modulus(ak_copy)) * BigInt(mod.high_modulus(ak_copy))
+            square_expected =
+                Base.mod.(BigInt.(a_values) * BigInt.(a_values), square_capacity)
+            @test size(square_allocated) == (2, 2)
+            @test Array(square_allocated) == square_expected
+            @test mod.modulus(square_allocated) == mod.modulus(ak_copy)
+            @test mod.low_modulus(square_allocated) == mod.low_modulus(ak_copy)
+            @test mod.high_modulus(square_allocated) == mod.high_modulus(ak_copy)
+            assert_input_unchanged(ak_copy, square_before)
+
+            square_mutating_a = work_wrapper(ak_copy)
+            square_mutating_b = work_wrapper(ak_copy)
+            square_mutating_c = mod.zeros(
+                mod.KaratsubaMatrix{Float64},
+                2,
+                2;
+                low_modulus = mod.low_modulus(ak_copy),
+                high_modulus = mod.high_modulus(ak_copy),
+                modulus = mod.modulus(ak_copy),
+            )
+            foreach(
+                mod.initialize_plan!,
+                (square_mutating_a, square_mutating_b, square_mutating_c),
+            )
+            @test LinearAlgebra.mul!(
+                square_mutating_c,
+                square_mutating_a,
+                square_mutating_b,
+            ) === square_mutating_c
+            @test Array(square_mutating_c) == square_expected
+
+            # An inner-dimension preflight error must preserve both caller
+            # plans and every logical and padded component/plan cell.
+            bad_b_low_values = Float64[1 0 1 0; 0 1 0 1]
+            bad_b_high_values = Float64[1 0 0 1; 0 1 1 0]
+            bad_b_low = padded_matrix(bad_b_low_values, 4, 8, radix; sentinel = 971.0)
+            bad_b_high = padded_matrix(bad_b_high_values, 5, 7, 3; sentinel = 972.0)
+            bad_b = mod.KaratsubaMatrix(
+                bad_b_low,
+                bad_b_high;
+                low_modulus = radix,
+                high_modulus = 3,
+                modulus = 211,
+            )
+            mod.initialize_plan!(bad_b)
+            bad_b.plan =
+                padded_matrix(fill(4.0, size(bad_b)...), 4, 9, radix; sentinel = 973.0)
+            @test all(==(973.0), padding_values(bad_b.plan))
+            preflight_a_before = input_snapshot(ak)
+            bad_b_before = input_snapshot(bad_b)
+            dimension_error = try
+                ak * bad_b
+                nothing
+            catch error
+                error
+            end
+            @test dimension_error isa ErrorException
+            @test dimension_error isa ErrorException &&
+                  dimension_error.msg == "Matrix dimensions don't work for multiplication"
+            assert_input_unchanged(ak, preflight_a_before)
+            assert_input_unchanged(bad_b, bad_b_before)
+        end
+
         mismatched_radix = mod.KaratsubaMatrix(
             mod.CuModMatrix{Float64}(a_low_values; modulus = 5),
             mod.CuModMatrix{Float64}(a_high_values; modulus = 2);
