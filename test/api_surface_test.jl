@@ -153,6 +153,90 @@
         mod.karatsuba_gemv!,
         Tuple{karatsuba_type,karatsuba_type,karatsuba_type},
     ).module === mod
+
+    # Resolve the raw launch signatures without allocating CuArrays or invoking
+    # a kernel. GEMV uses matrix/vector storage and the baseline 7/5 arities;
+    # GEMM keeps its matrix-only launch signatures.
+    raw_matrix_storage = CUDA.CuArray{Float64,2,CUDA.DeviceMemory}
+    raw_vector_storage = CUDA.CuArray{Float64,1,CUDA.DeviceMemory}
+    kernel_dispatch_cases = (
+        (
+            mod.karatsuba_matmul_kernel_1!,
+            Tuple{
+                raw_matrix_storage,
+                raw_matrix_storage,
+                raw_matrix_storage,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                raw_matrix_storage,
+                raw_matrix_storage,
+                raw_matrix_storage,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+            },
+            22,
+        ),
+        (
+            mod.karatsuba_matmul_kernel_2!,
+            Tuple{
+                raw_matrix_storage,
+                raw_matrix_storage,
+                raw_matrix_storage,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Float64,
+                Float64,
+                Float64,
+                Float64,
+            },
+            15,
+        ),
+        (
+            mod.karatsuba_matmul_kernel_1!,
+            Tuple{
+                raw_matrix_storage,
+                raw_matrix_storage,
+                raw_matrix_storage,
+                raw_vector_storage,
+                raw_vector_storage,
+                raw_vector_storage,
+                Int,
+            },
+            7,
+        ),
+        (
+            mod.karatsuba_matmul_kernel_2!,
+            Tuple{raw_vector_storage,raw_vector_storage,raw_vector_storage,Int,Int},
+            5,
+        ),
+    )
+    for (kernel, signature, positional_arity) in kernel_dispatch_cases
+        selected_method = hasmethod(kernel, signature) ? which(kernel, signature) : nothing
+        @test selected_method !== nothing
+        if selected_method !== nothing
+            @test selected_method.module === mod
+            @test selected_method.nargs == positional_arity + 1
+        end
+    end
+
     @test which(mod.to_karatsuba, Tuple{Matrix{Int}}).module === mod
     @test which(mod.to_karatsuba, Tuple{Type{Int},Matrix{Int}}).module === mod
     @test !hasmethod(mod.to_karatsuba, Tuple{Matrix{Int},Int})

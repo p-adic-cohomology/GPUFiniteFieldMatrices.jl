@@ -166,6 +166,19 @@ function karatsuba_matmul_kernel_1!(
     nothing
 end
 
+# Legacy GEMV compatibility overload; preserve its original linear-index arithmetic.
+function karatsuba_matmul_kernel_1!(Aplan, Adata1, Adata2, Bplan, Bdata1, Bdata2, N1)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+
+    if i <= length(Bplan)
+        Bplan[i] = (Bdata1[i] + Bdata2[i]) % (2*N1)
+    end
+
+    Aplan[i] = (Adata1[i] + Adata2[i]) % (2*N1)
+
+    nothing
+end
+
 @inline function _karatsuba_mod_add(a::Float64, b::Float64, modulus::Float64)
     modulus == 1.0 && return 0.0
     gap = modulus - b
@@ -262,6 +275,26 @@ function karatsuba_matmul_kernel_2!(
         Cdata1[low_i] = low
         Cdata2[high_i] = high
     end
+
+    nothing
+end
+
+# Legacy GEMV compatibility overload; preserve its original linear-index arithmetic.
+function karatsuba_matmul_kernel_2!(Cdata1, Cdata2, Bplan, N1, N2)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+
+    cc1 = mod(Cdata1[i], N1^2)
+    cc2 = mod(Cdata2[i], (4*N1)^2)
+    bp = mod(Bplan[i], N1)
+
+    cp = div(cc1, N1)
+    cc2 = (cc2 - cc1) % ((4*N1)^2)
+
+    cc2 = (cc2 - bp) % ((4*N1)^2)
+    cc2 = cc2 + cp
+
+    Cdata1[i] = mod(cc1, N1)
+    Cdata2[i] = mod(cc2, N2)
 
     nothing
 end
