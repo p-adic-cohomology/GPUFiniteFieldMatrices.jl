@@ -72,7 +72,7 @@ function karatsuba_scalar_multiply_kernel!(Bdata1, Bdata2, Adata1, Adata2, s, N1
 end
 
 @inline function karatsuba_negate_helper(a1, a2, N1, N2, M)
-    res2 = 0.0 % (N2)
+    res2 = zero(a2)
     res2 = (res2 + N1) % (2*N1)
     res2 = (res2 - a1) % (2*N1)
 
