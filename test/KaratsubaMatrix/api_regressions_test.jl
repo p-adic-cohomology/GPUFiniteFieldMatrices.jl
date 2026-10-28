@@ -873,5 +873,203 @@ function test_karatsuba_api_regressions()
                 end
             end
         end
+
+        @testset "Karatsuba addition does not require or use plans" begin
+            addition_low_modulus = 5
+            addition_high_modulus = 7
+            addition_capacity = addition_low_modulus * addition_high_modulus
+            addition_metadata = 211
+            addition_shape = (4, 9)
+
+            addition_a_low_values = Float64[
+                4 4 1 0 4 2 0 3 1
+                3 1 0 0 4 2 1 2 3
+                0 2 3 0 1 2 2 4 1
+                2 3 4 0 0 1 3 1 4
+            ]
+            addition_a_high_values = Float64[
+                6 6 5 0 4 0 1 2 6
+                6 2 1 0 2 0 6 4 1
+                2 0 3 0 5 1 3 3 4
+                1 4 2 0 6 1 2 5 0
+            ]
+            addition_b_low_values = Float64[
+                1 1 4 0 1 3 0 2 4
+                2 4 0 0 1 3 4 3 2
+                0 2 1 0 3 2 3 1 4
+                3 1 1 0 4 3 2 4 1
+            ]
+            addition_b_high_values = Float64[
+                6 0 1 0 3 0 6 4 6
+                0 5 0 0 4 0 1 2 6
+                1 0 2 0 2 1 3 3 1
+                5 3 4 0 4 1 5 5 0
+            ]
+
+            addition_a = mod.KaratsubaMatrix(
+                mod.CuModMatrix{Float64}(
+                    addition_a_low_values;
+                    modulus = addition_low_modulus,
+                ),
+                mod.CuModMatrix{Float64}(
+                    addition_a_high_values;
+                    modulus = addition_high_modulus,
+                );
+                low_modulus = addition_low_modulus,
+                high_modulus = addition_high_modulus,
+                modulus = addition_metadata,
+            )
+            addition_b = mod.KaratsubaMatrix(
+                mod.CuModMatrix{Float64}(
+                    addition_b_low_values;
+                    modulus = addition_low_modulus,
+                ),
+                mod.CuModMatrix{Float64}(
+                    addition_b_high_values;
+                    modulus = addition_high_modulus,
+                );
+                low_modulus = addition_low_modulus,
+                high_modulus = addition_high_modulus,
+                modulus = addition_metadata,
+            )
+            @test size(addition_a) == addition_shape
+            @test size(addition_b) == addition_shape
+            @test addition_a.plan === nothing
+            @test addition_b.plan === nothing
+            for matrix in (addition_a, addition_b)
+                @test parent(mod.low_part(matrix)) isa CUDA.CuArray{Float64,2}
+                @test parent(mod.high_part(matrix)) isa CUDA.CuArray{Float64,2}
+                @test size(parent(mod.low_part(matrix))) ==
+                      size(parent(mod.high_part(matrix)))
+            end
+
+            addition_expected_a =
+                BigInt.(addition_a_low_values) .+
+                BigInt(addition_low_modulus) .* BigInt.(addition_a_high_values)
+            addition_expected_b =
+                BigInt.(addition_b_low_values) .+
+                BigInt(addition_low_modulus) .* BigInt.(addition_b_high_values)
+            addition_expected = Base.mod.(
+                addition_expected_a .+ addition_expected_b,
+                BigInt(addition_capacity),
+            )
+            @test addition_low_modulus * addition_high_modulus != addition_metadata
+            @test addition_a_low_values[1, 1] + addition_b_low_values[1, 1] >=
+                  addition_low_modulus
+            @test addition_a_high_values[1, 1] + addition_b_high_values[1, 1] + 1 >=
+                  addition_high_modulus
+            @test addition_expected[1, 1] == 30
+            @test addition_expected[1, 4] == 0
+            @test addition_expected[end, end] != 0
+
+            addition_snapshot = function (matrix)
+                return (
+                    low = mod.low_part(matrix),
+                    high = mod.high_part(matrix),
+                    low_parent = Array(parent(mod.low_part(matrix))),
+                    high_parent = Array(parent(mod.high_part(matrix))),
+                    plan = matrix.plan,
+                    plan_parent = matrix.plan === nothing ? nothing :
+                                  Array(parent(matrix.plan)),
+                    low_modulus = mod.low_modulus(matrix),
+                    high_modulus = mod.high_modulus(matrix),
+                    modulus = mod.modulus(matrix),
+                )
+            end
+            assert_addition_inputs_unchanged = function (matrix, before)
+                @test mod.low_part(matrix) === before.low
+                @test mod.high_part(matrix) === before.high
+                @test Array(parent(mod.low_part(matrix))) == before.low_parent
+                @test Array(parent(mod.high_part(matrix))) == before.high_parent
+                @test matrix.plan === before.plan
+                @test (matrix.plan === nothing ? nothing : Array(parent(matrix.plan))) == before.plan_parent
+                @test mod.low_modulus(matrix) == before.low_modulus
+                @test mod.high_modulus(matrix) == before.high_modulus
+                @test mod.modulus(matrix) == before.modulus
+                return nothing
+            end
+            assert_addition_result = function (matrix)
+                @test matrix isa mod.KaratsubaMatrix{Float64}
+                @test size(matrix) == addition_shape
+                @test mod.low_part(matrix) isa mod.CuModMatrix{Float64}
+                @test mod.high_part(matrix) isa mod.CuModMatrix{Float64}
+                @test parent(mod.low_part(matrix)) isa CUDA.CuArray{Float64,2}
+                @test parent(mod.high_part(matrix)) isa CUDA.CuArray{Float64,2}
+                @test eltype(mod.low_part(matrix)) === Float64
+                @test eltype(mod.high_part(matrix)) === Float64
+                @test mod.low_modulus(matrix) == addition_low_modulus
+                @test mod.high_modulus(matrix) == addition_high_modulus
+                @test mod.modulus(matrix) == addition_metadata
+                actual =
+                    BigInt.(Array(mod.low_part(matrix))) .+
+                    BigInt(addition_low_modulus) .* BigInt.(Array(mod.high_part(matrix)))
+                @test actual == addition_expected
+                @test Array(matrix) == addition_expected
+                return nothing
+            end
+
+            addition_a_before = addition_snapshot(addition_a)
+            addition_b_before = addition_snapshot(addition_b)
+            allocated_sum = addition_a + addition_b
+            @test allocated_sum.plan === nothing
+            assert_addition_result(allocated_sum)
+            assert_addition_inputs_unchanged(addition_a, addition_a_before)
+            assert_addition_inputs_unchanged(addition_b, addition_b_before)
+
+            addition_destination = mod.KaratsubaMatrix(
+                mod.CuModMatrix{Float64}(
+                    zeros(Float64, addition_shape);
+                    modulus = addition_low_modulus,
+                ),
+                mod.CuModMatrix{Float64}(
+                    zeros(Float64, addition_shape);
+                    modulus = addition_high_modulus,
+                );
+                low_modulus = addition_low_modulus,
+                high_modulus = addition_high_modulus,
+                modulus = addition_metadata,
+            )
+            @test addition_destination.plan === nothing
+            direct_a_before = addition_snapshot(addition_a)
+            direct_b_before = addition_snapshot(addition_b)
+            @test mod.add!(addition_destination, addition_a, addition_b) ===
+                  addition_destination
+            @test addition_destination.plan === nothing
+            assert_addition_result(addition_destination)
+            assert_addition_inputs_unchanged(addition_a, direct_a_before)
+            assert_addition_inputs_unchanged(addition_b, direct_b_before)
+
+            # Existing caller and destination plans remain available to their
+            # owners and untouched; the addition kernel does not consume them.
+            addition_a.plan = mod.CuModMatrix{Float64}(
+                fill(971.0, addition_shape);
+                modulus = addition_low_modulus,
+                mod = false,
+            )
+            addition_b.plan = mod.CuModMatrix{Float64}(
+                fill(972.0, addition_shape);
+                modulus = addition_low_modulus,
+                mod = false,
+            )
+            addition_destination.plan = mod.CuModMatrix{Float64}(
+                fill(973.0, addition_shape);
+                modulus = addition_low_modulus,
+                mod = false,
+            )
+            planned_a_before = addition_snapshot(addition_a)
+            planned_b_before = addition_snapshot(addition_b)
+            planned_destination_before = addition_snapshot(addition_destination)
+            planned_sum = addition_a + addition_b
+            @test planned_sum.plan === nothing
+            assert_addition_result(planned_sum)
+            @test mod.add!(addition_destination, addition_a, addition_b) ===
+                  addition_destination
+            @test addition_destination.plan === planned_destination_before.plan
+            @test Array(parent(addition_destination.plan)) ==
+                  planned_destination_before.plan_parent
+            assert_addition_result(addition_destination)
+            assert_addition_inputs_unchanged(addition_a, planned_a_before)
+            assert_addition_inputs_unchanged(addition_b, planned_b_before)
+        end
     end
 end

@@ -1258,11 +1258,6 @@ function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
         error("Matrix dimensions must match")
     end
 
-    #TODO: remove plans
-    if (K.plan == nothing)
-        error("Must initialize plan first before using fallback implementation")
-    end
-
     tw = TILE_WIDTH
 
     totalsize = length(parent(low_part(A)))
