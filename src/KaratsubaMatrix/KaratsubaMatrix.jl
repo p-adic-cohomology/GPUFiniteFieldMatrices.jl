@@ -158,16 +158,185 @@ function find_max_ops_karatsuba(type, N)
     return Int(max(1, min(bound, BigInt(typemax(Int)))))
 end
 
+const _KARATSUBA_FLOAT64_EXACT_BOUND = BigInt(1) << 53
+
+function _karatsuba_checked_working_modulus(value::BigInt, label::AbstractString)
+    (0 < value <= typemax(Int)) ||
+        throw(ArgumentError("$label does not fit a positive Int modulus"))
+    value <= _KARATSUBA_FLOAT64_EXACT_BOUND ||
+        throw(ArgumentError("$label exceeds the exact-integer Float64 range"))
+    return Int(value)
+end
+
+function _karatsuba_checked_sum_bound(a::Int, b::Int, label::AbstractString)
+    value = BigInt(a) + BigInt(b)
+    value <= typemax(Int) || throw(ArgumentError("$label overflows Int"))
+    # The operands are strictly below a and b, so a sum bound of 2^53 still
+    # promises actual Float64 integers no larger than 2^53 - 1.
+    value <= _KARATSUBA_FLOAT64_EXACT_BOUND ||
+        throw(ArgumentError("$label exceeds the exact-integer Float64 range"))
+    return Int(value)
+end
+
+function _karatsuba_safe_product_parameters(input_bound::Int, reduction_modulus::Int)
+    effective_bound = max(input_bound, 2)
+    max_ops = find_max_stripe_ops(Float64, effective_bound; modulus = reduction_modulus)
+    max_ops > 0 || throw(
+        ArgumentError(
+            "no exact Float64 stripe contribution fits input bound $effective_bound and reduction modulus $reduction_modulus",
+        ),
+    )
+    return (input_bound = effective_bound, modulus = reduction_modulus, max_ops = max_ops)
+end
+
+function _karatsuba_matmul_product_plan(
+    input_low_a::Int,
+    input_high_a::Int,
+    input_low_b::Int,
+    input_high_b::Int,
+    output_low::Int,
+    output_high::Int,
+)
+    all(
+        >(0),
+        (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high),
+    ) || throw(ArgumentError("Karatsuba split moduli must be positive"))
+    input_low_a == input_low_b || throw(
+        ArgumentError(
+            "three-product Karatsuba matrix multiplication requires a common low modulus for A and B",
+        ),
+    )
+
+    input_radix = input_low_a
+    output_capacity = _karatsuba_checked_working_modulus(
+        BigInt(output_low) * BigInt(output_high),
+        "output component capacity",
+    )
+    sum_bound_a =
+        _karatsuba_checked_sum_bound(input_radix, input_high_a, "left sum input bound")
+    sum_bound_b =
+        _karatsuba_checked_sum_bound(input_radix, input_high_b, "right sum input bound")
+    middle_bound = max(sum_bound_a, sum_bound_b)
+    high_bound = max(input_high_a, input_high_b)
+    radix_mod_capacity = Int(mod(BigInt(input_radix), BigInt(output_capacity)))
+    radix_squared_mod_capacity = Int(mod(BigInt(input_radix)^2, BigInt(output_capacity)))
+    low = _karatsuba_safe_product_parameters(input_radix, output_capacity)
+    middle = _karatsuba_safe_product_parameters(middle_bound, output_capacity)
+    high = _karatsuba_safe_product_parameters(high_bound, output_capacity)
+
+    return (
+        input_radix = input_radix,
+        output_radix = output_low,
+        output_high = output_high,
+        output_capacity = output_capacity,
+        radix_mod_capacity = radix_mod_capacity,
+        radix_squared_mod_capacity = radix_squared_mod_capacity,
+        low = low,
+        middle = middle,
+        high = high,
+    )
+end
+
+function _karatsuba_validate_gemm_storage(
+    A::KaratsubaArray,
+    B::KaratsubaArray,
+    C::KaratsubaArray,
+)
+    for (name, K) in (("A", A), ("B", B), ("C", C))
+        low = low_part(K)
+        high = high_part(K)
+        plan = K.plan
+        for (plane_name, plane) in (("low", low), ("high", high), ("plan", plan))
+            plane isa CuModMatrix{Float64} || throw(
+                ArgumentError(
+                    "Karatsuba matrix multiplication requires CuModMatrix{Float64} $name.$plane_name storage",
+                ),
+            )
+            size(parent(plane), 1) >= size(plane, 1) &&
+            size(parent(plane), 2) >= size(plane, 2) || throw(
+                DimensionMismatch(
+                    "$name.$plane_name storage is smaller than its logical size",
+                ),
+            )
+        end
+        size(high) == size(low) || throw(
+            DimensionMismatch(
+                "$name low and high components must have matching logical sizes",
+            ),
+        )
+        size(plan) == size(low) ||
+            throw(DimensionMismatch("$name plan must match its component logical size"))
+    end
+
+    inputs = (low_part(A), high_part(A), low_part(B), high_part(B))
+    outputs = (low_part(C), high_part(C), C.plan)
+    scratch = (A.plan, B.plan)
+    for output in outputs, input in inputs
+        _stripe_mightalias(parent(output), parent(input)) && throw(
+            ArgumentError(
+                "Karatsuba matrix output storage must not alias input components",
+            ),
+        )
+    end
+    for i = 1:length(outputs), j = (i+1):length(outputs)
+        _stripe_mightalias(parent(outputs[i]), parent(outputs[j])) && throw(
+            ArgumentError("Karatsuba matrix output components must not alias each other"),
+        )
+    end
+    for plan in scratch, input in inputs
+        _stripe_mightalias(parent(plan), parent(input)) &&
+            throw(ArgumentError("Karatsuba plan scratch must not alias input components"))
+    end
+    for plan in scratch, output in outputs
+        _stripe_mightalias(parent(plan), parent(output)) &&
+            throw(ArgumentError("Karatsuba plan scratch must not alias output components"))
+    end
+    _stripe_mightalias(parent(A.plan), parent(B.plan)) &&
+        A !== B &&
+        throw(ArgumentError("Karatsuba input plan scratch must not alias each other"))
+    return nothing
+end
+
+function _karatsuba_stripe_product!(
+    C,
+    A,
+    B,
+    require_matching_input_moduli,
+    product;
+    kwargs...,
+)
+    return _stripe_mul_matrix!(
+        C,
+        A,
+        B,
+        require_matching_input_moduli;
+        input_bound = product.input_bound,
+        modulus_override = product.modulus,
+        max_ops = product.max_ops,
+        clear_output_padding = false,
+        kwargs...,
+    )
+end
+
 """
     LinearAlgebra.mul!(C, A, B)
 
 Multiply the Karatsuba matrices A and B, storing the product in C. The
 three matrices must share the same representation modulus M, and A's column
 count must match B's row count. The caller must ensure that C has dimensions
-(size(A, 1), size(B, 2)); this method does not explicitly validate the
-destination dimensions before CUDA work begins. Call initialize_plan! on all
-three matrices before multiplying. This matrix path currently supports
-Float64 storage only.
+(size(A, 1), size(B, 2)); the stripe preflight checks this before any device
+write. Call initialize_plan! on all
+three matrices before multiplying. A and B must share input low radix R; C
+may use an independent low radix R_C. The result components represent the
+product modulo Q = R_C*high_modulus(C), and checked modular recombination
+supports independent R_C without reducing by M. Input component entries must
+be canonical nonnegative representatives below their respective low and high
+moduli; those ranges are the exclusive stripe input bounds. These ranges are
+caller promises and are not scanned at runtime. CuModArray wrappers made with
+mod=false retain raw values, and to_karatsuba preserves an exact high quotient
+without reducing it by high_modulus, so callers must supply a high_modulus
+that bounds those values. This matrix path currently supports Float64 storage
+only.
 """
 function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
@@ -182,84 +351,107 @@ function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaAr
     if eltype(parent(low_part(A))) != Float64
         error("Not implemented for non-Float64 entries")
     end
-    # TODO: enable this
-    # maxN = max(low_modulus(A),high_modulus(A))
-    # if find_max_stripe_ops(eltype(parent(low_part(A))), maxN) < size(A,1)
-    #     error("Matrix is too big for a single matmul, this is currently not implemented")
-    # end
-    #=
-    tw = TILE_WIDTH
+    _karatsuba_validate_gemm_storage(A, B, C)
+    products = _karatsuba_matmul_product_plan(
+        low_modulus(A),
+        high_modulus(A),
+        low_modulus(B),
+        high_modulus(B),
+        low_modulus(C),
+        high_modulus(C),
+    )
 
-    totalsize = length(parent(low_part(C))) # the vector length
+    high_requires_matching_input_moduli = modulus(high_part(A)) == modulus(high_part(B))
+    # Validate all stripe calls before the sum kernel writes either input plan.
+    # The calls below repeat this preflight at their own execution boundary.
+    _karatsuba_stripe_product!(
+        low_part(C),
+        low_part(A),
+        low_part(B),
+        true,
+        products.low;
+        preflight_only = true,
+    )
+    _karatsuba_stripe_product!(
+        high_part(C),
+        A.plan,
+        B.plan,
+        true,
+        products.middle;
+        preflight_only = true,
+    )
+    _karatsuba_stripe_product!(
+        C.plan,
+        high_part(A),
+        high_part(B),
+        high_requires_matching_input_moduli,
+        products.high;
+        preflight_only = true,
+    )
 
-    threads = tw
-    blocks = totalsize ÷ tw
-    =#
-
-    tw = TILE_WIDTH
-
-    totalsize = length(parent(low_part(A)))
-
-    threads = tw
-    blocks = totalsize ÷ tw
-
-    #A_cols = size(low_part(A),2)
+    rows_a, cols_a = size(low_part(A))
+    rows_b, cols_b = size(low_part(B))
+    logical_count = max(length(low_part(A)), length(low_part(B)))
+    threads = TILE_WIDTH
+    blocks = max(1, cld(logical_count, threads))
     @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
         parent(A.plan),
         parent(low_part(A)),
         parent(high_part(A)),
-        #A_cols,
+        rows_a,
+        cols_a,
+        stride(parent(A.plan), 1),
+        stride(parent(A.plan), 2),
+        stride(parent(low_part(A)), 1),
+        stride(parent(low_part(A)), 2),
+        stride(parent(high_part(A)), 1),
+        stride(parent(high_part(A)), 2),
         parent(B.plan),
         parent(low_part(B)),
         parent(high_part(B)),
-        low_modulus(A),
-    )
-    # add!(A.plan,low_part(A),high_part(A); modulus_override=2*low_modulus(A))
-    # add!(B.plan,low_part(B),high_part(B); modulus_override=2*low_modulus(B))
-
-    # use gemm
-
-    LinearAlgebra.mul!(
-        low_part(C),
-        low_part(A),
-        low_part(B),
-        R = low_modulus(A),
-        P = low_modulus(A)^2,
-        maxopsOverride = false,
+        rows_b,
+        cols_b,
+        stride(parent(B.plan), 1),
+        stride(parent(B.plan), 2),
+        stride(parent(low_part(B)), 1),
+        stride(parent(low_part(B)), 2),
+        stride(parent(high_part(B)), 1),
+        stride(parent(high_part(B)), 2),
     )
 
-    LinearAlgebra.mul!(
-        high_part(C),
-        A.plan,
-        B.plan,
-        R = (2*low_modulus(A)),
-        P = ((4*low_modulus(A))^2),
-        maxopsOverride = false,
-    )
-    LinearAlgebra.mul!(
-        B.plan,
+    _karatsuba_stripe_product!(low_part(C), low_part(A), low_part(B), true, products.low)
+    _karatsuba_stripe_product!(high_part(C), A.plan, B.plan, true, products.middle)
+    _karatsuba_stripe_product!(
+        C.plan,
         high_part(A),
         high_part(B),
-        R = (low_modulus(A)),
-        P = low_modulus(A)^2,
-        maxopsOverride = false,
+        high_requires_matching_input_moduli,
+        products.high,
     )
 
-
-    tw = TILE_WIDTH
-
-    totalsize = length(parent(low_part(C)))
-
-    threads = tw
-    blocks = totalsize ÷ tw
-
-
-    @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_2!(
+    output_rows, output_cols = size(low_part(C))
+    output_count = length(low_part(C))
+    output_blocks = max(1, cld(output_count, threads))
+    output_capacity = Float64(products.output_capacity)
+    radix_mod_capacity = Float64(products.radix_mod_capacity)
+    radix_squared_mod_capacity = Float64(products.radix_squared_mod_capacity)
+    output_radix = Float64(products.output_radix)
+    @cuda threads=threads blocks=output_blocks karatsuba_matmul_kernel_2!(
         parent(low_part(C)),
         parent(high_part(C)),
-        parent(B.plan),
-        low_modulus(C),
-        high_modulus(C),
+        parent(C.plan),
+        output_rows,
+        output_cols,
+        stride(parent(low_part(C)), 1),
+        stride(parent(low_part(C)), 2),
+        stride(parent(high_part(C)), 1),
+        stride(parent(high_part(C)), 2),
+        stride(parent(C.plan), 1),
+        stride(parent(C.plan), 2),
+        radix_mod_capacity,
+        radix_squared_mod_capacity,
+        output_radix,
+        output_capacity,
     )
 
 
