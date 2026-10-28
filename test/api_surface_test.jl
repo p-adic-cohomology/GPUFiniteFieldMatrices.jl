@@ -760,34 +760,75 @@
     @test high_part(Kcopy) == high_part(K)
     @test low_part(Kcopy) !== low_part(K)
 
-    # Characterize the documented legacy changed-M behavior; this does not
-    # assert metadata preservation or repair Base.copy.
-    legacy_data1 = [1 2; 0 1]
-    legacy_data2 = zeros(Int, 2, 2)
-    expected_legacy_data1 = copy(legacy_data1)
-    expected_legacy_data2 = copy(legacy_data2)
-    legacy_source = karatsuba_type(
-        legacy_data1,
-        legacy_data2;
-        low_modulus = 3,
-        high_modulus = 3,
-        modulus = 3,
-    )
-    legacy_copy = copy(legacy_source)
-    @test GPUFiniteFieldMatrices.modulus(legacy_copy) == 9
-    @test GPUFiniteFieldMatrices.modulus(legacy_copy) !=
-          GPUFiniteFieldMatrices.modulus(legacy_source)
-    @test GPUFiniteFieldMatrices.modulus(legacy_source) == 3
-    @test low_part(legacy_source) == expected_legacy_data1
-    @test high_part(legacy_source) == expected_legacy_data2
-    @test low_part(legacy_copy) == expected_legacy_data1
-    @test high_part(legacy_copy) == expected_legacy_data2
-    @test low_part(legacy_copy) !== low_part(legacy_source)
-    @test high_part(legacy_copy) !== high_part(legacy_source)
-    low_part(legacy_source)[1, 1] = -1
-    high_part(legacy_source)[1, 1] = -1
-    @test low_part(legacy_copy) == expected_legacy_data1
-    @test high_part(legacy_copy) == expected_legacy_data2
+    @testset "Karatsuba Base.copy preserves metadata and CPU component storage" begin
+        function check_cpu_copy(source, expected_moduli, split_capacity)
+            @test source.plan === nothing
+            source_low_before = copy(low_part(source))
+            source_high_before = copy(high_part(source))
+            represented_before = mod.from_karatsuba(eltype(source), source)
+
+            copied = copy(source)
+            @test copied !== source
+            @test typeof(copied) === typeof(source)
+            @test typeof(low_part(copied)) === typeof(low_part(source))
+            @test typeof(high_part(copied)) === typeof(high_part(source))
+            @test low_part(copied) isa Array
+            @test high_part(copied) isa Array
+            @test low_part(copied) !== low_part(source)
+            @test high_part(copied) !== high_part(source)
+            @test size(copied) == size(source)
+            @test eltype(copied) === eltype(source)
+            @test (
+                mod.low_modulus(copied),
+                mod.high_modulus(copied),
+                mod.modulus(copied),
+            ) == expected_moduli
+            @test mod.low_modulus(copied) * mod.high_modulus(copied) == split_capacity
+            @test copied.plan === nothing
+            @test low_part(copied) == source_low_before
+            @test high_part(copied) == source_high_before
+            @test mod.from_karatsuba(eltype(copied), copied) == represented_before
+
+            first = firstindex(source_low_before)
+            low_part(source)[first] += one(eltype(source))
+            high_part(source)[first] += one(eltype(source))
+            @test low_part(copied) == source_low_before
+            @test high_part(copied) == source_high_before
+
+            source_low_after = copy(low_part(source))
+            source_high_after = copy(high_part(source))
+            low_part(copied)[first] += one(eltype(copied))
+            high_part(copied)[first] += one(eltype(copied))
+            @test low_part(source) == source_low_after
+            @test high_part(source) == source_high_after
+        end
+
+        coherent_matrix = mod.KaratsubaArray{Int,2}(
+            Int[1 2; 3 4],
+            Int[0 1; 1 0];
+            low_modulus = 3,
+            high_modulus = 5,
+            modulus = 15,
+        )
+        converted_matrix = mod.to_karatsuba(Int, Int[0 1; 2 3]; modulus = 3)
+        coherent_vector = mod.KaratsubaArray{Float64,1}(
+            Float64[1, 2, 0, 1],
+            Float64[0, 1, 1, 0];
+            low_modulus = 3,
+            high_modulus = 5,
+            modulus = 15,
+        )
+        converted_vector = mod.to_karatsuba(Float64, Float64[0, 1, 2, 3]; modulus = 3)
+
+        check_cpu_copy(coherent_matrix, (3, 5, 15), 15)
+        check_cpu_copy(converted_matrix, (3, 3, 3), 9)
+        check_cpu_copy(coherent_vector, (3, 5, 15), 15)
+        check_cpu_copy(converted_vector, (3, 3, 3), 9)
+        @test mod.modulus(converted_matrix) !=
+              mod.low_modulus(converted_matrix) * mod.high_modulus(converted_matrix)
+        @test mod.modulus(converted_vector) !=
+              mod.low_modulus(converted_vector) * mod.high_modulus(converted_vector)
+    end
 
     # The explicit mul! checks run before CUDA work and can be checked on CPU.
     assert_guard_error_message = function (operation, expected_message)

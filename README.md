@@ -188,14 +188,14 @@ reconstruction to avoid overflowing an intermediate type.
 `from_karatsuba` infers a CPU `Array` or GPU `CuArray` result from the stored
 components. The strict DispatchDoctor test preference remains enabled.
 
-`Base.copy` retains the legacy `Karatsubacopy` metadata behavior: the copied
-representation stores `M = N1*N2`, which can differ from the source's `M`.
-In particular, `to_karatsuba(A; modulus = M)` defaults split factors to
-`N1 = N2 = M`, so copying that representation changes its stored `M` to `M^2`. Multiplication
-requires matching stored `M` on all operands; do not mix these copied and
-uncopied representations. The initialized-copy product test uses the existing
-split constructors with a consistent `M = N1*N2`. Correcting this metadata
-behavior is deferred to a separate follow-up.
+`Base.copy` preserves the source's representation metadata `M` and split
+moduli `N1` and `N2`. It deep-copies the low and high component storage and
+creates a fresh plan when the source has one. The component capacity
+`Q = N1*N2` remains independent of metadata `M`. In particular,
+`to_karatsuba(A; modulus = M)` defaults to `N1 = N2 = M`, so the copied value
+retains `M` even though `Q = M^2`. Multiplication requires matching stored
+`M` on all operands, so a copied representation can be used with its original
+when their metadata matches.
 
 The specialized matrix-vector path is available through qualified access as
 `GPUFiniteFieldMatrices.karatsuba_gemv!`.

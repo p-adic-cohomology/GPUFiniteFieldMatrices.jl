@@ -258,42 +258,132 @@ function test_karatsuba_api_regressions()
         )
         @test_throws InexactError mod.from_karatsuba(Float32, gpu_component_inexact)
 
-        # Legacy copy recomputes M as N1*N2. Keep the square fixture coherent
-        # with that established behavior while checking an independent oracle.
-        zero_component() = mod.CuModMatrix{Float64}(zeros(Float64, 2, 2); modulus = q)
-        ak = mod.KaratsubaMatrix(
-            a,
-            zero_component();
-            low_modulus = q,
-            high_modulus = q,
-            modulus = q^2,
-        )
-        bk = mod.KaratsubaMatrix(
-            mod.CuModMatrix{Float64}(b_values; modulus = q),
-            zero_component();
-            low_modulus = q,
-            high_modulus = q,
-            modulus = q^2,
-        )
-        ck = mod.KaratsubaMatrix(
-            zero_component(),
-            zero_component();
-            low_modulus = q,
-            high_modulus = q,
-            modulus = q^2,
-        )
-        @test (@inferred mod.initialize_plan!(ak)) === ak
-        foreach(mod.initialize_plan!, (bk, ck))
+        tile_width = mod.TILE_WIDTH
+        copy_product_a_values = zeros(Float64, tile_width, tile_width)
+        copy_product_b_values = zeros(Float64, tile_width, tile_width)
+        for i = 1:tile_width
+            copy_product_a_values[i, i] = i + 1
+            copy_product_b_values[i, i] = Base.mod(5i + 1, q - 1) + 1
+            copy_product_b_values[i, mod1(i + 1, tile_width)] = Base.mod(7i + 3, q - 1) + 1
+        end
 
-        ak_copy = copy(ak)
-        @test ak_copy.plan !== nothing
-        @test ak_copy.plan !== ak.plan
-        @test parent(ak_copy.plan) !== parent(ak.plan)
-        square_result = LinearAlgebra.mul!(ck, ak_copy, ak_copy)
-        @test square_result === ck
-        square_expected =
-            Float64.(Base.mod.(BigInt.(a_values) * BigInt.(a_values), BigInt(q)^2))
-        @test Array(ck) == square_expected
+        product_capacity = BigInt(q) * BigInt(q)
+        expected_product_big = Base.mod.(
+            BigInt.(copy_product_a_values) * BigInt.(copy_product_b_values),
+            product_capacity,
+        )
+        reverse_product_big = Base.mod.(
+            BigInt.(copy_product_b_values) * BigInt.(copy_product_a_values),
+            product_capacity,
+        )
+        @test expected_product_big != reverse_product_big
+        expected_product = Float64.(expected_product_big)
+
+        product_a = mod.CuModMatrix{Float64}(copy_product_a_values; modulus = q)
+        product_b = mod.CuModMatrix{Float64}(copy_product_b_values; modulus = q)
+        ak = mod.to_karatsuba(product_a; modulus = q)
+        bk = mod.to_karatsuba(product_b; modulus = q)
+        @test (mod.low_modulus(ak), mod.high_modulus(ak), mod.modulus(ak)) == (q, q, q)
+        @test mod.low_modulus(ak) * mod.high_modulus(ak) == q^2
+        @test mod.modulus(ak) != mod.low_modulus(ak) * mod.high_modulus(ak)
+
+        unplanned_copy = copy(ak)
+        @test unplanned_copy.plan === nothing
+        @test unplanned_copy.plan === ak.plan
+        @test mod.modulus(unplanned_copy) == mod.modulus(ak)
+        @test Array(low_part(unplanned_copy)) == Array(low_part(ak))
+        @test Array(high_part(unplanned_copy)) == Array(high_part(ak))
+        @test parent(low_part(unplanned_copy)) !== parent(low_part(ak))
+        @test parent(high_part(unplanned_copy)) !== parent(high_part(ak))
+
+        @test (@inferred mod.initialize_plan!(ak)) === ak
+        foreach(mod.initialize_plan!, (bk,))
+        source_a_plan = ak.plan
+        source_b_plan = bk.plan
+        source_a_plan_storage = parent(source_a_plan)
+        source_b_plan_storage = parent(source_b_plan)
+        source_a_plan_before = Array(source_a_plan_storage)
+        source_b_plan_before = Array(source_b_plan_storage)
+        source_a_low_storage = parent(low_part(ak))
+        source_a_high_storage = parent(high_part(ak))
+        source_b_low_storage = parent(low_part(bk))
+        source_b_high_storage = parent(high_part(bk))
+        source_a_low_before = Array(source_a_low_storage)
+        source_a_high_before = Array(source_a_high_storage)
+        source_b_low_before = Array(source_b_low_storage)
+        source_b_high_before = Array(source_b_high_storage)
+
+        copied = copy(ak)
+        @test typeof(copied) === typeof(ak)
+        @test (mod.low_modulus(copied), mod.high_modulus(copied), mod.modulus(copied)) ==
+              (q, q, q)
+        @test mod.low_modulus(copied) * mod.high_modulus(copied) == q^2
+        @test copied.plan !== nothing
+        @test copied.plan !== source_a_plan
+        @test parent(copied.plan) !== source_a_plan_storage
+        @test size(copied.plan) == size(ak)
+        @test mod.modulus(copied.plan) == q
+        @test parent(copied.plan) isa CUDA.CuArray
+        @test parent(low_part(copied)) !== source_a_low_storage
+        @test parent(high_part(copied)) !== source_a_high_storage
+        @test Array(low_part(copied)) == Array(low_part(ak))
+        @test Array(high_part(copied)) == Array(high_part(ak))
+        @test Array(source_a_plan_storage) == source_a_plan_before
+
+        fill!(parent(copied.plan), 23.0)
+        @test Array(source_a_plan_storage) == source_a_plan_before
+        @test parent(copied.plan) !== source_a_plan_storage
+        fill!(parent(copied.plan), 0.0)
+
+        # Allocating multiplication uses private plans and leaves the copied
+        # and original operands, including their plans, unchanged.
+        copied_low_before = Array(parent(low_part(copied)))
+        copied_high_before = Array(parent(high_part(copied)))
+        copied_plan = copied.plan
+        copied_plan_storage = parent(copied_plan)
+        copied_plan_before = Array(copied_plan_storage)
+        allocated_product = copied * bk
+        @test mod.modulus(allocated_product) == q
+        @test mod.low_modulus(allocated_product) * mod.high_modulus(allocated_product) ==
+              q^2
+        @test Array(allocated_product) == expected_product
+        @test Array(parent(low_part(ak))) == source_a_low_before
+        @test Array(parent(high_part(ak))) == source_a_high_before
+        @test Array(parent(low_part(bk))) == source_b_low_before
+        @test Array(parent(high_part(bk))) == source_b_high_before
+        @test Array(parent(low_part(copied))) == copied_low_before
+        @test Array(parent(high_part(copied))) == copied_high_before
+        @test ak.plan === source_a_plan
+        @test bk.plan === source_b_plan
+        @test parent(ak.plan) === source_a_plan_storage
+        @test parent(bk.plan) === source_b_plan_storage
+        @test Array(source_a_plan_storage) == source_a_plan_before
+        @test Array(source_b_plan_storage) == source_b_plan_before
+        @test copied.plan === copied_plan
+        @test parent(copied.plan) === copied_plan_storage
+        @test Array(copied_plan_storage) == copied_plan_before
+
+        # Retain direct mul! coverage on private operand copies. Its scratch
+        # plans may be written, while the original inputs remain untouched.
+        direct_a = copy(ak)
+        direct_b = copy(bk)
+        zero_input =
+            mod.CuModMatrix{Float64}(zeros(Float64, tile_width, tile_width); modulus = q)
+        direct_c = mod.to_karatsuba(zero_input; modulus = q)
+        foreach(mod.initialize_plan!, (direct_a, direct_b, direct_c))
+        direct_result = LinearAlgebra.mul!(direct_c, direct_a, direct_b)
+        @test direct_result === direct_c
+        @test mod.modulus(direct_c) == q
+        @test mod.low_modulus(direct_c) * mod.high_modulus(direct_c) == q^2
+        @test Array(direct_c) == expected_product
+        @test Array(parent(low_part(ak))) == source_a_low_before
+        @test Array(parent(high_part(ak))) == source_a_high_before
+        @test Array(parent(low_part(bk))) == source_b_low_before
+        @test Array(parent(high_part(bk))) == source_b_high_before
+        @test ak.plan === source_a_plan
+        @test bk.plan === source_b_plan
+        @test Array(source_a_plan_storage) == source_a_plan_before
+        @test Array(source_b_plan_storage) == source_b_plan_before
 
         # The output radix is independent from the common input radix, and M
         # remains metadata rather than the reduction modulus.
@@ -610,6 +700,18 @@ function test_karatsuba_api_regressions()
 
             # A === B gets distinct operation-owned plans while retaining the
             # caller's original plan and components.
+            square_source = mod.KaratsubaMatrix(
+                a,
+                mod.CuModMatrix{Float64}(zeros(Float64, 2, 2); modulus = q);
+                low_modulus = q,
+                high_modulus = q,
+                modulus = q^2,
+            )
+            mod.initialize_plan!(square_source)
+            ak_copy = copy(square_source)
+            @test ak_copy.plan !== nothing
+            @test ak_copy.plan !== square_source.plan
+            @test parent(ak_copy.plan) !== parent(square_source.plan)
             square_before = input_snapshot(ak_copy)
             square_allocated = ak_copy * ak_copy
             square_capacity =
