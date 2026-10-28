@@ -441,6 +441,13 @@ function test_karatsuba_api_regressions()
             )
         end
 
+        function pad_initialized_plan!(matrix, seed)
+            rows, cols = size(matrix)
+            storage = alias_fixture_storage(seed, rows, cols; logical_value = 2.0)
+            matrix.plan = alias_fixture_plane(storage, mod.low_modulus(matrix), rows, cols)
+            return matrix
+        end
+
         function assert_alias_rejection_without_writes(A, B, C, expected_message)
             @test A !== B
             @test A !== C
@@ -624,42 +631,68 @@ function test_karatsuba_api_regressions()
             )
             @test inner_after == inner_before
 
-            # A wrong logical C shape reaches the stripe destination guard,
-            # distinct from the earlier A/B inner-dimension rejection.
+            # Each wrong logical C shape isolates one destination axis and
+            # reaches the stripe guard after the plans have been initialized.
             destination_a =
                 alias_fixture_matrix(2, 2; low_modulus = 13, high_modulus = 3, seed = 901)
             destination_b =
                 alias_fixture_matrix(2, 2; low_modulus = 13, high_modulus = 5, seed = 911)
-            destination_c =
-                alias_fixture_matrix(2, 3; low_modulus = 7, high_modulus = 5, seed = 921)
+            pad_initialized_plan!(destination_a, 941)
+            pad_initialized_plan!(destination_b, 951)
             @test size(destination_a, 2) == size(destination_b, 1)
-            @test size(destination_c) != (size(destination_a, 1), size(destination_b, 2))
-            destination_before = (
-                alias_fixture_snapshot(destination_a),
-                alias_fixture_snapshot(destination_b),
-                alias_fixture_snapshot(destination_c),
-            )
-            @test all(
-                plane -> all(value -> !iszero(value), plane),
-                Iterators.flatten(destination_before),
-            )
-            destination_error = try
-                LinearAlgebra.mul!(destination_c, destination_a, destination_b)
-                nothing
-            catch error
-                error
+            expected_destination_shape = (size(destination_a, 1), size(destination_b, 2))
+            for (destination_shape, mismatch_axis, seed) in
+                (((2, 3), :column, 921), ((3, 2), :row, 931))
+                @testset "wrong $mismatch_axis destination dimension" begin
+                    destination_c = alias_fixture_matrix(
+                        destination_shape...;
+                        low_modulus = 7,
+                        high_modulus = 5,
+                        seed,
+                    )
+                    pad_initialized_plan!(destination_c, seed + 20)
+                    @test size(destination_c) == destination_shape
+                    if mismatch_axis === :column
+                        @test size(destination_c, 1) == expected_destination_shape[1]
+                        @test size(destination_c, 2) != expected_destination_shape[2]
+                    else
+                        @test size(destination_c, 1) != expected_destination_shape[1]
+                        @test size(destination_c, 2) == expected_destination_shape[2]
+                    end
+                    for matrix in (destination_a, destination_b, destination_c)
+                        for plane in
+                            (mod.low_part(matrix), mod.high_part(matrix), matrix.plan)
+                            @test size(parent(plane), 1) > size(plane, 1)
+                            @test size(parent(plane), 2) > size(plane, 2)
+                        end
+                    end
+                    destination_before = (
+                        alias_fixture_snapshot(destination_a),
+                        alias_fixture_snapshot(destination_b),
+                        alias_fixture_snapshot(destination_c),
+                    )
+                    @test all(
+                        plane -> all(value -> !iszero(value), plane),
+                        Iterators.flatten(destination_before),
+                    )
+                    destination_error = try
+                        LinearAlgebra.mul!(destination_c, destination_a, destination_b)
+                        nothing
+                    catch error
+                        error
+                    end
+                    @test destination_error isa mod.CuModArraySizeMismatchException
+                    @test destination_error isa mod.CuModArraySizeMismatchException &&
+                          destination_error.message ==
+                          "Output matrix C has incorrect dimensions"
+                    destination_after = (
+                        alias_fixture_snapshot(destination_a),
+                        alias_fixture_snapshot(destination_b),
+                        alias_fixture_snapshot(destination_c),
+                    )
+                    @test destination_after == destination_before
+                end
             end
-            @test destination_error isa mod.CuModArraySizeMismatchException
-            @test destination_error isa mod.CuModArraySizeMismatchException && occursin(
-                "Output matrix C has incorrect dimensions",
-                destination_error.message,
-            )
-            destination_after = (
-                alias_fixture_snapshot(destination_a),
-                alias_fixture_snapshot(destination_b),
-                alias_fixture_snapshot(destination_c),
-            )
-            @test destination_after == destination_before
         end
     end
 end
