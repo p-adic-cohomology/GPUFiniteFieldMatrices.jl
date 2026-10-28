@@ -153,6 +153,90 @@
         mod.karatsuba_gemv!,
         Tuple{karatsuba_type,karatsuba_type,karatsuba_type},
     ).module === mod
+
+    # Resolve the raw launch signatures without allocating CuArrays or invoking
+    # a kernel. GEMV uses matrix/vector storage and the baseline 7/5 arities;
+    # GEMM keeps its matrix-only launch signatures.
+    raw_matrix_storage = CUDA.CuArray{Float64,2,CUDA.DeviceMemory}
+    raw_vector_storage = CUDA.CuArray{Float64,1,CUDA.DeviceMemory}
+    kernel_dispatch_cases = (
+        (
+            mod.karatsuba_matmul_kernel_1!,
+            Tuple{
+                raw_matrix_storage,
+                raw_matrix_storage,
+                raw_matrix_storage,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                raw_matrix_storage,
+                raw_matrix_storage,
+                raw_matrix_storage,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+            },
+            22,
+        ),
+        (
+            mod.karatsuba_matmul_kernel_2!,
+            Tuple{
+                raw_matrix_storage,
+                raw_matrix_storage,
+                raw_matrix_storage,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Int,
+                Float64,
+                Float64,
+                Float64,
+                Float64,
+            },
+            15,
+        ),
+        (
+            mod.karatsuba_matmul_kernel_1!,
+            Tuple{
+                raw_matrix_storage,
+                raw_matrix_storage,
+                raw_matrix_storage,
+                raw_vector_storage,
+                raw_vector_storage,
+                raw_vector_storage,
+                Int,
+            },
+            7,
+        ),
+        (
+            mod.karatsuba_matmul_kernel_2!,
+            Tuple{raw_vector_storage,raw_vector_storage,raw_vector_storage,Int,Int},
+            5,
+        ),
+    )
+    for (kernel, signature, positional_arity) in kernel_dispatch_cases
+        selected_method = hasmethod(kernel, signature) ? which(kernel, signature) : nothing
+        @test selected_method !== nothing
+        if selected_method !== nothing
+            @test selected_method.module === mod
+            @test selected_method.nargs == positional_arity + 1
+        end
+    end
+
     @test which(mod.to_karatsuba, Tuple{Matrix{Int}}).module === mod
     @test which(mod.to_karatsuba, Tuple{Type{Int},Matrix{Int}}).module === mod
     @test !hasmethod(mod.to_karatsuba, Tuple{Matrix{Int},Int})
@@ -204,6 +288,8 @@
     @test :input_bound in
           keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type})
     @test :max_ops in
+          keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type})
+    @test :modulus_override in
           keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type})
     @test keyword_decl(LinearAlgebra.mul!, Tuple{vector_type,matrix_type,vector_type}) ==
           [:input_bound, :modulus_override]
@@ -288,6 +374,303 @@
     @test mod._stripe_effective_modulus(101, nothing) == 101
     @test mod._stripe_effective_modulus(101, 7) == 7
     @test_throws ArgumentError mod._stripe_effective_modulus(101, 0)
+
+    @testset "Karatsuba GEMM host bounds and radix audit" begin
+        same_radix = mod._karatsuba_matmul_product_plan(13, 7, 13, 5, 13, 11)
+        @test same_radix.output_capacity == 143
+        @test same_radix.low.input_bound == 13
+        @test same_radix.low.modulus == 143
+        @test same_radix.middle.input_bound == 20
+        @test same_radix.middle.modulus == 143
+        @test same_radix.high.input_bound == 7
+        @test same_radix.high.modulus == 143
+        for product in (same_radix.low, same_radix.middle, same_radix.high)
+            @test BigInt(product.modulus - 1) +
+                  BigInt(product.max_ops) * BigInt(product.input_bound - 1)^2 <=
+                  BigInt(2)^53 - 1
+        end
+
+        independent_small = mod._karatsuba_matmul_product_plan(13, 7, 13, 5, 5, 11)
+        independent_large = mod._karatsuba_matmul_product_plan(13, 7, 13, 5, 17, 11)
+        @test independent_small.output_capacity == 55
+        @test independent_large.output_capacity == 187
+        @test independent_small.output_radix < independent_small.input_radix
+        @test independent_large.output_radix > independent_large.input_radix
+        @test independent_small.radix_mod_capacity == 13
+        @test independent_small.radix_squared_mod_capacity == 4
+        @test all(
+            product -> product.modulus == independent_small.output_capacity,
+            (independent_small.low, independent_small.middle, independent_small.high),
+        )
+
+        multi_stripe = mod._karatsuba_matmul_product_plan(2^26 - 3, 2, 2^26 - 3, 3, 7, 5)
+        @test multi_stripe.output_capacity == 35
+        @test multi_stripe.low.max_ops == 1
+        @test multi_stripe.middle.max_ops == 1
+        @test multi_stripe.high.max_ops > 1
+        for product in (multi_stripe.low, multi_stripe.middle, multi_stripe.high)
+            @test BigInt(product.modulus - 1) +
+                  BigInt(product.max_ops) * BigInt(product.input_bound - 1)^2 <=
+                  BigInt(2)^53 - 1
+        end
+
+        @test_throws ArgumentError mod._karatsuba_matmul_product_plan(13, 7, 12, 5, 17, 11)
+
+        oracle_radix = 13
+        oracle_high_a = 7
+        oracle_high_b = 5
+        oracle_high_c = 11
+        oracle_low_a = BigInt[12 10 1; 11 12 5]
+        oracle_plane_a = BigInt[6 5 3; 4 2 1]
+        oracle_low_b = BigInt[12 2 3 1; 5 11 4 7; 8 0 9 2]
+        oracle_plane_b = BigInt[4 3 1 2; 2 4 0 3; 3 1 2 4]
+        p0 = oracle_low_a * oracle_low_b
+        p1 = (oracle_low_a + oracle_plane_a) * (oracle_low_b + oracle_plane_b)
+        p2 = oracle_plane_a * oracle_plane_b
+        exact_a = oracle_low_a + oracle_radix * oracle_plane_a
+        exact_b = oracle_low_b + oracle_radix * oracle_plane_b
+        exact_product = exact_a * exact_b
+        @test length(Set([oracle_radix, oracle_high_a, oracle_high_b, oracle_high_c])) == 4
+        for oracle_output_radix in (5, oracle_radix, 17)
+            output_capacity = BigInt(oracle_output_radix) * BigInt(oracle_high_c)
+            expected = Base.mod.(exact_product, output_capacity)
+            low_components = similar(expected)
+            high_components = similar(expected)
+            recombined_components = similar(expected)
+            for i in eachindex(p0)
+                low, high = mod._karatsuba_recombine(
+                    Float64(Base.mod(p0[i], output_capacity)),
+                    Float64(Base.mod(p1[i], output_capacity)),
+                    Float64(Base.mod(p2[i], output_capacity)),
+                    Float64(Base.mod(oracle_radix, output_capacity)),
+                    Float64(Base.mod(BigInt(oracle_radix)^2, output_capacity)),
+                    Float64(oracle_output_radix),
+                    Float64(output_capacity),
+                )
+                low_components[i] = BigInt(low)
+                high_components[i] = BigInt(high)
+                recombined_components[i] =
+                    BigInt(low) + BigInt(oracle_output_radix) * BigInt(high)
+            end
+            @test low_components == Base.mod.(exact_product, BigInt(oracle_output_radix))
+            @test high_components == div.(expected, BigInt(oracle_output_radix))
+            @test recombined_components == expected
+        end
+
+        # Distinguish output-capacity reduction from matching metadata M.
+        discriminator_p0 = BigInt(2)
+        discriminator_p1 = BigInt(18)
+        discriminator_p2 = BigInt(8)
+        discriminator_low, discriminator_high =
+            mod._karatsuba_recombine(2.0, 8.0, 8.0, 3.0, 9.0, 2.0, 10.0)
+        discriminator_exact = BigInt(14) * BigInt(7)
+        discriminator_formula =
+            discriminator_p0 +
+            3 * (discriminator_p1 - discriminator_p0 - discriminator_p2) +
+            BigInt(3)^2 * discriminator_p2
+        @test discriminator_formula == discriminator_exact
+        @test discriminator_exact == 98
+        @test Base.mod(discriminator_exact, 10) == 8
+        @test Base.mod(discriminator_exact, 7) == 0
+        @test (discriminator_low, discriminator_high) == (0.0, 4.0)
+        @test discriminator_low + 2 * discriminator_high ==
+              Base.mod(discriminator_exact, 10)
+
+        # The three-product identity needs a common input radix. With
+        # x = 1 + 3*2 and y = 2 + 5*1, the unweighted cross term is 5,
+        # while the exact weighted cross contribution is 17.
+        x = BigInt(1) + BigInt(3) * 2
+        y = BigInt(2) + BigInt(5) * 1
+        p0 = BigInt(1) * 2
+        p1 = BigInt(1 + 2) * (BigInt(2 + 1))
+        p2 = BigInt(2) * 1
+        @test x == 7 && y == 7 && x * y == 49
+        @test p1 - p0 - p2 == 5
+        @test BigInt(5) * 1 * 1 + BigInt(3) * 2 * 2 == 17
+        @test p0 + BigInt(3) * (p1 - p0 - p2) + BigInt(3)^2 * p2 == 35
+
+        first_case = (a_low = 1, a_high = 0, b_low = 0, b_high = 1)
+        second_case = (a_low = 0, a_high = 1, b_low = 1, b_high = 0)
+        first_products = (
+            first_case.a_low * first_case.b_low,
+            (first_case.a_low + first_case.a_high) * (first_case.b_low + first_case.b_high),
+            first_case.a_high * first_case.b_high,
+        )
+        second_products = (
+            second_case.a_low * second_case.b_low,
+            (second_case.a_low + second_case.a_high) *
+            (second_case.b_low + second_case.b_high),
+            second_case.a_high * second_case.b_high,
+        )
+        first_exact = first_case.a_low + 2 * first_case.a_high
+        first_exact *= first_case.b_low + 3 * first_case.b_high
+        second_exact = second_case.a_low + 2 * second_case.a_high
+        second_exact *= second_case.b_low + 3 * second_case.b_high
+        @test first_products == second_products == (0, 1, 0)
+        @test (first_exact, second_exact) == (3, 2)
+        @test_throws ArgumentError mod._karatsuba_matmul_product_plan(3, 5, 5, 7, 2, 11)
+
+        # The former unchecked R*p2 boundary exceeds Float64's exact integer
+        # range. Double-and-add modular multiplication and recombination stay
+        # within exact residues modulo Q instead.
+        extreme_plan = mod._karatsuba_matmul_product_plan(5, 2^26 - 5, 5, 2^26 - 5, 1, 2^51)
+        extreme_capacity = BigInt(extreme_plan.output_capacity)
+        extreme_p2 = BigInt(2251799008378916)
+        @test extreme_capacity == BigInt(2)^51
+        @test all(
+            product -> product.modulus == extreme_capacity && product.max_ops > 0,
+            (extreme_plan.low, extreme_plan.middle, extreme_plan.high),
+        )
+        for product in (extreme_plan.low, extreme_plan.middle, extreme_plan.high)
+            @test BigInt(product.modulus - 1) +
+                  BigInt(product.max_ops) * BigInt(product.input_bound - 1)^2 <=
+                  BigInt(2)^53 - 1
+        end
+        @test 5 * extreme_p2 > BigInt(2)^53 - 1
+        extreme_product = mod._karatsuba_mod_mul(
+            5.0,
+            Float64(Base.mod(extreme_p2, extreme_capacity)),
+            Float64(extreme_capacity),
+        )
+        @test BigInt(extreme_product) == Base.mod(5 * extreme_p2, extreme_capacity)
+        extreme_low, extreme_high = mod._karatsuba_recombine(
+            0.0,
+            0.0,
+            Float64(Base.mod(extreme_p2, extreme_capacity)),
+            Float64(extreme_plan.radix_mod_capacity),
+            Float64(extreme_plan.radix_squared_mod_capacity),
+            1.0,
+            Float64(extreme_capacity),
+        )
+        extreme_expected = Base.mod(
+            BigInt(5) * (extreme_capacity - extreme_p2) + BigInt(25) * extreme_p2,
+            extreme_capacity,
+        )
+        @test extreme_low + extreme_high == Float64(extreme_expected)
+
+        # Directly exercise the recombination helper at both working-capacity
+        # endpoints. The oracle evaluates the three-product identity with
+        # BigInt and reduces once; it does not repeat the helper's modular
+        # double-and-add implementation. These helper cases do not imply that
+        # GEMM planning admits a nonzero product at Q = 2^53.
+        function check_recombination_endpoint(
+            p0::BigInt,
+            p1::BigInt,
+            p2::BigInt,
+            input_radix::BigInt,
+            output_radix::BigInt,
+            output_high::BigInt,
+            capacity::BigInt,
+        )
+            @test all(product -> 0 <= product < capacity, (p0, p1, p2))
+            expected =
+                Base.mod(p0 + input_radix * (p1 - p0 - p2) + input_radix^2 * p2, capacity)
+            low, high = mod._karatsuba_recombine(
+                Float64(p0),
+                Float64(p1),
+                Float64(p2),
+                Float64(Base.mod(input_radix, capacity)),
+                Float64(Base.mod(input_radix^2, capacity)),
+                Float64(output_radix),
+                Float64(capacity),
+            )
+            low_integer = BigInt(low)
+            high_integer = BigInt(high)
+            reconstructed = low_integer + output_radix * high_integer
+            @test 0 <= low_integer < output_radix
+            @test 0 <= high_integer < output_high
+            @test reconstructed == expected
+            @test Base.mod(reconstructed, capacity) == expected
+            return nothing
+        end
+
+        unit_capacity = BigInt(1)
+        check_recombination_endpoint(
+            BigInt(0),
+            BigInt(0),
+            BigInt(0),
+            BigInt(7),
+            BigInt(1),
+            BigInt(1),
+            unit_capacity,
+        )
+
+        endpoint_capacity = BigInt(2)^53
+        endpoint_radices =
+            (BigInt(1), BigInt(2), BigInt(2)^26, BigInt(2)^52, endpoint_capacity)
+        @test all(radix -> rem(endpoint_capacity, radix) == 0, endpoint_radices)
+        endpoint_products = (
+            (endpoint_capacity - 1, BigInt(0), BigInt(0)),
+            (BigInt(0), endpoint_capacity - 2, BigInt(0)),
+            (BigInt(0), BigInt(0), endpoint_capacity - 1),
+            (endpoint_capacity - 1, endpoint_capacity - 2, endpoint_capacity - 3),
+        )
+        for output_radix in endpoint_radices
+            output_high = div(endpoint_capacity, output_radix)
+
+            # Isolate integer div/rem split boundaries while retaining exact
+            # Q-sized inputs to the shared helper.
+            split_targets = unique(
+                BigInt[
+                    target for target in (
+                        BigInt(0),
+                        BigInt(1),
+                        output_radix - 1,
+                        output_radix,
+                        endpoint_capacity - 1,
+                    ) if 0 <= target < endpoint_capacity
+                ],
+            )
+            for target in split_targets
+                check_recombination_endpoint(
+                    BigInt(0),
+                    target,
+                    BigInt(0),
+                    BigInt(1),
+                    output_radix,
+                    output_high,
+                    endpoint_capacity,
+                )
+            end
+
+            # The input radix is independent from the destination split.
+            # Q-3 and Q-2 exercise large odd/even modular coefficients, while
+            # the canonical product residues include Q-1 and Q-2.
+            for input_radix in (BigInt(5), endpoint_capacity - 3, endpoint_capacity - 2)
+                for (p0_endpoint, p1_endpoint, p2_endpoint) in endpoint_products
+                    check_recombination_endpoint(
+                        p0_endpoint,
+                        p1_endpoint,
+                        p2_endpoint,
+                        input_radix,
+                        output_radix,
+                        output_high,
+                        endpoint_capacity,
+                    )
+                end
+            end
+        end
+
+        # to_karatsuba retains the exact high quotient even when it exceeds
+        # the supplied high-plane metadata. Such values violate the canonical
+        # input_bound promise required by stripe GEMM; conversion is preserved.
+        high_quotient =
+            mod.to_karatsuba([14]; low_modulus = 2, high_modulus = 3, modulus = 101)
+        @test mod.low_part(high_quotient) == [0]
+        @test mod.high_part(high_quotient) == [7]
+        @test mod.high_modulus(high_quotient) == 3
+        @test mod.from_karatsuba(Int, high_quotient) == [14]
+
+        exact_input_bound = 2^25 + 1
+        exact_modulus = 2^53 - 2^50
+        exact_budget =
+            mod.find_max_stripe_ops(Float64, exact_input_bound; modulus = exact_modulus)
+        @test exact_budget == 1
+        @test BigInt(exact_modulus - 1) +
+              BigInt(exact_budget) * BigInt(exact_input_bound - 1)^2 == BigInt(2)^53 - 1
+        @test BigInt(exact_modulus - 1) +
+              BigInt(exact_budget + 1) * BigInt(exact_input_bound - 1)^2 > BigInt(2)^53 - 1
+    end
 
     # Unsupported elem_type keywords fail in keyword dispatch before the
     # constructor body can allocate a GPU array.

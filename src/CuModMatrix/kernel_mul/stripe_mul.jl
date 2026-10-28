@@ -328,6 +328,60 @@ function _stripe_effective_modulus(stored_modulus, modulus_override)
     return Int(modulus)
 end
 
+function _stripe_mul_matrix!(
+    C::CuModMatrix,
+    A::CuModMatrix,
+    B::CuModMatrix,
+    require_matching_input_moduli::Bool;
+    modulus_override = nothing,
+    input_bound = nothing,
+    max_ops = nothing,
+    clear_output_padding::Bool = true,
+    preflight_only::Bool = false,
+)
+    effective_modulus = _stripe_effective_modulus(modulus(C), modulus_override)
+    if require_matching_input_moduli
+        modulus(A) == modulus(B) || throw(
+            CuModArrayModulusMismatchException(
+                "Input matrices must have the same modulus N",
+            ),
+        )
+    else
+        input_bound !== nothing && modulus_override !== nothing || throw(
+            ArgumentError(
+                "independent input moduli require explicit input_bound and modulus_override",
+            ),
+        )
+    end
+    size(A, 2) == size(B, 1) || throw(
+        CuModArraySizeMismatchException(
+            "Matrix dimensions do not match for multiplication",
+        ),
+    )
+    size(C) == (size(A, 1), size(B, 2)) ||
+        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
+    eltype(parent(A)) === eltype(parent(B)) === eltype(parent(C)) ||
+        throw(ArgumentError("matrix product element types do not match"))
+    max_ops === nothing ||
+        (max_ops isa Integer && max_ops > 0) ||
+        throw(ArgumentError("max_ops must be a positive integer"))
+
+    bound = input_bound === nothing ? modulus(A) : input_bound
+    Cdata = _stripe_logical_data(C)
+    Adata = _stripe_logical_data(A)
+    Bdata = _stripe_logical_data(B)
+    chunk = _stripe_preflight(Cdata, Adata, Bdata, effective_modulus, bound, max_ops)
+    preflight_only && return C
+
+    if clear_output_padding
+        fill!(parent(C), zero(eltype(parent(C))))
+    else
+        fill!(Cdata, zero(eltype(Cdata)))
+    end
+    _stripe_run!(Cdata, Adata, Bdata, effective_modulus, chunk, nothing)
+    return C
+end
+
 """
     stripe_mul!(C, A, B; modulus_override=nothing, input_bound=nothing, max_ops=nothing)
 
@@ -349,39 +403,15 @@ function stripe_mul!(
     input_bound = nothing,
     max_ops = nothing,
 )
-    effective_modulus = _stripe_effective_modulus(modulus(C), modulus_override)
-    modulus(A) == modulus(B) || throw(
-        CuModArrayModulusMismatchException("Input matrices must have the same modulus N"),
+    return _stripe_mul_matrix!(
+        C,
+        A,
+        B,
+        true;
+        modulus_override = modulus_override,
+        input_bound = input_bound,
+        max_ops = max_ops,
     )
-    size(A, 2) == size(B, 1) || throw(
-        CuModArraySizeMismatchException(
-            "Matrix dimensions do not match for multiplication",
-        ),
-    )
-    size(C) == (size(A, 1), size(B, 2)) ||
-        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
-    eltype(parent(A)) === eltype(parent(B)) === eltype(parent(C)) ||
-        throw(ArgumentError("matrix product element types do not match"))
-    max_ops === nothing ||
-        (max_ops isa Integer && max_ops > 0) ||
-        throw(ArgumentError("max_ops must be a positive integer"))
-
-    bound = input_bound === nothing ? modulus(A) : input_bound
-    Cdata = _stripe_logical_data(C)
-    Adata = _stripe_logical_data(A)
-    Bdata = _stripe_logical_data(B)
-    _stripe_preflight(Cdata, Adata, Bdata, effective_modulus, bound, max_ops)
-
-    fill!(parent(C), zero(eltype(parent(C))))
-    _stripe_mul!(
-        Cdata,
-        Adata,
-        Bdata;
-        modulus = effective_modulus,
-        input_bound = bound,
-        max_ops,
-    )
-    return C
 end
 
 """
