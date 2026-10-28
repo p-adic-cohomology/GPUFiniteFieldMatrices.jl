@@ -1493,7 +1493,7 @@ function Base.copy(A::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
         copy(high_part(A));
         low_modulus = copy(low_modulus(A)),
         high_modulus = copy(high_modulus(A)),
-        modulus = low_modulus(A) * high_modulus(A),
+        modulus = modulus(A),
     )
     if !(A.plan==nothing)
         initialize_plan!(B)
