@@ -2,6 +2,139 @@ function test_karatsuba_api_regressions()
     @testset "Karatsuba required GPU API regressions" begin
         mod = GPUFiniteFieldMatrices
         q = 100
+
+        @testset "Float32 and Float64 Karatsuba negation integration" begin
+            tile_width = mod.TILE_WIDTH
+
+            function check_gpu_negation(
+                ::Type{T},
+                N1_big::BigInt,
+                N2_big::BigInt,
+                raw_cases,
+            ) where {T<:AbstractFloat}
+                M_big = N1_big * N2_big
+                exact_limit = T === Float32 ? BigInt(2)^24 : BigInt(2)^53
+                @test M_big^2 <= exact_limit
+                @test M_big^2 <= BigInt(typemax(Int))
+
+                N1 = Int(N1_big)
+                N2 = Int(N2_big)
+                M = Int(M_big)
+                storage_length =
+                    max(tile_width, cld(length(raw_cases), tile_width) * tile_width)
+                cases = [raw_cases[mod1(i, length(raw_cases))] for i = 1:storage_length]
+                low_values = T[pair[1] for pair in cases]
+                high_values = T[pair[2] for pair in cases]
+
+                source_low =
+                    mod.CuModVector{T}(CUDA.CuArray(low_values); modulus = N1, mod = false)
+                source_high =
+                    mod.CuModVector{T}(CUDA.CuArray(high_values); modulus = N2, mod = false)
+                destination_low = mod.CuModVector{T}(
+                    CUDA.zeros(T, storage_length);
+                    modulus = N1,
+                    mod = false,
+                )
+                destination_high = mod.CuModVector{T}(
+                    CUDA.zeros(T, storage_length);
+                    modulus = N2,
+                    mod = false,
+                )
+                A = mod.KaratsubaVector{T}(
+                    source_low,
+                    source_high;
+                    low_modulus = N1,
+                    high_modulus = N2,
+                    modulus = M,
+                )
+                K = mod.KaratsubaVector{T}(
+                    destination_low,
+                    destination_high;
+                    low_modulus = N1,
+                    high_modulus = N2,
+                    modulus = M,
+                )
+
+                source_low_parent = parent(mod.low_part(A))
+                source_high_parent = parent(mod.high_part(A))
+                destination_low_parent = parent(mod.low_part(K))
+                destination_high_parent = parent(mod.high_part(K))
+                source_low_before = Array(source_low_parent)
+                source_high_before = Array(source_high_parent)
+                @test mod.initialize_plan!(A) === A
+                @test mod.initialize_plan!(K) === K
+                source_plan = A.plan
+                destination_plan = K.plan
+                fill!(parent(source_plan), T(17))
+                fill!(parent(destination_plan), T(19))
+                source_plan_before = Array(parent(source_plan))
+                destination_plan_before = Array(parent(destination_plan))
+
+                expected_packed = BigInt[
+                    Base.mod(-(BigInt(pair[1]) + N1_big * BigInt(pair[2])), M_big) for
+                    pair in cases
+                ]
+                expected_low = T[Base.mod(value, N1_big) for value in expected_packed]
+                expected_high = T[div(value, N1_big) for value in expected_packed]
+
+                @test mod.negate!(K, A) === K
+                @test parent(mod.low_part(A)) === source_low_parent
+                @test parent(mod.high_part(A)) === source_high_parent
+                @test parent(mod.low_part(K)) === destination_low_parent
+                @test parent(mod.high_part(K)) === destination_high_parent
+                @test parent(mod.low_part(K)) isa CUDA.CuArray{T,1}
+                @test parent(mod.high_part(K)) isa CUDA.CuArray{T,1}
+                @test eltype(mod.low_part(K)) === T
+                @test eltype(mod.high_part(K)) === T
+                @test size(mod.low_part(K)) == (storage_length,)
+                @test size(mod.high_part(K)) == (storage_length,)
+                @test Array(mod.low_part(K)) == expected_low
+                @test Array(mod.high_part(K)) == expected_high
+                reconstructed = mod.from_karatsuba(T, K)
+                @test reconstructed isa CUDA.CuArray{T,1}
+                @test Array(reconstructed) == T.(expected_packed)
+                @test Array(source_low_parent) == source_low_before
+                @test Array(source_high_parent) == source_high_before
+                @test (mod.low_modulus(A), mod.high_modulus(A), mod.modulus(A)) ==
+                      (N1, N2, M)
+                @test (mod.low_modulus(K), mod.high_modulus(K), mod.modulus(K)) ==
+                      (N1, N2, M)
+                @test mod.modulus(mod.low_part(A)) == N1
+                @test mod.modulus(mod.high_part(A)) == N2
+                @test mod.modulus(mod.low_part(K)) == N1
+                @test mod.modulus(mod.high_part(K)) == N2
+                @test A.plan === source_plan
+                @test K.plan === destination_plan
+                @test Array(parent(source_plan)) == source_plan_before
+                @test Array(parent(destination_plan)) == destination_plan_before
+            end
+
+            canonical_cases = [(low, high) for high = 0:9 for low = 0:9]
+            check_gpu_negation(Float32, BigInt(10), BigInt(10), canonical_cases)
+            check_gpu_negation(Float64, BigInt(10), BigInt(10), canonical_cases)
+
+            float32_boundary_cases =
+                ((0, 0), (1, 0), (0, 1), (63, 63), (63, 1), (1, 63), (63, 0), (0, 63))
+            check_gpu_negation(Float32, BigInt(64), BigInt(64), float32_boundary_cases)
+
+            float64_boundary_cases = (
+                (0, 0),
+                (1, 0),
+                (0, 1),
+                (4, 18_981_252),
+                (4, 1),
+                (1, 18_981_252),
+                (4, 0),
+                (0, 18_981_252),
+            )
+            check_gpu_negation(
+                Float64,
+                BigInt(5),
+                BigInt(18_981_253),
+                float64_boundary_cases,
+            )
+        end
+
         a_values = Float64[20 30; 40 50]
         b_values = Float64[2 1; 0 3]
         a = mod.CuModMatrix{Float64}(a_values; modulus = q)
