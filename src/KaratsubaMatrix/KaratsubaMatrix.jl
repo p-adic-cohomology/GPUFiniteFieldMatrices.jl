@@ -490,6 +490,32 @@ const nKMuls = 3
 
 
 # the stuff in this function should apply to the general mul!, but with gemm instead of gemv
+@inline _karatsuba_gemv_whole_cuarray_parent(A::CUDA.CuArray) = true
+
+@inline function _karatsuba_gemv_whole_cuarray_parent(A::CuModArray)
+    storage = parent(A)
+    return storage isa CUDA.CuArray && size(storage) == size(A)
+end
+
+@inline _karatsuba_gemv_whole_cuarray_parent(::AbstractArray) = false
+
+@inline function _karatsuba_gemv_batch_containers_supported(mats, vecs, targets)
+    return length(mats) == 3 &&
+           length(vecs) == 3 &&
+           length(targets) == 3 &&
+           mats isa Vector{<:CUDA.CuArray} &&
+           vecs isa Vector{<:CUDA.CuArray} &&
+           targets isa Vector{<:CUDA.CuArray} &&
+           isconcretetype(eltype(mats)) &&
+           isconcretetype(eltype(vecs)) &&
+           isconcretetype(eltype(targets)) &&
+           ndims(eltype(mats)) == 2 &&
+           ndims(eltype(vecs)) == 1 &&
+           ndims(eltype(targets)) == 1 &&
+           eltype(eltype(mats)) === eltype(eltype(vecs)) &&
+           eltype(eltype(mats)) === eltype(eltype(targets))
+end
+
 function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
         error("Matrices must have the same modulus m")
@@ -540,35 +566,59 @@ function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray
     (zero_ptr, one_ptr) = cublas_scalars_f64()
 
 
-    Bplan_logical = _logical_view(parent(B.plan), size(B.plan))
     # C.plan is the independent, output-sized destination for the third
     # product. B.plan remains the second product's input sum.
     Cplan_output = _logical_view(parent(C.plan), size(C.plan))
-    targets = [
-        _logical_view(parent(low_part(C)), size(low_part(C))),
-        _logical_view(parent(high_part(C)), size(high_part(C))),
-        Cplan_output,
-    ]
-    mats = [
-        _logical_view(parent(low_part(A)), size(low_part(A))),
-        _logical_view(parent(A.plan), size(A.plan)),
-        _logical_view(parent(high_part(A)), size(high_part(A))),
-    ]
-    vecs = [
-        _logical_view(parent(low_part(B)), size(low_part(B))),
-        Bplan_logical,
-        _logical_view(parent(high_part(B)), size(high_part(B))),
-    ]
-    lda = stride(mats[1], 2)
-    incx = stride(vecs[1], 1)
-    incy = stride(targets[1], 1)
-    uniform_strides =
-        all(stride(matrix, 2) == lda for matrix in mats) &&
-        all(stride(vector, 1) == incx for vector in vecs) &&
-        all(stride(target, 1) == incy for target in targets)
-    if uniform_strides
-        _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
+    matrix_parents = (parent(low_part(A)), parent(A.plan), parent(high_part(A)))
+    vector_parents = (parent(low_part(B)), parent(B.plan), parent(high_part(B)))
+    target_parents = (parent(low_part(C)), parent(high_part(C)), parent(C.plan))
+    whole_parent_operands =
+        _karatsuba_gemv_whole_cuarray_parent(low_part(A)) &&
+        _karatsuba_gemv_whole_cuarray_parent(A.plan) &&
+        _karatsuba_gemv_whole_cuarray_parent(high_part(A)) &&
+        _karatsuba_gemv_whole_cuarray_parent(low_part(B)) &&
+        _karatsuba_gemv_whole_cuarray_parent(B.plan) &&
+        _karatsuba_gemv_whole_cuarray_parent(high_part(B)) &&
+        _karatsuba_gemv_whole_cuarray_parent(low_part(C)) &&
+        _karatsuba_gemv_whole_cuarray_parent(high_part(C)) &&
+        _karatsuba_gemv_whole_cuarray_parent(C.plan)
+    if whole_parent_operands
+        mats = collect(matrix_parents)
+        vecs = collect(vector_parents)
+        targets = collect(target_parents)
+        batch_supported = _karatsuba_gemv_batch_containers_supported(mats, vecs, targets)
+        if batch_supported
+            lda = stride(mats[1], 2)
+            incx = stride(vecs[1], 1)
+            incy = stride(targets[1], 1)
+            batch_supported =
+                all(stride(matrix, 2) == lda for matrix in mats) &&
+                all(stride(vector, 1) == incx for vector in vecs) &&
+                all(stride(target, 1) == incy for target in targets)
+        end
+        if batch_supported
+            _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
+        else
+            for i in eachindex(mats)
+                _CUDA_BLAS.gemv!('N', one_ptr, mats[i], vecs[i], zero_ptr, targets[i])
+            end
+        end
     else
+        mats = [
+            _logical_view(parent(low_part(A)), size(low_part(A))),
+            _logical_view(parent(A.plan), size(A.plan)),
+            _logical_view(parent(high_part(A)), size(high_part(A))),
+        ]
+        vecs = [
+            _logical_view(parent(low_part(B)), size(low_part(B))),
+            _logical_view(parent(B.plan), size(B.plan)),
+            _logical_view(parent(high_part(B)), size(high_part(B))),
+        ]
+        targets = [
+            _logical_view(parent(low_part(C)), size(low_part(C))),
+            _logical_view(parent(high_part(C)), size(high_part(C))),
+            Cplan_output,
+        ]
         for i in eachindex(mats)
             _CUDA_BLAS.gemv!('N', one_ptr, mats[i], vecs[i], zero_ptr, targets[i])
         end

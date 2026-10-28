@@ -717,5 +717,77 @@ if CUDA.functional()
             @test all(==(sentinel), _padding_values_for_test(raw_dirty.x.plan))
             @test all(==(sentinel), _padding_values_for_test(raw_dirty.y.plan))
         end
+
+        aligned_rows, aligned_cols = 32, 32
+        aligned_column = 2
+        aligned_matrix_low = zeros(Float64, aligned_rows, aligned_cols)
+        aligned_matrix_high = zeros(Float64, aligned_rows, aligned_cols)
+        aligned_matrix_low[:, aligned_column] .= 1.0
+        aligned_matrix_high[:, aligned_column] .= 1.0
+        aligned_vector_low = zeros(Float64, aligned_cols)
+        aligned_vector_high = zeros(Float64, aligned_cols)
+        aligned_vector_low[aligned_column] = 1.0
+        aligned_vector_high[aligned_column] = 9.0
+        aligned_expected_matrix =
+            BigInt.(aligned_matrix_low) .+ BigInt(11) .* BigInt.(aligned_matrix_high)
+        aligned_expected_vector =
+            BigInt.(aligned_vector_low) .+ BigInt(11) .* BigInt.(aligned_vector_high)
+        aligned_expected = Float64.(
+            Base.mod.(aligned_expected_matrix * aligned_expected_vector, BigInt(121)),
+        )
+        @test all(==(111.0), aligned_expected)
+
+        aligned = make_gemv_case(
+            aligned_matrix_low,
+            aligned_matrix_high,
+            aligned_vector_low,
+            aligned_vector_high,
+        )
+        aligned_matrix_values =
+            (mod.low_part(aligned.A), aligned.A.plan, mod.high_part(aligned.A))
+        aligned_vector_values =
+            (mod.low_part(aligned.x), aligned.x.plan, mod.high_part(aligned.x))
+        aligned_target_values =
+            (mod.low_part(aligned.y), mod.high_part(aligned.y), aligned.y.plan)
+        aligned_mats = [map(parent, aligned_matrix_values)...]
+        aligned_vecs = [map(parent, aligned_vector_values)...]
+        aligned_targets = [map(parent, aligned_target_values)...]
+        @test all(
+            size(aligned_mats[i]) == size(aligned_matrix_values[i]) for
+            i in eachindex(aligned_mats)
+        )
+        @test all(
+            size(aligned_vecs[i]) == size(aligned_vector_values[i]) for
+            i in eachindex(aligned_vecs)
+        )
+        @test all(
+            size(aligned_targets[i]) == size(aligned_target_values[i]) for
+            i in eachindex(aligned_targets)
+        )
+        @test all(
+            aligned_mats[i] === parent(aligned_matrix_values[i]) for
+            i in eachindex(aligned_mats)
+        )
+        @test all(
+            aligned_vecs[i] === parent(aligned_vector_values[i]) for
+            i in eachindex(aligned_vecs)
+        )
+        @test all(
+            aligned_targets[i] === parent(aligned_target_values[i]) for
+            i in eachindex(aligned_targets)
+        )
+        @test mod._karatsuba_gemv_batch_containers_supported(
+            aligned_mats,
+            aligned_vecs,
+            aligned_targets,
+        )
+        aligned_lda = stride(aligned_mats[1], 2)
+        aligned_incx = stride(aligned_vecs[1], 1)
+        aligned_incy = stride(aligned_targets[1], 1)
+        @test all(stride(matrix, 2) == aligned_lda for matrix in aligned_mats)
+        @test all(stride(vector, 1) == aligned_incx for vector in aligned_vecs)
+        @test all(stride(target, 1) == aligned_incy for target in aligned_targets)
+        CUDA.@sync mod.karatsuba_gemv!(aligned.y, aligned.A, aligned.x)
+        @test Array(aligned.y) == aligned_expected
     end
 end

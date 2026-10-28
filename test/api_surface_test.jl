@@ -1402,6 +1402,80 @@ end
     )
 end
 
+@testset "CPU Karatsuba GEMV batch dispatch contract" begin
+    mod = GPUFiniteFieldMatrices
+    blas = mod._CUDA_BLAS
+
+    # These are host vectors of types only; no CuArray is constructed or
+    # allocated, and no CUDA BLAS method is called here.
+    matrix_storage = CUDA.CuArray{Float64,2,CUDA.DeviceMemory}
+    vector_storage = CUDA.CuArray{Float64,1,CUDA.DeviceMemory}
+    batch_mats = Vector{matrix_storage}(undef, 3)
+    batch_vecs = Vector{vector_storage}(undef, 3)
+    batch_targets = Vector{vector_storage}(undef, 3)
+
+    matrix_view_storage =
+        Base.typeintersect(SubArray{Float64,2}, getfield(blas, :StridedCuMatrix){Float64})
+    vector_view_storage =
+        Base.typeintersect(SubArray{Float64,1}, getfield(blas, :StridedCuVector){Float64})
+    view_mats = Vector{matrix_view_storage}(undef, 3)
+    view_vecs = Vector{vector_view_storage}(undef, 3)
+    view_targets = Vector{vector_view_storage}(undef, 3)
+
+    abstract_mats = Vector{CUDA.CuArray}(undef, 3)
+    abstract_vecs = Vector{CUDA.CuArray}(undef, 3)
+    abstract_targets = Vector{CUDA.CuArray}(undef, 3)
+    empty_mats = Vector{matrix_storage}()
+    empty_vecs = Vector{vector_storage}()
+    empty_targets = Vector{vector_storage}()
+
+    @test mod._karatsuba_gemv_batch_containers_supported(
+        batch_mats,
+        batch_vecs,
+        batch_targets,
+    )
+    @test !mod._karatsuba_gemv_batch_containers_supported(
+        view_mats,
+        view_vecs,
+        view_targets,
+    )
+    @test !mod._karatsuba_gemv_batch_containers_supported(
+        abstract_mats,
+        abstract_vecs,
+        abstract_targets,
+    )
+    @test !mod._karatsuba_gemv_batch_containers_supported(
+        empty_mats,
+        empty_vecs,
+        empty_targets,
+    )
+
+    batch_signature = Tuple{
+        Char,
+        Ptr{Float64},
+        typeof(batch_mats),
+        typeof(batch_vecs),
+        Ptr{Float64},
+        typeof(batch_targets),
+    }
+    @test hasmethod(getfield(blas, :gemv_batched!), batch_signature)
+
+    unsafe_batch = getfield(blas, :unsafe_batch)
+    @test hasmethod(unsafe_batch, Tuple{typeof(batch_mats)})
+    @test hasmethod(unsafe_batch, Tuple{typeof(batch_vecs)})
+    @test hasmethod(unsafe_batch, Tuple{typeof(batch_targets)})
+
+    view_gemv_signature = Tuple{
+        Char,
+        Ptr{Float64},
+        matrix_view_storage,
+        vector_view_storage,
+        Ptr{Float64},
+        vector_view_storage,
+    }
+    @test hasmethod(getfield(blas, :gemv!), view_gemv_signature)
+end
+
 if CUDA.functional()
     @testset "CUDA-backed Karatsuba plan lifecycle across component storage" begin
         mod = GPUFiniteFieldMatrices
