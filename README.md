@@ -151,8 +151,20 @@ scratch is still initialized separately.
 For `LinearAlgebra.mul!`, all three matrices must use the same representation
 modulus, the inner dimensions of `A` and `B` must match, and all three matrices
 must have initialized plans. The caller must size `C` to `(size(A, 1), size(B, 2))`:
-this method does not explicitly check the destination dimensions before CUDA
-work begins. This multiplication path currently supports `Float64` storage only.
+the stripe preflight checks this before any device write. This multiplication
+path currently supports `Float64` storage only.
+
+For Karatsuba matrix multiplication, `A` and `B` must share input low radix
+`R`, while `C` may use an independent low radix `R_C`. The output components
+represent the product modulo `Q = R_C * high_modulus(C)`. The shared
+representation modulus `M` is compatibility metadata; the matrix product is
+not reduced modulo `M`. Correctness assumes canonical input components:
+`0 <= A.low < R`, `0 <= A.high < high_modulus(A)`, `0 <= B.low < R`, and
+`0 <= B.high < high_modulus(B)`. This is a caller promise and is not checked by
+a runtime scan. Constructors and conversions do not establish those bounds:
+`to_karatsuba` preserves the exact high quotient, and `CuModArray` wrappers
+made with `mod=false` retain raw component values. Choose high moduli that
+bound the supplied high components.
 
 For CPU-only data, `to_karatsuba` returns CPU component arrays and
 `from_karatsuba(T, K)` returns `Array{T}`. GPU-backed components produce a plain
@@ -174,11 +186,8 @@ behavior is deferred to a separate follow-up.
 
 The specialized matrix-vector path is available through qualified access as
 `GPUFiniteFieldMatrices.karatsuba_gemv!`.
-The `*` operator and matrix-matrix keyword paths remain unsupported; these
-renames change the API spellings without changing those behaviors. Three
-existing Karatsuba matrix-matrix calls still pass legacy `R`, `P`, and
-`maxopsOverride` keywords and raise `MethodError`; this path remains tracked by
-Phase 2 issue `gfm-2x1`.
+The `*` operator and matrix-matrix keyword paths remain unsupported; use the
+mutating `LinearAlgebra.mul!` path described above for Karatsuba matrix products.
 
 Per-call reduction moduli use the `modulus_override` keyword, for example
 `elementwise_multiply!(C, A, B; modulus_override = 7)` or
