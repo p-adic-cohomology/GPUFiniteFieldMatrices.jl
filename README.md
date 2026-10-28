@@ -90,9 +90,12 @@ take the same type and the modulus as a keyword. For identities, use
 `identity_matrix(CuModMatrix{T}, n; modulus = N)` or
 `CuModMatrix{T}(I, rows, cols; modulus = N)`.
 
-Use `modulus(A)` to inspect the modulus, `size(A)` for the logical dimensions,
-and `parent(A)` for the padded GPU storage. The parent's dimensions may be
-larger than the logical size.
+Newly allocated `CuModArray` storage rounds each logical dimension up to a
+multiple of 32. Constructors and factories initialize the added padding to
+zero, but later elementwise operations may change it; logical operations ignore
+padding contents. `size(A)` reports logical dimensions and `parent(A)` returns
+the GPU storage. Wrapping an existing `CuArray` preserves its storage and does
+not copy, pad, or clear it.
 
 #### LinearAlgebra inversion and PLUQ
 
@@ -151,7 +154,9 @@ modulus)` or the corresponding `KaratsubaVector{T}` form for GPU-backed zero
 split buffers. Select CPU storage with `zeros(KaratsubaMatrix{T,Matrix{T}}, ...)`
 or `zeros(KaratsubaVector{T,Vector{T}}, ...)`. The requested component storage
 type selects the backend; the former `use_gpu` keyword has been removed. Plan
-scratch is still initialized separately.
+scratch is still initialized separately. The default GPU factory uses padded
+`CuModArray` components and plans. Explicit CPU and raw `CuArray` component
+factories retain their requested logical shapes and backend.
 
 For `LinearAlgebra.mul!`, all three matrices must use the same representation
 modulus, the inner dimensions of `A` and `B` must match, and all three matrices

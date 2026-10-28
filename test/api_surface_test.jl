@@ -1410,7 +1410,7 @@ if CUDA.functional()
             plan = K.plan
             @test typeof(plan) === mod.CuModArray{eltype(K),length(dims)}
             @test size(plan) == dims
-            @test size(parent(plan)) == map(d -> d + mod.TILE_WIDTH, dims)
+            @test size(parent(plan)) == map(mod._padded_extent, dims)
             @test modulus(plan) == low_modulus(K)
             @test parent(plan) isa CUDA.CuArray
             @test CUDA.device(parent(plan)) == CUDA.device()

@@ -510,49 +510,79 @@ function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray
     # end
 
     tw = TILE_WIDTH
+    rows, cols = size(low_part(A))
+    vector_length = length(low_part(B))
+    if rows == 0
+        return C
+    elseif cols == 0
+        fill!(_logical_view(parent(low_part(C)), size(low_part(C))), 0.0)
+        fill!(_logical_view(parent(high_part(C)), size(high_part(C))), 0.0)
+        return C
+    end
 
-    totalsize = length(parent(low_part(A)))
-
-    threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
-        parent(A.plan),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        parent(B.plan),
-        parent(low_part(B)),
-        parent(high_part(B)),
-        low_modulus(A),
-    )
+    logical_count = max(length(A.plan), length(B.plan))
+    if logical_count > 0
+        threads = tw
+        blocks = cld(logical_count, threads)
+        @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
+            _logical_view(parent(A.plan), size(A.plan)),
+            _logical_view(parent(low_part(A)), size(low_part(A))),
+            _logical_view(parent(high_part(A)), size(high_part(A))),
+            _logical_view(parent(B.plan), size(B.plan)),
+            _logical_view(parent(low_part(B)), size(low_part(B))),
+            _logical_view(parent(high_part(B)), size(high_part(B))),
+            low_modulus(A),
+        )
+    end
     # add!(A.plan,low_part(A),high_part(A); modulus_override=2*low_modulus(A))
     # add!(B.plan,low_part(B),high_part(B); modulus_override=2*low_modulus(B))
 
     (zero_ptr, one_ptr) = cublas_scalars_f64()
 
 
-    targets = [parent(low_part(C)), parent(high_part(C)), parent(B.plan)]
-    mats = [parent(low_part(A)), parent(A.plan), parent(high_part(A))]
-    vecs = [parent(low_part(B)), parent(B.plan), parent(high_part(B))]
+    Bplan_logical = _logical_view(parent(B.plan), size(B.plan))
+    # Preserve the existing B.plan scratch reuse when its logical extent is
+    # large enough. Tall GEMV needs a separate logical output vector rather
+    # than relying on the input plan's physical padding.
+    Bplan_output_data = if rows <= length(Bplan_logical)
+        parent(B.plan)
+    else
+        CUDA.zeros(eltype(parent(B.plan)), rows)
+    end
+    Bplan_output = view(Bplan_output_data, 1:rows)
+    targets = [
+        _logical_view(parent(low_part(C)), size(low_part(C))),
+        _logical_view(parent(high_part(C)), size(high_part(C))),
+        Bplan_output,
+    ]
+    mats = [
+        _logical_view(parent(low_part(A)), size(low_part(A))),
+        _logical_view(parent(A.plan), size(A.plan)),
+        _logical_view(parent(high_part(A)), size(high_part(A))),
+    ]
+    vecs = [
+        _logical_view(parent(low_part(B)), size(low_part(B))),
+        Bplan_logical,
+        _logical_view(parent(high_part(B)), size(high_part(B))),
+    ]
     _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
 
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(low_part(A)),parent(low_part(B)),zero_ptr,parent(low_part(C)))
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(A.plan),parent(B.plan),zero_ptr,parent(high_part(C)))
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(high_part(A)),parent(high_part(B)),zero_ptr,parent(B.plan))
 
-    tw = TILE_WIDTH
-
-    totalsize = length(parent(low_part(C)))
-
-    threads = tw
-    blocks = totalsize ÷ tw
-    @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_2!(
-        parent(low_part(C)),
-        parent(high_part(C)),
-        parent(B.plan),
-        low_modulus(C),
-        high_modulus(C),
-    )
+    totalsize = rows
+    if totalsize > 0
+        threads = tw
+        blocks = cld(totalsize, threads)
+        @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_2!(
+            _logical_view(parent(low_part(C)), size(low_part(C))),
+            _logical_view(parent(high_part(C)), size(high_part(C))),
+            Bplan_output,
+            low_modulus(C),
+            high_modulus(C),
+        )
+    end
 
 
     C
@@ -1263,18 +1293,19 @@ function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     totalsize = length(parent(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_add_kernel!(
-        parent(low_part(K)),
-        parent(high_part(K)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        parent(low_part(B)),
-        parent(high_part(B)),
-        low_modulus(A),
-        high_modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_add_kernel!(
+            parent(low_part(K)),
+            parent(high_part(K)),
+            parent(low_part(A)),
+            parent(high_part(A)),
+            parent(low_part(B)),
+            parent(high_part(B)),
+            low_modulus(A),
+            high_modulus(A),
+        )
+    end
 
 
     K
@@ -1357,19 +1388,20 @@ function sub!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     totalsize = length(parent(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_sub_kernel!(
-        parent(low_part(K)),
-        parent(high_part(K)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        parent(low_part(B)),
-        parent(high_part(B)),
-        low_modulus(A),
-        high_modulus(A),
-        modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_sub_kernel!(
+            parent(low_part(K)),
+            parent(high_part(K)),
+            parent(low_part(A)),
+            parent(high_part(A)),
+            parent(low_part(B)),
+            parent(high_part(B)),
+            low_modulus(A),
+            high_modulus(A),
+            modulus(A),
+        )
+    end
 
     # negate!(K,B)
     # add!(K,K,A)
@@ -1395,17 +1427,18 @@ function scalar_multiply!(B::KaratsubaArray, A::KaratsubaArray, s::Number)
     totalsize = length(parent(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_scalar_multiply_kernel!(
-        parent(low_part(B)),
-        parent(high_part(B)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        s,
-        low_modulus(A),
-        high_modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_scalar_multiply_kernel!(
+            parent(low_part(B)),
+            parent(high_part(B)),
+            parent(low_part(A)),
+            parent(high_part(A)),
+            s,
+            low_modulus(A),
+            high_modulus(A),
+        )
+    end
 
     #=
     high_part(B) .= mod.(trunc.((s*low_part(A))/modulus(A)),high_modulus(A))
@@ -1444,17 +1477,18 @@ function negate!(K::KaratsubaArray, A::KaratsubaArray)
     totalsize = length(parent(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(
-        parent(low_part(K)),
-        parent(high_part(K)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        low_modulus(A),
-        high_modulus(A),
-        modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(
+            parent(low_part(K)),
+            parent(high_part(K)),
+            parent(low_part(A)),
+            parent(high_part(A)),
+            low_modulus(A),
+            high_modulus(A),
+            modulus(A),
+        )
+    end
 
 
 

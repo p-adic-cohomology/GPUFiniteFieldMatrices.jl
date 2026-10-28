@@ -2,6 +2,13 @@
 const TILE_WIDTH = 32
 const DEFAULT_TYPE = Float32
 
+@inline _padded_extent(d::Integer) = cld(d, TILE_WIDTH) * TILE_WIDTH
+@inline _padded_size(dims::Dims{D}) where {D} = ntuple(i -> _padded_extent(dims[i]), D)
+
+@inline function _logical_view(data::AbstractArray{T,D}, dims::Dims{D}) where {T,D}
+    return view(data, ntuple(i -> 1:dims[i], D)...)
+end
+
 struct CuModArraySizeMismatchException <: Exception
     message::String
 end
@@ -33,8 +40,11 @@ end
 """
     CuModArray{T}
 
-A matrix over a finite field mod N, implemented using CuArray. The internal representation
-pads to multiples of TILE_WIDTH (32) for efficient GPU computation.
+A matrix over a finite field mod N, implemented using CuArray. Newly allocated
+GPU storage rounds each dimension up to a multiple of `TILE_WIDTH` (32) and
+starts with zero padding. Later operations may change padding values; logical
+operations ignore padding contents. Wrapping an existing `CuArray` preserves
+its storage and does not pad or clear it.
 
 Use `modulus(A)` for the modulus, `size(A)` for the logical dimensions, and
 `parent(A)` for the padded GPU storage. The `data`, `size`, and `N` fields are
@@ -72,10 +82,7 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
             )
         end
 
-        # pad(d) = ceil(Int, d / TILE_WIDTH) * TILE_WIDTH
-        pad(d) = d + TILE_WIDTH
-
-        padded_size = pad.(size(A))
+        padded_size = _padded_size(size(A))
 
         # Initialize the padded areas to zero
         data = CUDA.fill(zero(T), padded_size...)
@@ -101,7 +108,7 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
         #dataview = @view data[data_inds]
         copyto!(data, A_inds, converted, A_inds)
 
-        if mod
+        if mod && !isempty(data)
             mod!(data, data, N)
         end
 
@@ -148,8 +155,9 @@ modulus(A::CuModArray) = getfield(A, :N)
 """
     parent(A::CuModArray)
 
-Return the padded GPU storage backing `A`. Its dimensions can exceed `size(A)`;
-`size(A)` continues to report the logical, unpadded dimensions.
+Return the GPU storage backing `A`. Newly allocated storage rounds each logical
+dimension up to a multiple of `TILE_WIDTH`; a wrapped `CuArray` keeps its
+original dimensions. `size(A)` reports logical dimensions in either case.
 """
 Base.parent(A::CuModArray) = getfield(A, :data)
 
@@ -157,7 +165,8 @@ Base.parent(A::CuModArray) = getfield(A, :data)
     CuModArray(A::AbstractArray; modulus)
     CuModArray{T,D}(A::AbstractArray; modulus)
 
-Construct from a CPU array and pad data on the GPU to fit a multiple of 32.
+Construct from a CPU array. Newly allocated storage rounds each logical
+dimension up to a multiple of 32 and starts with zero padding.
 The unparameterized constructor defaults to Float32.
 """
 function CuModArray(
@@ -177,7 +186,8 @@ const CuModVector{T} = CuModArray{T,1}
     CuModMatrix(A::AbstractMatrix; modulus)
     CuModMatrix{T}(A::AbstractMatrix; modulus)
 
-Construct from a CPU matrix and pad data on the GPU to fit a multiple of 32.
+Construct from a CPU matrix. Newly allocated storage rounds each logical
+dimension up to a multiple of 32 and starts with zero padding.
 The unparameterized constructor defaults to Float32.
 """
 function CuModMatrix(
@@ -214,7 +224,8 @@ end
     CuModVector(A::AbstractVector; modulus)
     CuModVector{T}(A::AbstractVector; modulus)
 
-Construct from a CPU vector and pad data on the GPU to fit a multiple of 32.
+Construct from a CPU vector. Newly allocated storage rounds its logical length
+up to a multiple of 32 and starts with zero padding.
 The unparameterized constructor defaults to Float32.
 """
 function CuModVector(
@@ -254,6 +265,8 @@ end
     identity_matrix(CuModMatrix{T}, n; modulus)
 
 Creates an `n × n` identity matrix in the finite field modulo `modulus`.
+Its storage rounds each dimension up to a multiple of `TILE_WIDTH` and starts
+with zero padding.
 """
 function identity_matrix(::Type{CuModArray{T,2}}, n::Integer; modulus::Int) where {T}
     return CuModArray{T,2}(I, n, n; modulus = modulus)
@@ -501,9 +514,10 @@ end
     zeros(CuModVector{T}, length; modulus)
 
 Creates a zero matrix or vector in the finite field modulo `modulus`.
+Each storage dimension is rounded up to a multiple of `TILE_WIDTH`.
 """
 function Base.zeros(::Type{CuModArray{T,1}}, length::Integer; modulus::Int) where {T}
-    padded_entries = length + TILE_WIDTH
+    padded_entries = _padded_extent(length)
     data = CUDA.zeros(T, padded_entries)
     return CuModArray{T,1}(data; modulus = modulus, mod = false, new_size = (length,))
 end
@@ -515,8 +529,8 @@ function Base.zeros(
     modulus::Int,
     new_size::Tuple{Int,Int} = (rows, cols),
 ) where {T}
-    padded_rows = rows + TILE_WIDTH
-    padded_cols = cols + TILE_WIDTH
+    padded_rows = _padded_extent(rows)
+    padded_cols = _padded_extent(cols)
     data = CUDA.zeros(T, padded_rows, padded_cols)
     return CuModArray{T,2}(data; modulus = modulus, mod = false, new_size = new_size)
 end
@@ -526,15 +540,20 @@ end
     rand(CuModMatrix{T}, rows, cols; modulus)
 
 Creates a random vector or matrix in the finite field modulo `modulus`.
+Only logical entries are sampled; the zero-initialized padding is untouched.
 """
 function Base.rand(::Type{CuModArray{T,1}}, length::Integer; modulus::Int) where {T}
-    padded_entries = cld(length, TILE_WIDTH) * TILE_WIDTH
-    data = CUDA.rand(T, padded_entries)
-    if T <: AbstractFloat
-        data .= floor.(data .* modulus)
+    dims = (Int(length),)
+    data = CUDA.zeros(T, _padded_size(dims)...)
+    if !isempty(data)
+        logical_data = CUDA.rand(T, dims...)
+        if T <: AbstractFloat
+            logical_data .= floor.(logical_data .* modulus)
+        end
+        mod!(logical_data, logical_data, modulus)
+        copyto!(_logical_view(data, dims), logical_data)
     end
-    mod!(data, data, modulus)
-    return CuModArray{T,1}(data; modulus = modulus, mod = false, new_size = (length,))
+    return CuModArray{T,1}(data; modulus = modulus, mod = false, new_size = dims)
 end
 
 function Base.rand(
@@ -543,14 +562,17 @@ function Base.rand(
     cols::Integer;
     modulus::Int,
 ) where {T}
-    padded_rows = cld(rows, TILE_WIDTH) * TILE_WIDTH
-    padded_cols = cld(cols, TILE_WIDTH) * TILE_WIDTH
-    data = CUDA.rand(T, padded_rows, padded_cols)
-    if T <: AbstractFloat
-        data .= floor.(data .* modulus)
+    dims = (Int(rows), Int(cols))
+    data = CUDA.zeros(T, _padded_size(dims)...)
+    if !isempty(data)
+        logical_data = CUDA.rand(T, dims...)
+        if T <: AbstractFloat
+            logical_data .= floor.(logical_data .* modulus)
+        end
+        mod!(logical_data, logical_data, modulus)
+        copyto!(_logical_view(data, dims), logical_data)
     end
-    mod!(data, data, modulus)
-    return CuModArray{T,2}(data; modulus = modulus, mod = false, new_size = (rows, cols))
+    return CuModArray{T,2}(data; modulus = modulus, mod = false, new_size = dims)
 end
 
 """
@@ -639,7 +661,9 @@ LinearAlgebra.lmul!(s::Number, A::CuModArray) = mul!(A, A, s)
 function dumb_copy_kernel!(B, A)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
 
-    B[i] = A[i]
+    if i <= length(A) && i <= length(B)
+        B[i] = A[i]
+    end
 
     nothing
 end
@@ -650,7 +674,10 @@ end
 In-place copy: B = A. No allocation is performed.
 B is updated with the contents of A.
 
-This does not test the modulus or normalize the entries.
+This copies the source backing storage, including available padding. If raw
+wrappers have different backing lengths, only indices present in both arrays
+are written. The operation does not test the modulus or normalize entries;
+padding contents are not guaranteed to be zero after the copy.
 """
 function Base.copy!(B::CuModArray, A::CuModArray)
     if size(A) != size(B)
@@ -658,9 +685,11 @@ function Base.copy!(B::CuModArray, A::CuModArray)
     end
 
     threads = TILE_WIDTH
-    blocks = length(parent(A)) ÷ TILE_WIDTH
-
-    @cuda threads=threads blocks=blocks dumb_copy_kernel!(parent(B), parent(A))
+    count = length(parent(A))
+    if count > 0
+        blocks = cld(count, threads)
+        @cuda threads=threads blocks=blocks dumb_copy_kernel!(parent(B), parent(A))
+    end
 
     # CUDA.copy!(parent(B), parent(A))
 
@@ -741,24 +770,28 @@ end
     change_modulus(A, new_N)
 
 Creates a new CuModArray with the same values as A but with a different modulus.
-All elements are reduced modulo new_N.
+Logical elements are reduced modulo new_N. The new storage rounds each logical
+dimension up to a multiple of `TILE_WIDTH` and has zero padding.
 """
 function change_modulus(A::CuModArray, new_N::Integer)
-    (dataRows, dataCols) = size(parent(A))
-    result = zeros(
-        CuModMatrix{eltype(parent(A))},
-        dataRows - TILE_WIDTH,
-        dataCols - TILE_WIDTH;
-        modulus = Int(new_N),
-    )
+    T = eltype(parent(A))
+    D = ndims(A)
+    dims = size(A)
+    new_modulus = Int(new_N)
+    data = CUDA.zeros(T, _padded_size(dims)...)
+    result = CuModArray{T,D}(data; modulus = new_modulus, mod = false, new_size = dims)
 
-    if new_N < modulus(A)
-        mod!(parent(result), parent(A), new_N)
-    else
-        copyto!(parent(result), parent(A))
+    if !isempty(A)
+        logical_source = _logical_view(parent(A), dims)
+        logical_result = _logical_view(parent(result), dims)
+        if new_N < modulus(A)
+            logical_result .= mod.(logical_source, new_N)
+        else
+            copyto!(logical_result, logical_source)
+        end
     end
 
-    return CuModArray(parent(result); modulus = Int(new_N), new_size = size(A))
+    return result
 end
 
 """
@@ -876,15 +909,17 @@ end
 """
     copy(A::CuModArray)
 
-Copy the data and metadata into a new CuModArray.
+Copy the logical data and metadata into newly allocated storage. The new
+storage rounds each logical dimension up to a multiple of `TILE_WIDTH` and has
+zero padding, regardless of the source padding contents.
 """
 function Base.copy(A::CuModArray{T,D}) where {T,D}
-    B = CuModArray{T,D}(
-        copy(parent(A));
-        modulus = modulus(A),
-        mod = false,
-        new_size = size(A),
-    )
+    dims = size(A)
+    data = CUDA.zeros(T, _padded_size(dims)...)
+    if !isempty(A)
+        copyto!(_logical_view(data, dims), _logical_view(parent(A), dims))
+    end
+    return CuModArray{T,D}(data; modulus = modulus(A), mod = false, new_size = dims)
 end
 
 #TODO: addmul! (add and scalar multiply), gemv!, gemm!
