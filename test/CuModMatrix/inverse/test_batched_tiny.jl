@@ -90,20 +90,60 @@ function _test_tiny_inverse_destination_forms(n::Int, hosts, p::Int)
         eachindex(dests),
     )
 
-    allocated = GPUFiniteFieldMatrices.inverse_batched(
-        sources;
-        options = PLUQOptions(inverse_strategy = :augmented, check_prime = true),
-    )
-    @test all(i -> Array(parent(sources[i])) == source_storage[i], eachindex(sources))
-    @test all(i -> parent(allocated[i]) !== parent(sources[i]), eachindex(sources))
-    @test all(
-        i -> _tiny_host_inverse_identity(hosts[i], _tiny_logical_host(allocated[i], n), p),
-        eachindex(allocated),
-    )
+    @testset "allocating inverse_batched augmented path n=$n" begin
+        allocated = GPUFiniteFieldMatrices.inverse_batched(
+            sources;
+            options = PLUQOptions(inverse_strategy = :augmented, check_prime = true),
+        )
+        @test all(i -> Array(parent(sources[i])) == source_storage[i], eachindex(sources))
+        @test all(i -> parent(allocated[i]) !== parent(sources[i]), eachindex(sources))
+        @test all(
+            i -> _tiny_host_inverse_identity(
+                hosts[i],
+                _tiny_logical_host(allocated[i], n),
+                p,
+            ),
+            eachindex(allocated),
+        )
+    end
 
     inplace = _tiny_gpu_batch(hosts, p)
     inplace_storage = [Array(parent(A)) for A in inplace]
     inplace_result = inverse!(inplace; options = PLUQOptions(check_prime = true))
+    @test inplace_result === inplace
+    @test all(i -> inplace_result[i] === inplace[i], eachindex(inplace))
+    @test all(i -> parent(inplace_result[i]) === parent(inplace[i]), eachindex(inplace))
+    @test all(i -> Array(parent(inplace[i])) != inplace_storage[i], eachindex(inplace))
+    @test all(
+        i -> _tiny_host_inverse_identity(hosts[i], _tiny_logical_host(inplace[i], n), p),
+        eachindex(inplace),
+    )
+    return nothing
+end
+
+function _test_tiny_inverse_augmented_destination_forms(n::Int, hosts, p::Int)
+    inverse! = _tiny_inverse_bang(n)
+    options = PLUQOptions(inverse_strategy = :augmented, check_prime = true)
+    sources = _tiny_gpu_batch(hosts, p)
+    source_storage = [Array(parent(A)) for A in sources]
+    dests = [_tiny_blank_destination(A) for A in sources]
+    destination_storage = [Array(parent(A)) for A in dests]
+
+    result = inverse!(dests, sources; options = options)
+    @test result === dests
+    @test all(i -> result[i] === dests[i], eachindex(dests))
+    @test all(i -> parent(result[i]) === parent(dests[i]), eachindex(dests))
+    @test all(i -> parent(dests[i]) !== parent(sources[i]), eachindex(dests))
+    @test all(i -> Array(parent(sources[i])) == source_storage[i], eachindex(sources))
+    @test all(i -> Array(parent(dests[i])) != destination_storage[i], eachindex(dests))
+    @test all(
+        i -> _tiny_host_inverse_identity(hosts[i], _tiny_logical_host(dests[i], n), p),
+        eachindex(dests),
+    )
+
+    inplace = _tiny_gpu_batch(hosts, p)
+    inplace_storage = [Array(parent(A)) for A in inplace]
+    inplace_result = inverse!(inplace; options = options)
     @test inplace_result === inplace
     @test all(i -> inplace_result[i] === inplace[i], eachindex(inplace))
     @test all(i -> parent(inplace_result[i]) === parent(inplace[i]), eachindex(inplace))
@@ -295,127 +335,174 @@ function test_batched_tiny_kernels()
             @test GPUFiniteFieldMatrices.pluq_check_identity(Fs[i], origs[i])
         end
 
-        _test_tiny_inverse_destination_forms(n, hosts, p)
+        @testset "default :pluq fallback destination/in-place n=$n" begin
+            _test_tiny_inverse_destination_forms(n, hosts, p)
+        end
+        @testset "augmented kernel destination/in-place n=$n" begin
+            _test_tiny_inverse_augmented_destination_forms(n, hosts, p)
+        end
 
         singular_host = Matrix{Float32}(I, n, n)
         singular_host[2, :] .= singular_host[1, :]
         singular_hosts = [copy(hosts[1]), copy(hosts[2]), singular_host]
         inverse! = _tiny_inverse_bang(n)
 
-        singular_sources = _tiny_gpu_batch(singular_hosts, p)
-        singular_input_storage = [Array(parent(A)) for A in singular_sources]
-        singular_dests = [_tiny_blank_destination(A) for A in singular_sources]
-        singular_destination_storage = [Array(parent(A)) for A in singular_dests]
-        @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
-            singular_dests,
-            singular_sources,
-        )
-        @test all(
-            i -> Array(parent(singular_sources[i])) == singular_input_storage[i],
-            eachindex(singular_sources),
-        )
-        @test all(
-            i -> Array(parent(singular_dests[i])) == singular_destination_storage[i],
-            eachindex(singular_dests),
-        )
+        @testset "default :pluq fallback singular no-write n=$n" begin
+            # Omitting options intentionally exercises the default :pluq path.
+            singular_sources = _tiny_gpu_batch(singular_hosts, p)
+            singular_input_storage = [Array(parent(A)) for A in singular_sources]
+            singular_dests = [_tiny_blank_destination(A) for A in singular_sources]
+            singular_destination_storage = [Array(parent(A)) for A in singular_dests]
+            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+                singular_dests,
+                singular_sources,
+            )
+            @test all(
+                i -> Array(parent(singular_sources[i])) == singular_input_storage[i],
+                eachindex(singular_sources),
+            )
+            @test all(
+                i -> Array(parent(singular_dests[i])) == singular_destination_storage[i],
+                eachindex(singular_dests),
+            )
 
-        singular_inplace = _tiny_gpu_batch(singular_hosts, p)
-        singular_inplace_storage = [Array(parent(A)) for A in singular_inplace]
-        @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
-            singular_inplace,
-        )
-        @test all(
-            i -> Array(parent(singular_inplace[i])) == singular_inplace_storage[i],
-            eachindex(singular_inplace),
-        )
+            singular_inplace = _tiny_gpu_batch(singular_hosts, p)
+            singular_inplace_storage = [Array(parent(A)) for A in singular_inplace]
+            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+                singular_inplace,
+            )
+            @test all(
+                i -> Array(parent(singular_inplace[i])) == singular_inplace_storage[i],
+                eachindex(singular_inplace),
+            )
+        end
+
+        @testset "augmented kernel singular no-write n=$n" begin
+            augmented_options =
+                PLUQOptions(inverse_strategy = :augmented, check_prime = true)
+            singular_sources = _tiny_gpu_batch(singular_hosts, p)
+            singular_input_storage = [Array(parent(A)) for A in singular_sources]
+            singular_dests = [_tiny_blank_destination(A) for A in singular_sources]
+            singular_destination_storage = [Array(parent(A)) for A in singular_dests]
+            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+                singular_dests,
+                singular_sources;
+                options = augmented_options,
+            )
+            @test all(
+                i -> Array(parent(singular_sources[i])) == singular_input_storage[i],
+                eachindex(singular_sources),
+            )
+            @test all(
+                i -> Array(parent(singular_dests[i])) == singular_destination_storage[i],
+                eachindex(singular_dests),
+            )
+
+            singular_inplace = _tiny_gpu_batch(singular_hosts, p)
+            singular_inplace_storage = [Array(parent(A)) for A in singular_inplace]
+            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+                singular_inplace;
+                options = augmented_options,
+            )
+            @test all(
+                i -> Array(parent(singular_inplace[i])) == singular_inplace_storage[i],
+                eachindex(singular_inplace),
+            )
+        end
     end
 
-    # A fixed-size helper must honor non-augmented strategy requests through
-    # the existing scalar fallback, without exposing partial writes on failure.
-    p = 101
-    n = 4
-    hosts =
-        [_tiny_invertible_host(n, p, Float32, Random.MersenneTwister(201 + i)) for i = 1:2]
-    inverse! = _tiny_inverse_bang(n)
-    fallback_sources = _tiny_gpu_batch(hosts, p)
-    fallback_source_storage = [Array(parent(A)) for A in fallback_sources]
-    fallback_dests = [_tiny_blank_destination(A) for A in fallback_sources]
-    fallback_result = inverse!(
-        fallback_dests,
-        fallback_sources;
-        options = PLUQOptions(inverse_strategy = :pluq, check_prime = true),
-    )
-    @test fallback_result === fallback_dests
-    @test all(
-        i -> Array(parent(fallback_sources[i])) == fallback_source_storage[i],
-        eachindex(fallback_sources),
-    )
-    @test all(
-        i -> _tiny_host_inverse_identity(
-            hosts[i],
-            _tiny_logical_host(fallback_dests[i], n),
-            p,
-        ),
-        eachindex(fallback_dests),
-    )
+    @testset "explicit :pluq fallback and later singular no-write" begin
+        # A fixed-size helper must honor non-augmented strategy requests through
+        # the existing scalar fallback, without exposing partial writes on failure.
+        p = 101
+        n = 4
+        hosts = [
+            _tiny_invertible_host(n, p, Float32, Random.MersenneTwister(201 + i)) for
+            i = 1:2
+        ]
+        inverse! = _tiny_inverse_bang(n)
+        fallback_sources = _tiny_gpu_batch(hosts, p)
+        fallback_source_storage = [Array(parent(A)) for A in fallback_sources]
+        fallback_dests = [_tiny_blank_destination(A) for A in fallback_sources]
+        fallback_result = inverse!(
+            fallback_dests,
+            fallback_sources;
+            options = PLUQOptions(inverse_strategy = :pluq, check_prime = true),
+        )
+        @test fallback_result === fallback_dests
+        @test all(
+            i -> Array(parent(fallback_sources[i])) == fallback_source_storage[i],
+            eachindex(fallback_sources),
+        )
+        @test all(
+            i -> _tiny_host_inverse_identity(
+                hosts[i],
+                _tiny_logical_host(fallback_dests[i], n),
+                p,
+            ),
+            eachindex(fallback_dests),
+        )
 
-    fallback_inplace = _tiny_gpu_batch(hosts, p)
-    fallback_inplace_result = inverse!(
-        fallback_inplace;
-        options = PLUQOptions(inverse_strategy = :pluq, check_prime = true),
-    )
-    @test fallback_inplace_result === fallback_inplace
-    @test all(i -> fallback_inplace_result[i] === fallback_inplace[i], eachindex(hosts))
-    @test all(
-        i -> _tiny_host_inverse_identity(
-            hosts[i],
-            _tiny_logical_host(fallback_inplace[i], n),
-            p,
-        ),
-        eachindex(fallback_inplace),
-    )
+        fallback_inplace = _tiny_gpu_batch(hosts, p)
+        fallback_inplace_result = inverse!(
+            fallback_inplace;
+            options = PLUQOptions(inverse_strategy = :pluq, check_prime = true),
+        )
+        @test fallback_inplace_result === fallback_inplace
+        @test all(i -> fallback_inplace_result[i] === fallback_inplace[i], eachindex(hosts))
+        @test all(
+            i -> _tiny_host_inverse_identity(
+                hosts[i],
+                _tiny_logical_host(fallback_inplace[i], n),
+                p,
+            ),
+            eachindex(fallback_inplace),
+        )
 
-    singular = Matrix{Float32}(I, n, n)
-    singular[2, :] .= singular[1, :]
-    fallback_singular_hosts = [copy(hosts[1]), copy(hosts[2]), singular]
-    fallback_singular_sources = _tiny_gpu_batch(fallback_singular_hosts, p)
-    fallback_singular_input_storage = [Array(parent(A)) for A in fallback_singular_sources]
-    fallback_singular_dests =
-        [_tiny_blank_destination(A) for A in fallback_singular_sources]
-    fallback_singular_destination_storage =
-        [Array(parent(A)) for A in fallback_singular_dests]
-    fallback_options = PLUQOptions(inverse_strategy = :pluq)
-    @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
-        fallback_singular_dests,
-        fallback_singular_sources;
-        options = fallback_options,
-    )
-    @test all(
-        i ->
-            Array(parent(fallback_singular_sources[i])) ==
-            fallback_singular_input_storage[i],
-        eachindex(fallback_singular_sources),
-    )
-    @test all(
-        i ->
-            Array(parent(fallback_singular_dests[i])) ==
-            fallback_singular_destination_storage[i],
-        eachindex(fallback_singular_dests),
-    )
+        singular = Matrix{Float32}(I, n, n)
+        singular[2, :] .= singular[1, :]
+        fallback_singular_hosts = [copy(hosts[1]), copy(hosts[2]), singular]
+        fallback_singular_sources = _tiny_gpu_batch(fallback_singular_hosts, p)
+        fallback_singular_input_storage =
+            [Array(parent(A)) for A in fallback_singular_sources]
+        fallback_singular_dests =
+            [_tiny_blank_destination(A) for A in fallback_singular_sources]
+        fallback_singular_destination_storage =
+            [Array(parent(A)) for A in fallback_singular_dests]
+        fallback_options = PLUQOptions(inverse_strategy = :pluq)
+        @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+            fallback_singular_dests,
+            fallback_singular_sources;
+            options = fallback_options,
+        )
+        @test all(
+            i ->
+                Array(parent(fallback_singular_sources[i])) ==
+                fallback_singular_input_storage[i],
+            eachindex(fallback_singular_sources),
+        )
+        @test all(
+            i ->
+                Array(parent(fallback_singular_dests[i])) ==
+                fallback_singular_destination_storage[i],
+            eachindex(fallback_singular_dests),
+        )
 
-    fallback_singular_inplace = _tiny_gpu_batch(fallback_singular_hosts, p)
-    fallback_singular_inplace_storage =
-        [Array(parent(A)) for A in fallback_singular_inplace]
-    @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
-        fallback_singular_inplace;
-        options = fallback_options,
-    )
-    @test all(
-        i ->
-            Array(parent(fallback_singular_inplace[i])) ==
-            fallback_singular_inplace_storage[i],
-        eachindex(fallback_singular_inplace),
-    )
+        fallback_singular_inplace = _tiny_gpu_batch(fallback_singular_hosts, p)
+        fallback_singular_inplace_storage =
+            [Array(parent(A)) for A in fallback_singular_inplace]
+        @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+            fallback_singular_inplace;
+            options = fallback_options,
+        )
+        @test all(
+            i ->
+                Array(parent(fallback_singular_inplace[i])) ==
+                fallback_singular_inplace_storage[i],
+            eachindex(fallback_singular_inplace),
+        )
+
+    end
 
     test_batched_tiny_destination_preflight()
     return nothing

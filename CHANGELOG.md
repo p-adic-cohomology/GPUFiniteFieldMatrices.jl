@@ -6,6 +6,17 @@
 
 This change prepares the 0.4.0 API break. No compatibility aliases are kept.
 
+### Tiny fixed-size inverse destination migration
+
+The qualified one-argument methods `GPUFiniteFieldMatrices.inverse_batched_4x4!`,
+`GPUFiniteFieldMatrices.inverse_batched_8x8!`,
+`GPUFiniteFieldMatrices.inverse_batched_16x16!`, and
+`GPUFiniteFieldMatrices.inverse_batched_32x32!` previously allocated result
+wrappers and now overwrite their input wrappers.
+Use the exported `inverse_batched(mats)` for allocating, input-preserving
+behavior, or the corresponding two-argument size-specific methods to write into
+distinct caller-provided destinations.
+
 | Old name | New name | Notes |
 | --- | --- | --- |
 | inverse(A), inverse_new(A; options) | Base.inv(A; options) | Folded into one method; inverse previously forwarded to inverse_new with default options. |
