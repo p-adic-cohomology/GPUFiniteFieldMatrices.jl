@@ -338,49 +338,35 @@ function Base.Array(A::CuModArray)
     Array(parent(A))[inds]
 end
 
-# Display function
-function Base.show(io::IO, A::CuModArray)
-    println("$(join(string.(size(A)),"×")) CuModArray modulo $(modulus(A)):")
-
-    # Note this does not display the padding
-    println(Array(A))
+# Display methods write only to the caller's IO. Keep the compact representation
+# suitable for repr/string interpolation, and use Base's text/plain array layout
+# for the logical contents without its redundant Array summary line.
+function _show_cumod_header(io::IO, type_name::AbstractString, A::CuModArray)
+    print(io, join(size(A), "×"), " ", type_name, " modulo ", modulus(A))
 end
 
-function Base.show(io::IO, ::MIME"text/plain", A::CuModArray)
-    println("$(join(string.(size(A)),"×")) CuModArray modulo $(modulus(A)):")
-    # Base.println_matrix(Array(A))
-    remove_first_line(s) = join(split(s, "\n")[2:end], "\n")
-    println(remove_first_line(repr("text/plain", Array(A))))
+function _show_cumod_text(io::IO, type_name::AbstractString, A::CuModArray)
+    _show_cumod_header(io, type_name, A)
+    print(io, ':')
+
+    array_text = repr(MIME"text/plain"(), Array(A); context = io)
+    newline = findfirst('\n', array_text)
+    if newline !== nothing
+        print(io, '\n', SubString(array_text, nextind(array_text, newline)))
+    end
 end
 
-function Base.show(io::IO, A::CuModVector)
-    println("$(join(string.(size(A)),"×")) CuModVector modulo $(modulus(A)):")
+Base.show(io::IO, A::CuModArray) = _show_cumod_header(io, "CuModArray", A)
+Base.show(io::IO, ::MIME"text/plain", A::CuModArray) =
+    _show_cumod_text(io, "CuModArray", A)
 
-    # Note this does not display the padding
-    println(Array(A))
-end
+Base.show(io::IO, A::CuModVector) = _show_cumod_header(io, "CuModVector", A)
+Base.show(io::IO, ::MIME"text/plain", A::CuModVector) =
+    _show_cumod_text(io, "CuModVector", A)
 
-function Base.show(io::IO, ::MIME"text/plain", A::CuModVector)
-    println("$(join(string.(size(A)),"×")) CuModVector modulo $(modulus(A)):")
-    # Base.println_matrix(Array(A))
-    remove_first_line(s) = join(split(s, "\n")[2:end], "\n")
-    println(remove_first_line(repr("text/plain", Array(A))))
-end
-
-function Base.show(io::IO, A::CuModMatrix)
-    println("$(join(string.(size(A)),"×")) CuModMatrix modulo $(modulus(A)):")
-
-    # Note this does not display the padding
-    println(Array(A))
-end
-
-function Base.show(io::IO, ::MIME"text/plain", A::CuModMatrix)
-    println("$(join(string.(size(A)),"×")) CuModMatrix modulo $(modulus(A)):")
-    # Base.println_matrix(Array(A))
-    remove_first_line(s) = join(split(s, "\n")[2:end], "\n")
-    println(remove_first_line(repr("text/plain", Array(A))))
-end
-
+Base.show(io::IO, A::CuModMatrix) = _show_cumod_header(io, "CuModMatrix", A)
+Base.show(io::IO, ::MIME"text/plain", A::CuModMatrix) =
+    _show_cumod_text(io, "CuModMatrix", A)
 # Recursive binary exponentiation algorithm
 function Base.:^(A::CuModMatrix, n::Integer)
     if rows(A) != cols(A)

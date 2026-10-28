@@ -51,6 +51,7 @@ end
 end
 
 include("cuda_kernel_bindings_test.jl")
+include("CuModMatrix/display_test.jl")
 
 include("CuModMatrix/basic_operations_test.jl")
 include("CuModMatrix/inplace_operations_test.jl")
@@ -119,6 +120,9 @@ if CUDA.functional()
         end
         @testset "GPU Matrix Type" begin
             test_gpu_mat()
+        end
+        @testset "CuModArray display" begin
+            test_cumod_display()
         end
         @testset "In-place Operations" begin
             test_inplace()
