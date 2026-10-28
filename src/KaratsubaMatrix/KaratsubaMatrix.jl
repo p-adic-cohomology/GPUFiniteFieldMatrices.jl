@@ -1218,6 +1218,14 @@ function *(A::KaratsubaArray{Float64,2}, B::KaratsubaArray{Float64,2})
     return LinearAlgebra.mul!(C, A_work, B_work)
 end
 
+function *(A::KaratsubaArray{TA,2}, B::KaratsubaArray{TB,2}) where {TA,TB}
+    throw(
+        ArgumentError(
+            "allocating Karatsuba matrix multiplication currently supports GPU-backed CuModMatrix{Float64} components",
+        ),
+    )
+end
+
 # """
 
 # Works even for multidimensional arrays because CuArrays support linear indexing

@@ -150,8 +150,11 @@
           mod
     allocating_karatsuba_type =
         mod.KaratsubaArray{Float64,2,mod.CuModMatrix{Float64},mod.CuModMatrix{Float64}}
-    @test which(Base.:*, Tuple{allocating_karatsuba_type,allocating_karatsuba_type}).module ===
-          mod
+    allocating_product_method =
+        which(Base.:*, Tuple{allocating_karatsuba_type,allocating_karatsuba_type})
+    @test allocating_product_method.module === mod
+    @test allocating_product_method ===
+          which(Base.:*, Tuple{mod.KaratsubaArray{Float64,2},mod.KaratsubaArray{Float64,2}})
     cpu_karatsuba_a = mod.KaratsubaMatrix(
         zeros(Float64, 1, 1),
         zeros(Float64, 1, 1);
@@ -167,6 +170,51 @@
         modulus = 5,
     )
     @test_throws ArgumentError cpu_karatsuba_a * cpu_karatsuba_b
+
+    cpu_karatsuba_float32_a = mod.KaratsubaMatrix(
+        reshape(Float32[0], 1, 1),
+        reshape(Float32[2], 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    cpu_karatsuba_float32_b = mod.KaratsubaMatrix(
+        reshape(Float32[0], 1, 1),
+        reshape(Float32[2], 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    cpu_karatsuba_int64_a = mod.KaratsubaMatrix(
+        zeros(Int64, 1, 1),
+        zeros(Int64, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    cpu_karatsuba_int64_b = mod.KaratsubaMatrix(
+        zeros(Int64, 1, 1),
+        zeros(Int64, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    @test which(
+        Base.:*,
+        Tuple{typeof(cpu_karatsuba_float32_a),typeof(cpu_karatsuba_float32_b)},
+    ).module === mod
+    @test which(
+        Base.:*,
+        Tuple{typeof(cpu_karatsuba_int64_a),typeof(cpu_karatsuba_int64_b)},
+    ).module === mod
+    @test which(Base.:*, Tuple{typeof(cpu_karatsuba_float32_a),typeof(cpu_karatsuba_a)}).module ===
+          mod
+    @test which(Base.:*, Tuple{typeof(cpu_karatsuba_a),typeof(cpu_karatsuba_float32_a)}).module ===
+          mod
+    @test_throws ArgumentError cpu_karatsuba_float32_a * cpu_karatsuba_float32_b
+    @test_throws ArgumentError cpu_karatsuba_int64_a * cpu_karatsuba_int64_b
+    @test_throws ArgumentError cpu_karatsuba_float32_a * cpu_karatsuba_a
+    @test_throws ArgumentError cpu_karatsuba_a * cpu_karatsuba_float32_a
     @test which(Base.copy, Tuple{karatsuba_type}).module === mod
     @test which(
         mod.karatsuba_gemv!,
