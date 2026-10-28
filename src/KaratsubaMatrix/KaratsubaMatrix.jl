@@ -1174,27 +1174,56 @@ function *(A::KaratsubaArray, a::Number)
     a * A
 end
 
-function *(A::KaratsubaArray, B::KaratsubaArray)
-    if occursin("CuMod", string(typeof(low_part(A))))
-        dims = (size(low_part(A), 1), size(low_part(B), 2))
-        K = _karatsuba_output_like(A, dims)
-        plan = _karatsuba_output_like(A, dims)
-        #plan = KMatMulPlan(zeros(eltype(low_part(A)),size(low_part(A))...,modulus(A)),zeros(eltype(low_part(B)),size(low_part(B))...,modulus(A)),low_modulus(A),high_modulus(A))
-    elseif occursin("Cu", string(typeof(low_part(A))))
-        dims = (size(low_part(A), 1), size(low_part(B), 2))
-        K = _karatsuba_output_like(A, dims)
-    else
-        dims = (size(low_part(A), 1), size(low_part(B), 2))
-        K = _karatsuba_output_like(A, dims)
-        plan = KMatMulPlan{Matrix{eltype(low_part(A))}}(
-            zeros(eltype(low_part(A)), size(low_part(A))...),
-            zeros(eltype(low_part(B)), size(low_part(B))...),
-            low_modulus(A),
-            high_modulus(A),
-        )
-    end
-    LinearAlgebra.mul!(K, A, B, plan)
-    K
+function _karatsuba_product_workspace_like(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
+    return KaratsubaArray{T,D,S,P}(
+        low_part(K),
+        high_part(K);
+        low_modulus = low_modulus(K),
+        high_modulus = high_modulus(K),
+        modulus = modulus(K),
+    )
+end
+
+function _karatsuba_validate_allocating_product_storage(K::KaratsubaArray{Float64,2})
+    low_part(K) isa CuModMatrix{Float64} && high_part(K) isa CuModMatrix{Float64} || throw(
+        ArgumentError(
+            "allocating Karatsuba matrix multiplication currently supports GPU-backed CuModMatrix{Float64} components",
+        ),
+    )
+    return nothing
+end
+
+"""
+    A * B
+
+Allocate the product of GPU-backed `Float64` Karatsuba matrices. `A` and `B`
+must satisfy the same modulus, dimension, common input low-radix, and
+canonical-component requirements as `LinearAlgebra.mul!(C, A, B)`. The result uses `A`'s component split and
+representation metadata; its output capacity is `low_modulus(A) *
+high_modulus(A)`, which is distinct from the metadata modulus `modulus(A)`.
+
+The operation delegates to the same three-argument `mul!` implementation using
+private plan scratch. The input component storage is shared read-only, so the
+caller plans may be uninitialized and any existing caller plan is left
+unchanged.
+"""
+function *(A::KaratsubaArray{Float64,2}, B::KaratsubaArray{Float64,2})
+    _karatsuba_validate_allocating_product_storage(A)
+    _karatsuba_validate_allocating_product_storage(B)
+
+    A_work = _karatsuba_product_workspace_like(A)
+    B_work = _karatsuba_product_workspace_like(B)
+    C = _karatsuba_output_like(A, (size(A, 1), size(B, 2)))
+    foreach(initialize_plan!, (A_work, B_work, C))
+    return LinearAlgebra.mul!(C, A_work, B_work)
+end
+
+function *(A::KaratsubaArray{TA,2}, B::KaratsubaArray{TB,2}) where {TA,TB}
+    throw(
+        ArgumentError(
+            "allocating Karatsuba matrix multiplication currently supports GPU-backed CuModMatrix{Float64} components",
+        ),
+    )
 end
 
 # """
