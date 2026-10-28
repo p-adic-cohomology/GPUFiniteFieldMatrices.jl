@@ -357,8 +357,7 @@ function _show_cumod_text(io::IO, type_name::AbstractString, A::CuModArray)
 end
 
 Base.show(io::IO, A::CuModArray) = _show_cumod_header(io, "CuModArray", A)
-Base.show(io::IO, ::MIME"text/plain", A::CuModArray) =
-    _show_cumod_text(io, "CuModArray", A)
+Base.show(io::IO, ::MIME"text/plain", A::CuModArray) = _show_cumod_text(io, "CuModArray", A)
 
 Base.show(io::IO, A::CuModVector) = _show_cumod_header(io, "CuModVector", A)
 Base.show(io::IO, ::MIME"text/plain", A::CuModVector) =
