@@ -635,15 +635,15 @@ if CUDA.functional()
             return (A = A, x = x, y = y)
         end
 
-        for (rows, cols) in ((33, 33), (33, 31), (33, 35))
+        for (rows, cols) in ((33, 33), (33, 31), (33, 35)), active_col in (1, 2)
             matrix_low = zeros(Float64, rows, cols)
             matrix_high = zeros(Float64, rows, cols)
-            matrix_low[:, 1] .= 1.0
-            matrix_high[:, 1] .= 1.0
+            matrix_low[:, active_col] .= 1.0
+            matrix_high[:, active_col] .= 1.0
             vector_low = zeros(Float64, cols)
             vector_high = zeros(Float64, cols)
-            vector_low[1] = 1.0
-            vector_high[1] = 9.0
+            vector_low[active_col] = 1.0
+            vector_high[active_col] = 9.0
             gemv_radix = 11
             gemv_modulus = 121
             expected_matrix =
@@ -701,7 +701,9 @@ if CUDA.functional()
                 vector_high;
                 raw_components = true,
             )
-            sentinel = 9011.0
+            # Preserve the original first-column sentinel; 9007 distinguishes
+            # the later-column wrong-lda read from the logical plan value.
+            sentinel = active_col == 1 ? 9011.0 : 9007.0
             for K in (raw_dirty.A, raw_dirty.x, raw_dirty.y)
                 for component in (mod.low_part(K), mod.high_part(K))
                     component isa mod.CuModArray &&
