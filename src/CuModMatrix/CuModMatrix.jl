@@ -591,7 +591,7 @@ match, including when an override is supplied. Logical sizes and backing lengths
 must also match. These compatibility checks may be elided by an `@inbounds`
 caller, who is responsible for satisfying them.
 """
-Base.@propagate_inbounds function elementwise_multiply!(
+Base.@propagate_inbounds @inline function elementwise_multiply!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray,
@@ -614,13 +614,13 @@ A zero or negative value throws `ArgumentError`. Stored moduli, logical sizes
 and backing lengths must match. Compatibility checks may be elided by an
 `@inbounds` caller, who is responsible for satisfying them.
 """
-Base.@propagate_inbounds function neg!(
+Base.@propagate_inbounds @inline function neg!(
     B::CuModArray,
     A::CuModArray;
     modulus_override::Union{Nothing,Integer} = nothing,
 )
     _validate_positive_modulus_override(modulus_override)
-    _check_elementwise_compatible(B, A)
+    @boundscheck _check_elementwise_compatible(B, A)
     N = modulus_override === nothing ? modulus(B) : modulus_override
 
     rscalar_sub!(B, A, 0; modulus_override = N)
@@ -635,7 +635,7 @@ As ZZ/n is commutative, this has the same behavior as lmul!
 
 Extends LinearAlgebra.rmul! and LinearAlgebra.lmul!
 """
-Base.@propagate_inbounds function LinearAlgebra.rmul!(A::CuModArray, s::Number)
+Base.@propagate_inbounds @inline function LinearAlgebra.rmul!(A::CuModArray, s::Number)
     return mul!(A, A, s)
 end
 
@@ -645,7 +645,7 @@ end
 Scales the array A by s, overwriting A.
 As ZZ/n is commutative, this has the same behavior as lmul!
 """
-Base.@propagate_inbounds function LinearAlgebra.lmul!(s::Number, A::CuModArray)
+Base.@propagate_inbounds @inline function LinearAlgebra.lmul!(s::Number, A::CuModArray)
     return mul!(A, A, s)
 end
 

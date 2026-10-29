@@ -30,7 +30,7 @@ function k_rsub_scalar!(out, A, s, m)
     return
 end
 
-Base.@propagate_inbounds function sub!(
+Base.@propagate_inbounds @inline function sub!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray;
@@ -38,7 +38,7 @@ Base.@propagate_inbounds function sub!(
     threads::Int = DEFAULT_THREADS,
 )
     _validate_positive_modulus_override(modulus_override)
-    _check_elementwise_compatible(C, A, B)
+    @boundscheck _check_elementwise_compatible(C, A, B)
     m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     output = _logical_view(parent(C), size(C))
@@ -52,7 +52,7 @@ Base.@propagate_inbounds function sub!(
     return C
 end
 
-Base.@propagate_inbounds function scalar_sub!(
+Base.@propagate_inbounds @inline function scalar_sub!(
     C::CuModArray,
     A::CuModArray,
     s::Number,
@@ -61,7 +61,7 @@ Base.@propagate_inbounds function scalar_sub!(
     threads::Int = DEFAULT_THREADS,
 )
     _validate_positive_modulus_override(modulus_override)
-    _check_elementwise_compatible(C, A)
+    @boundscheck _check_elementwise_compatible(C, A)
     m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s)
@@ -75,7 +75,7 @@ Base.@propagate_inbounds function scalar_sub!(
     return C
 end
 
-Base.@propagate_inbounds function rscalar_sub!(
+Base.@propagate_inbounds @inline function rscalar_sub!(
     C::CuModArray,
     A::CuModArray,
     s::Number,
@@ -84,7 +84,7 @@ Base.@propagate_inbounds function rscalar_sub!(
     threads::Int = DEFAULT_THREADS,
 )
     _validate_positive_modulus_override(modulus_override)
-    _check_elementwise_compatible(C, A)
+    @boundscheck _check_elementwise_compatible(C, A)
     m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s)
@@ -113,22 +113,22 @@ function rscalar_sub!(
     return C
 end
 
-Base.@propagate_inbounds function -(A::CuModArray, B::CuModArray)
-    _check_elementwise_allocating_inputs(A, B)
+Base.@propagate_inbounds @inline function -(A::CuModArray, B::CuModArray)
+    @boundscheck _check_elementwise_allocating_inputs(A, B)
     C = similar(A)
     sub!(C, A, B)
     return C
 end
 
-Base.@propagate_inbounds function -(A::CuModArray, s::Number)
-    _check_elementwise_allocating_input(A)
+Base.@propagate_inbounds @inline function -(A::CuModArray, s::Number)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar(A)
     scalar_sub!(C, A, s)
     return C
 end
 
-Base.@propagate_inbounds function -(s::Number, A::CuModArray)
-    _check_elementwise_allocating_input(A)
+Base.@propagate_inbounds @inline function -(s::Number, A::CuModArray)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar(A)
     rscalar_sub!(C, A, s)
     return C

@@ -21,6 +21,17 @@ const _ELEMENTWISE_PREFLIGHT = GPUFiniteFieldMatrices
         12,
         12,
     )
+    @test_throws mod.CuModArraySizeMismatchException mod._check_elementwise_metadata(
+        size2,
+        size2,
+        (2, 1),
+        n,
+        n,
+        n,
+        12,
+        12,
+        12,
+    )
     @test_throws mod.CuModArrayModulusMismatchException mod._check_elementwise_metadata(
         size2,
         size2,
@@ -110,10 +121,11 @@ function _elementwise_preflight_arrays(;
     output_backing = (2, 6),
     left_backing = (3, 4),
     right_backing = (4, 3),
+    right_size = (2, 2),
 )
     output_values = reshape(Float64.(1:prod(output_size)), output_size)
     left_values = [1.0 2.0; 3.0 4.0]
-    right_values = [5.0 7.0; 6.0 8.0]
+    right_values = reshape(Float64.(5:(4+prod(right_size))), right_size)
     output =
         _elementwise_preflight_wrap(output_values, output_backing, output_modulus, -3333)
     left = _elementwise_preflight_wrap(left_values, left_backing, left_modulus, -1111)
@@ -123,17 +135,29 @@ end
 
 function _elementwise_assert_size_no_write(call, arrays...)
     before = map(A -> Array(parent(A)), arrays)
+    parent_before = map(parent, arrays)
+    metadata_before = map(A -> (size(A), GPUFiniteFieldMatrices.modulus(A)), arrays)
     @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException call()
-    for (A, snapshot) in zip(arrays, before)
+    for (A, snapshot, original_parent, (original_size, original_modulus)) in
+        zip(arrays, before, parent_before, metadata_before)
         @test Array(parent(A)) == snapshot
+        @test parent(A) === original_parent
+        @test size(A) == original_size
+        @test GPUFiniteFieldMatrices.modulus(A) == original_modulus
     end
 end
 
 function _elementwise_assert_modulus_no_write(call, arrays...)
     before = map(A -> Array(parent(A)), arrays)
+    parent_before = map(parent, arrays)
+    metadata_before = map(A -> (size(A), GPUFiniteFieldMatrices.modulus(A)), arrays)
     @test_throws GPUFiniteFieldMatrices.CuModArrayModulusMismatchException call()
-    for (A, snapshot) in zip(arrays, before)
+    for (A, snapshot, original_parent, (original_size, original_modulus)) in
+        zip(arrays, before, parent_before, metadata_before)
         @test Array(parent(A)) == snapshot
+        @test parent(A) === original_parent
+        @test size(A) == original_size
+        @test GPUFiniteFieldMatrices.modulus(A) == original_modulus
     end
 end
 
@@ -157,6 +181,13 @@ if CUDA.functional()
         for (name, operation) in binary_ops
             @testset "$name" begin
                 C, A, B = _elementwise_preflight_arrays(output_size = (2, 1))
+                _elementwise_assert_size_no_write(() -> operation(C, A, B, 7), C, A, B)
+
+                C, A, B = _elementwise_preflight_arrays(right_size = (2, 1))
+                @test size(C) == size(A)
+                @test size(B) != size(A)
+                @test length(parent(C)) == length(parent(A)) == length(parent(B))
+                @test modulus(C) == modulus(A) == modulus(B)
                 _elementwise_assert_size_no_write(() -> operation(C, A, B, 7), C, A, B)
 
                 C, A, B = _elementwise_preflight_arrays(output_modulus = 103)
@@ -204,10 +235,26 @@ if CUDA.functional()
 
     @testset "Explicit mod! and allocating elementwise routes" begin
         mod = _ELEMENTWISE_PREFLIGHT
-        C, A, _ = _elementwise_preflight_arrays(output_modulus = 103)
+        C, A, _ = _elementwise_preflight_arrays()
+        parent_c_before = Array(parent(C))
+        parent_a_before = Array(parent(A))
+        parent_c_identity = parent(C)
+        parent_a_identity = parent(A)
         @test mod.mod!(C, A, 13) === C
         @test Array(C) == Float64.(Base.mod.(Array(A), 13))
-        @test mod.modulus(C) == 103
+        @test mod.modulus(C) == 101
+        @test mod.modulus(A) == 101
+        @test parent(C) === parent_c_identity
+        @test parent(A) === parent_a_identity
+        @test Array(parent(A)) == parent_a_before
+        padding_mask = trues(size(parent(C)))
+        padding_mask[ntuple(d->1:size(C, d), ndims(C))...] .= false
+        @test Array(parent(C))[padding_mask] == parent_c_before[padding_mask]
+
+        C, A, _ = _elementwise_preflight_arrays(output_modulus = 103)
+        _elementwise_assert_modulus_no_write(() -> mod.mod!(C, A, 13), C, A)
+        C, A, _ = _elementwise_preflight_arrays(left_modulus = 103)
+        _elementwise_assert_modulus_no_write(() -> mod.mod!(C, A, 13), C, A)
 
         C, A, B = _elementwise_preflight_arrays(output_size = (2, 1))
         _elementwise_assert_size_no_write(() -> mod.mod!(C, A, 13), C, A)
@@ -231,6 +278,14 @@ if CUDA.functional()
         @test_throws mod.CuModArraySizeMismatchException 3 - A
         @test_throws mod.CuModArraySizeMismatchException mod.mod(A, 13)
 
+        C, A, B = _elementwise_preflight_arrays(right_size = (2, 1))
+        @test size(C) == size(A)
+        @test size(B) != size(A)
+        @test length(parent(A)) == length(parent(B))
+        @test mod.modulus(A) == mod.modulus(B)
+        _elementwise_assert_size_no_write(() -> A + B, A, B)
+        _elementwise_assert_size_no_write(() -> A - B, A, B)
+
         wrong_modulus = _elementwise_preflight_wrap([5.0 7.0; 6.0 8.0], (3, 4), 103, -2222)
         @test_throws mod.CuModArrayModulusMismatchException A + wrong_modulus
 
@@ -243,6 +298,19 @@ if CUDA.functional()
         @test Array(canonical_a - canonical_b) == Base.mod.(values_a .- values_b, 101)
         @test Array(canonical_a * 5) == Base.mod.(values_a .* 5, 101)
         @test Array(canonical_a / 2) == Base.mod.(values_a .* invmod(2, 101), 101)
+
+        canonical_a_parent = Array(parent(canonical_a))
+        canonical_a_parent_identity = parent(canonical_a)
+        converted_mod = mod.mod(canonical_a, 13)
+        @test mod.modulus(converted_mod) == 13
+        @test Array(converted_mod) == Base.mod.(values_a, 13)
+        @test mod.modulus(canonical_a) == 101
+        @test parent(canonical_a) === canonical_a_parent_identity
+        @test Array(parent(canonical_a)) == canonical_a_parent
+        converted_padding = trues(size(parent(converted_mod)))
+        converted_padding[ntuple(d->1:size(converted_mod, d), ndims(converted_mod))...] .=
+            false
+        @test all(iszero, Array(parent(converted_mod))[converted_padding])
     end
 
     @testset "Override validity is unconditional and preserves zero-work behavior" begin

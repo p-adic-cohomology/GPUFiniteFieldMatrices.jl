@@ -16,7 +16,7 @@ Base.@noinline function _throw_elementwise_modulus_mismatch()
     )
 end
 
-@inline function _check_elementwise_metadata(
+Base.@propagate_inbounds @inline function _check_elementwise_metadata(
     size_C::Dims,
     size_A::Dims,
     size_B::Dims,
@@ -35,7 +35,7 @@ end
     return nothing
 end
 
-@inline function _check_elementwise_metadata(
+Base.@propagate_inbounds @inline function _check_elementwise_metadata(
     size_C::Dims,
     size_A::Dims,
     modulus_C::Int,
@@ -51,7 +51,7 @@ end
     return nothing
 end
 
-@inline function _check_elementwise_storage(
+Base.@propagate_inbounds @inline function _check_elementwise_storage(
     size_C::Dims,
     size_A::Dims,
     length_C::Int,
@@ -64,7 +64,11 @@ end
     return nothing
 end
 
-@inline function _check_elementwise_compatible(C::CuModArray, A::CuModArray, B::CuModArray)
+Base.@propagate_inbounds @inline function _check_elementwise_compatible(
+    C::CuModArray,
+    A::CuModArray,
+    B::CuModArray,
+)
     _check_elementwise_metadata(
         size(C),
         size(A),
@@ -79,7 +83,10 @@ end
     return nothing
 end
 
-@inline function _check_elementwise_compatible(C::CuModArray, A::CuModArray)
+Base.@propagate_inbounds @inline function _check_elementwise_compatible(
+    C::CuModArray,
+    A::CuModArray,
+)
     _check_elementwise_metadata(
         size(C),
         size(A),
@@ -91,12 +98,15 @@ end
     return nothing
 end
 
-@inline function _check_elementwise_storage_compatible(C::CuModArray, A::CuModArray)
+Base.@propagate_inbounds @inline function _check_elementwise_storage_compatible(
+    C::CuModArray,
+    A::CuModArray,
+)
     _check_elementwise_storage(size(C), size(A), length(parent(C)), length(parent(A)))
     return nothing
 end
 
-@inline function _check_elementwise_allocating_metadata(
+Base.@propagate_inbounds @inline function _check_elementwise_allocating_metadata(
     size_A::Dims,
     size_B::Dims,
     modulus_A::Int,
@@ -113,18 +123,24 @@ end
     return nothing
 end
 
-@inline function _check_elementwise_allocating_input(size_A::Dims, length_A::Int)
+Base.@propagate_inbounds @inline function _check_elementwise_allocating_input(
+    size_A::Dims,
+    length_A::Int,
+)
     @boundscheck length_A == prod(_padded_size(size_A)) ||
                  _throw_elementwise_size_mismatch()
     return nothing
 end
 
-@inline function _check_elementwise_allocating_input(A::CuModArray)
+Base.@propagate_inbounds @inline function _check_elementwise_allocating_input(A::CuModArray)
     _check_elementwise_allocating_input(size(A), length(parent(A)))
     return nothing
 end
 
-@inline function _check_elementwise_allocating_inputs(A::CuModArray, B::CuModArray)
+Base.@propagate_inbounds @inline function _check_elementwise_allocating_inputs(
+    A::CuModArray,
+    B::CuModArray,
+)
     _check_elementwise_allocating_metadata(
         size(A),
         size(B),

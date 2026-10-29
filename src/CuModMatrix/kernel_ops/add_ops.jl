@@ -20,7 +20,7 @@ function k_add_scalar!(out, A, s, m)
     return
 end
 
-Base.@propagate_inbounds function add!(
+Base.@propagate_inbounds @inline function add!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray;
@@ -28,7 +28,7 @@ Base.@propagate_inbounds function add!(
     threads::Int = DEFAULT_THREADS,
 )
     _validate_positive_modulus_override(modulus_override)
-    _check_elementwise_compatible(C, A, B)
+    @boundscheck _check_elementwise_compatible(C, A, B)
     m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     output = _logical_view(parent(C), size(C))
@@ -42,7 +42,7 @@ Base.@propagate_inbounds function add!(
     return C
 end
 
-Base.@propagate_inbounds function scalar_add!(
+Base.@propagate_inbounds @inline function scalar_add!(
     C::CuModArray,
     A::CuModArray,
     s::Number,
@@ -51,7 +51,7 @@ Base.@propagate_inbounds function scalar_add!(
     threads::Int = DEFAULT_THREADS,
 )
     _validate_positive_modulus_override(modulus_override)
-    _check_elementwise_compatible(C, A)
+    @boundscheck _check_elementwise_compatible(C, A)
     m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s)
@@ -65,22 +65,22 @@ Base.@propagate_inbounds function scalar_add!(
     return C
 end
 
-Base.@propagate_inbounds function +(A::CuModArray, B::CuModArray)
-    _check_elementwise_allocating_inputs(A, B)
+Base.@propagate_inbounds @inline function +(A::CuModArray, B::CuModArray)
+    @boundscheck _check_elementwise_allocating_inputs(A, B)
     C = similar_with_modulus(A, modulus(A))
     add!(C, A, B)
     return C
 end
 
-Base.@propagate_inbounds function +(A::CuModArray, s::Number)
-    _check_elementwise_allocating_input(A)
+Base.@propagate_inbounds @inline function +(A::CuModArray, s::Number)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar_with_modulus(A, modulus(A))
     scalar_add!(C, A, s)
     return C
 end
 
-Base.@propagate_inbounds function +(s::Number, A::CuModArray)
-    _check_elementwise_allocating_input(A)
+Base.@propagate_inbounds @inline function +(s::Number, A::CuModArray)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar_with_modulus(A, modulus(A))
     scalar_add!(C, A, s)
     return C
