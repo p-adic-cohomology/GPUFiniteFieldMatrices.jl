@@ -20,16 +20,16 @@ function k_add_scalar!(out, A, s, m)
     return
 end
 
-function add!(
+Base.@propagate_inbounds function add!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray;
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    _check_elementwise_compatible(C, A, B)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     output = _logical_view(parent(C), size(C))
     left = _logical_view(parent(A), size(A))
@@ -42,7 +42,7 @@ function add!(
     return C
 end
 
-function scalar_add!(
+Base.@propagate_inbounds function scalar_add!(
     C::CuModArray,
     A::CuModArray,
     s::Number,
@@ -50,9 +50,9 @@ function scalar_add!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    _check_elementwise_compatible(C, A)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s)
     output = _logical_view(parent(C), size(C))
@@ -65,19 +65,22 @@ function scalar_add!(
     return C
 end
 
-function +(A::CuModArray, B::CuModArray)
+Base.@propagate_inbounds function +(A::CuModArray, B::CuModArray)
+    _check_elementwise_allocating_inputs(A, B)
     C = similar_with_modulus(A, modulus(A))
     add!(C, A, B)
     return C
 end
 
-function +(A::CuModArray, s::Number)
+Base.@propagate_inbounds function +(A::CuModArray, s::Number)
+    _check_elementwise_allocating_input(A)
     C = similar_with_modulus(A, modulus(A))
     scalar_add!(C, A, s)
     return C
 end
 
-function +(s::Number, A::CuModArray)
+Base.@propagate_inbounds function +(s::Number, A::CuModArray)
+    _check_elementwise_allocating_input(A)
     C = similar_with_modulus(A, modulus(A))
     scalar_add!(C, A, s)
     return C

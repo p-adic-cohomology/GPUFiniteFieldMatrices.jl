@@ -10,7 +10,7 @@ function k_div_scalar!(out, A, s_inv, m)
     return
 end
 
-function div!(
+Base.@propagate_inbounds function div!(
     C::CuModArray,
     A::CuModArray,
     s::Integer,
@@ -18,9 +18,9 @@ function div!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    _check_elementwise_compatible(C, A)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
     s_inv = mod_inv(s, m)
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s_inv)
@@ -34,7 +34,8 @@ function div!(
     return C
 end
 
-function /(A::CuModArray, s::Integer)
+Base.@propagate_inbounds function /(A::CuModArray, s::Integer)
+    _check_elementwise_allocating_input(A)
     C = similar(A)
     div!(C, A, s)
     return C

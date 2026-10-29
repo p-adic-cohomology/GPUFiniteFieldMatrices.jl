@@ -306,71 +306,125 @@ if CUDA.functional()
         q = 101
         left_values = [1.0 2.0; 3.0 4.0]
         right_values = [5.0 7.0; 6.0 8.0]
-        left = _wrapped_cumod_for_test(left_values, (64, 64), q, -1111.0)
-        right = _wrapped_cumod_for_test(right_values, (35, 41), q, -2222.0)
         expected_sum = Float64.(Base.mod.(left_values .+ right_values, q))
         expected_difference = Float64.(Base.mod.(left_values .- right_values, q))
 
-        @test parent(left) !== parent(right)
-        @test size(left) == size(right) == (2, 2)
-        @test size(parent(left)) == (64, 64)
-        @test size(parent(right)) == (35, 41)
+        # These were previously accepted despite having different backing
+        # lengths. They now fail before writing either the destination or inputs.
+        oversized_left = _wrapped_cumod_for_test(left_values, (64, 64), q, -1111.0)
+        oversized_right = _wrapped_cumod_for_test(right_values, (35, 41), q, -2222.0)
+        short_destination = _wrapped_cumod_for_test(zeros(2, 2), (4, 5), q, -3333.0)
+        oversized_snapshots = (
+            Array(parent(short_destination)),
+            Array(parent(oversized_left)),
+            Array(parent(oversized_right)),
+        )
+        @test_throws mod.CuModArraySizeMismatchException mod.add!(
+            short_destination,
+            oversized_left,
+            oversized_right,
+        )
+        @test Array(parent(short_destination)) == oversized_snapshots[1]
+        @test Array(parent(oversized_left)) == oversized_snapshots[2]
+        @test Array(parent(oversized_right)) == oversized_snapshots[3]
 
-        destination = _wrapped_cumod_for_test(zeros(2, 2), (4, 5), q, -3333.0)
+        # Equal backing counts with different pitches remain supported for
+        # logical views. Every route below uses these three 12-element parents.
+        left = _wrapped_cumod_for_test(left_values, (3, 4), q, -1111.0)
+        right = _wrapped_cumod_for_test(right_values, (4, 3), q, -2222.0)
+        destination = _wrapped_cumod_for_test(zeros(2, 2), (2, 6), q, -3333.0)
+
+        @test parent(left) !== parent(right)
+        @test size(left) == size(right) == size(destination) == (2, 2)
+        @test size(parent(left)) == (3, 4)
+        @test size(parent(right)) == (4, 3)
+        @test size(parent(destination)) == (2, 6)
+        @test length(parent(left)) ==
+              length(parent(right)) ==
+              length(parent(destination)) ==
+              12
+
         @test mod.add!(destination, left, right) === destination
         @test Array(destination) == expected_sum
         @test all(==(-3333.0), _padding_values_for_test(destination))
-        @test Array(left + right) == expected_sum
-        @test size(parent(left + right)) == (32, 32)
 
-        destination = _wrapped_cumod_for_test(zeros(2, 2), (5, 4), q, -4444.0)
         @test mod.sub!(destination, left, right) === destination
         @test Array(destination) == expected_difference
-        @test Array(left - right) == expected_difference
 
         expected_scalar_add = Float64.(Base.mod.(left_values .+ 9, q))
         expected_scalar_sub = Float64.(Base.mod.(left_values .- 9, q))
         expected_reverse_sub = Float64.(Base.mod.(9 .- left_values, q))
-        destination = similar(left)
         @test mod.scalar_add!(destination, left, 9) === destination
         @test Array(destination) == expected_scalar_add
-        @test Array(left + 9) == expected_scalar_add
-        @test Array(9 + left) == expected_scalar_add
-
         @test mod.scalar_sub!(destination, left, 9) === destination
         @test Array(destination) == expected_scalar_sub
-        @test Array(left - 9) == expected_scalar_sub
         @test mod.rscalar_sub!(destination, left, 9) === destination
         @test Array(destination) == expected_reverse_sub
-        @test Array(9 - left) == expected_reverse_sub
 
         expected_elementwise = Float64.(Base.mod.(left_values .* right_values, q))
         @test mod.mul_elementwise!(destination, left, right) === destination
         @test Array(destination) == expected_elementwise
+
         expected_scaled = Float64.(Base.mod.(left_values .* 7, q))
         @test mod.LinearAlgebra.mul!(destination, left, 7) === destination
         @test Array(destination) == expected_scaled
-        @test Array(left * 7) == expected_scaled
-        @test Array(7 * left) == expected_scaled
 
         expected_divided =
             Float64.(Base.mod.(BigInt.(left_values) .* invmod(3, q), BigInt(q)))
         @test mod.div!(destination, left, 3) === destination
         @test Array(destination) == expected_divided
-        @test Array(left / 3) == expected_divided
 
-        @test mod.mod!(destination, left, 13) === destination
-        @test Array(destination) == Float64.(Base.mod.(left_values, 13))
+        # Explicit mod!(C, A, m) keeps its working-modulus behavior. Its
+        # metadata preflight covers logical shape and backing storage only.
+        other_metadata = _wrapped_cumod_for_test(zeros(2, 2), (6, 2), 103, -4444.0)
+        @test mod.mod!(other_metadata, left, 13) === other_metadata
+        @test Array(other_metadata) == Float64.(Base.mod.(left_values, 13))
+        @test mod.modulus(other_metadata) == 103
+
+        # Allocating operators retain the standard padded geometry. A custom
+        # parent that cannot match that output geometry is rejected before the
+        # output is allocated.
+        @test_throws mod.CuModArraySizeMismatchException left + right
+        @test_throws mod.CuModArraySizeMismatchException left + 9
+        standard_left = mod.CuModMatrix{Float64}(left_values; modulus = q)
+        standard_right = mod.CuModMatrix{Float64}(right_values; modulus = q)
+        @test Array(standard_left + standard_right) == expected_sum
+        @test size(parent(standard_left + standard_right)) == (32, 32)
+        @test Array(standard_left - standard_right) == expected_difference
+        @test Array(standard_left + 9) == expected_scalar_add
+        @test Array(9 + standard_left) == expected_scalar_add
+        @test Array(standard_left - 9) == expected_scalar_sub
+        @test Array(9 - standard_left) == expected_reverse_sub
+        @test Array(standard_left * 7) == expected_scaled
+        @test Array(7 * standard_left) == expected_scaled
+        @test Array(standard_left / 3) == expected_divided
+        @test Array(mod.mod(standard_left, 13)) == Float64.(Base.mod.(left_values, 13))
 
         vector_left_values = Float64.(1:35)
         vector_right_values = Float64.(2:36)
         vector_left = _wrapped_cumod_for_test(vector_left_values, (64,), q, -5555.0)
-        vector_right = _wrapped_cumod_for_test(vector_right_values, (40,), q, -6666.0)
-        vector_sum = similar(vector_left)
-        @test mod.add!(vector_sum, vector_left, vector_right) === vector_sum
-        @test Array(vector_sum) ==
+        short_vector_right = _wrapped_cumod_for_test(vector_right_values, (40,), q, -6666.0)
+        vector_destination = similar(vector_left)
+        vector_snapshots = (
+            Array(parent(vector_destination)),
+            Array(parent(vector_left)),
+            Array(parent(short_vector_right)),
+        )
+        @test_throws mod.CuModArraySizeMismatchException mod.add!(
+            vector_destination,
+            vector_left,
+            short_vector_right,
+        )
+        @test Array(parent(vector_destination)) == vector_snapshots[1]
+        @test Array(parent(vector_left)) == vector_snapshots[2]
+        @test Array(parent(short_vector_right)) == vector_snapshots[3]
+
+        vector_right = _wrapped_cumod_for_test(vector_right_values, (64,), q, -6666.0)
+        @test length(parent(vector_left)) == length(parent(vector_right)) == 64
+        @test mod.add!(vector_destination, vector_left, vector_right) === vector_destination
+        @test Array(vector_destination) ==
               Float64.(Base.mod.(vector_left_values .+ vector_right_values, q))
-        @test Array(vector_sum)[end] ==
+        @test Array(vector_destination)[end] ==
               Base.mod(vector_left_values[end] + vector_right_values[end], q)
     end
 
