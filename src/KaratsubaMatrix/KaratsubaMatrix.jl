@@ -490,6 +490,32 @@ const nKMuls = 3
 
 
 # the stuff in this function should apply to the general mul!, but with gemm instead of gemv
+@inline _karatsuba_gemv_whole_cuarray_parent(A::CUDA.CuArray) = true
+
+@inline function _karatsuba_gemv_whole_cuarray_parent(A::CuModArray)
+    storage = parent(A)
+    return storage isa CUDA.CuArray && size(storage) == size(A)
+end
+
+@inline _karatsuba_gemv_whole_cuarray_parent(::AbstractArray) = false
+
+@inline function _karatsuba_gemv_batch_containers_supported(mats, vecs, targets)
+    return length(mats) == 3 &&
+           length(vecs) == 3 &&
+           length(targets) == 3 &&
+           mats isa Vector{<:CUDA.CuArray} &&
+           vecs isa Vector{<:CUDA.CuArray} &&
+           targets isa Vector{<:CUDA.CuArray} &&
+           isconcretetype(eltype(mats)) &&
+           isconcretetype(eltype(vecs)) &&
+           isconcretetype(eltype(targets)) &&
+           ndims(eltype(mats)) == 2 &&
+           ndims(eltype(vecs)) == 1 &&
+           ndims(eltype(targets)) == 1 &&
+           eltype(eltype(mats)) === eltype(eltype(vecs)) &&
+           eltype(eltype(mats)) === eltype(eltype(targets))
+end
+
 function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
         error("Matrices must have the same modulus m")
@@ -510,49 +536,110 @@ function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray
     # end
 
     tw = TILE_WIDTH
+    rows, cols = size(low_part(A))
+    vector_length = length(low_part(B))
+    if rows == 0
+        return C
+    elseif cols == 0
+        fill!(_logical_view(parent(low_part(C)), size(low_part(C))), 0.0)
+        fill!(_logical_view(parent(high_part(C)), size(high_part(C))), 0.0)
+        return C
+    end
 
-    totalsize = length(parent(low_part(A)))
-
-    threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
-        parent(A.plan),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        parent(B.plan),
-        parent(low_part(B)),
-        parent(high_part(B)),
-        low_modulus(A),
-    )
+    logical_count = max(length(A.plan), length(B.plan))
+    if logical_count > 0
+        threads = tw
+        blocks = cld(logical_count, threads)
+        @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
+            _logical_view(parent(A.plan), size(A.plan)),
+            _logical_view(parent(low_part(A)), size(low_part(A))),
+            _logical_view(parent(high_part(A)), size(high_part(A))),
+            _logical_view(parent(B.plan), size(B.plan)),
+            _logical_view(parent(low_part(B)), size(low_part(B))),
+            _logical_view(parent(high_part(B)), size(high_part(B))),
+            low_modulus(A),
+        )
+    end
     # add!(A.plan,low_part(A),high_part(A); modulus_override=2*low_modulus(A))
     # add!(B.plan,low_part(B),high_part(B); modulus_override=2*low_modulus(B))
 
     (zero_ptr, one_ptr) = cublas_scalars_f64()
 
 
-    targets = [parent(low_part(C)), parent(high_part(C)), parent(B.plan)]
-    mats = [parent(low_part(A)), parent(A.plan), parent(high_part(A))]
-    vecs = [parent(low_part(B)), parent(B.plan), parent(high_part(B))]
-    _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
+    # C.plan is the independent, output-sized destination for the third
+    # product. B.plan remains the second product's input sum.
+    Cplan_output = _logical_view(parent(C.plan), size(C.plan))
+    matrix_parents = (parent(low_part(A)), parent(A.plan), parent(high_part(A)))
+    vector_parents = (parent(low_part(B)), parent(B.plan), parent(high_part(B)))
+    target_parents = (parent(low_part(C)), parent(high_part(C)), parent(C.plan))
+    whole_parent_operands =
+        _karatsuba_gemv_whole_cuarray_parent(low_part(A)) &&
+        _karatsuba_gemv_whole_cuarray_parent(A.plan) &&
+        _karatsuba_gemv_whole_cuarray_parent(high_part(A)) &&
+        _karatsuba_gemv_whole_cuarray_parent(low_part(B)) &&
+        _karatsuba_gemv_whole_cuarray_parent(B.plan) &&
+        _karatsuba_gemv_whole_cuarray_parent(high_part(B)) &&
+        _karatsuba_gemv_whole_cuarray_parent(low_part(C)) &&
+        _karatsuba_gemv_whole_cuarray_parent(high_part(C)) &&
+        _karatsuba_gemv_whole_cuarray_parent(C.plan)
+    if whole_parent_operands
+        mats = collect(matrix_parents)
+        vecs = collect(vector_parents)
+        targets = collect(target_parents)
+        batch_supported = _karatsuba_gemv_batch_containers_supported(mats, vecs, targets)
+        if batch_supported
+            lda = stride(mats[1], 2)
+            incx = stride(vecs[1], 1)
+            incy = stride(targets[1], 1)
+            batch_supported =
+                all(stride(matrix, 2) == lda for matrix in mats) &&
+                all(stride(vector, 1) == incx for vector in vecs) &&
+                all(stride(target, 1) == incy for target in targets)
+        end
+        if batch_supported
+            _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
+        else
+            for i in eachindex(mats)
+                _CUDA_BLAS.gemv!('N', one_ptr, mats[i], vecs[i], zero_ptr, targets[i])
+            end
+        end
+    else
+        mats = [
+            _logical_view(parent(low_part(A)), size(low_part(A))),
+            _logical_view(parent(A.plan), size(A.plan)),
+            _logical_view(parent(high_part(A)), size(high_part(A))),
+        ]
+        vecs = [
+            _logical_view(parent(low_part(B)), size(low_part(B))),
+            _logical_view(parent(B.plan), size(B.plan)),
+            _logical_view(parent(high_part(B)), size(high_part(B))),
+        ]
+        targets = [
+            _logical_view(parent(low_part(C)), size(low_part(C))),
+            _logical_view(parent(high_part(C)), size(high_part(C))),
+            Cplan_output,
+        ]
+        for i in eachindex(mats)
+            _CUDA_BLAS.gemv!('N', one_ptr, mats[i], vecs[i], zero_ptr, targets[i])
+        end
+    end
 
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(low_part(A)),parent(low_part(B)),zero_ptr,parent(low_part(C)))
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(A.plan),parent(B.plan),zero_ptr,parent(high_part(C)))
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(high_part(A)),parent(high_part(B)),zero_ptr,parent(B.plan))
 
-    tw = TILE_WIDTH
-
-    totalsize = length(parent(low_part(C)))
-
-    threads = tw
-    blocks = totalsize ÷ tw
-    @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_2!(
-        parent(low_part(C)),
-        parent(high_part(C)),
-        parent(B.plan),
-        low_modulus(C),
-        high_modulus(C),
-    )
+    totalsize = rows
+    if totalsize > 0
+        threads = tw
+        blocks = cld(totalsize, threads)
+        @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_2!(
+            _logical_view(parent(low_part(C)), size(low_part(C))),
+            _logical_view(parent(high_part(C)), size(high_part(C))),
+            Cplan_output,
+            low_modulus(C),
+            high_modulus(C),
+        )
+    end
 
 
     C
@@ -631,6 +718,8 @@ _karatsuba_gpu_storage(A::CuModArray) = parent(A)
 _karatsuba_gpu_storage(A::CUDA.CuArray) = A
 _karatsuba_gpu_strides(A::CuModArray) = strides(parent(A))
 _karatsuba_gpu_strides(A::CUDA.CuArray) = strides(A)
+_karatsuba_logical_view(A::CuModArray) = _logical_view(parent(A), size(A))
+_karatsuba_logical_view(A::CUDA.CuArray) = A
 
 function _karatsuba_gpu_float_precision(::Type{Float16})
     11
@@ -1260,21 +1349,22 @@ function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
 
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_add_kernel!(
-        parent(low_part(K)),
-        parent(high_part(K)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        parent(low_part(B)),
-        parent(high_part(B)),
-        low_modulus(A),
-        high_modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_add_kernel!(
+            _karatsuba_logical_view(low_part(K)),
+            _karatsuba_logical_view(high_part(K)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
+            _karatsuba_logical_view(low_part(B)),
+            _karatsuba_logical_view(high_part(B)),
+            low_modulus(A),
+            high_modulus(A),
+        )
+    end
 
 
     K
@@ -1354,22 +1444,23 @@ function sub!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     =#
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_sub_kernel!(
-        parent(low_part(K)),
-        parent(high_part(K)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        parent(low_part(B)),
-        parent(high_part(B)),
-        low_modulus(A),
-        high_modulus(A),
-        modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_sub_kernel!(
+            _karatsuba_logical_view(low_part(K)),
+            _karatsuba_logical_view(high_part(K)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
+            _karatsuba_logical_view(low_part(B)),
+            _karatsuba_logical_view(high_part(B)),
+            low_modulus(A),
+            high_modulus(A),
+            modulus(A),
+        )
+    end
 
     # negate!(K,B)
     # add!(K,K,A)
@@ -1392,20 +1483,21 @@ function scalar_multiply!(B::KaratsubaArray, A::KaratsubaArray, s::Number)
 
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_scalar_multiply_kernel!(
-        parent(low_part(B)),
-        parent(high_part(B)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        s,
-        low_modulus(A),
-        high_modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_scalar_multiply_kernel!(
+            _karatsuba_logical_view(low_part(B)),
+            _karatsuba_logical_view(high_part(B)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
+            s,
+            low_modulus(A),
+            high_modulus(A),
+        )
+    end
 
     #=
     high_part(B) .= mod.(trunc.((s*low_part(A))/modulus(A)),high_modulus(A))
@@ -1441,20 +1533,21 @@ end
 function negate!(K::KaratsubaArray, A::KaratsubaArray)
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(
-        parent(low_part(K)),
-        parent(high_part(K)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        low_modulus(A),
-        high_modulus(A),
-        modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(
+            _karatsuba_logical_view(low_part(K)),
+            _karatsuba_logical_view(high_part(K)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
+            low_modulus(A),
+            high_modulus(A),
+            modulus(A),
+        )
+    end
 
 
 

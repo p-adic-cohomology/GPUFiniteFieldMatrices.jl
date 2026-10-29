@@ -12,9 +12,13 @@ end
 
 function mod!(C::CuModArray, A::CuModArray, m::Integer; threads::Int = DEFAULT_THREADS)
     mT = convert(eltype(parent(C)), m)
-    len = length(parent(A))
-    blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_mod!(parent(C), parent(A), mT)
+    output = _logical_view(parent(C), size(C))
+    input = _logical_view(parent(A), size(A))
+    len = length(input)
+    if len > 0
+        blocks = min(cld(len, threads), 65535)
+        @cuda threads=threads blocks=blocks k_mod!(output, input, mT)
+    end
     return C
 end
 

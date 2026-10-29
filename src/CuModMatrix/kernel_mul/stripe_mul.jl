@@ -42,37 +42,6 @@ function find_max_stripe_ops(type, input_bound; modulus = input_bound)
     return Int(min(safe_budget, typemax(Int)))
 end
 
-"""
-     unsafe_gemm!(transposeA::Bool,transposeB::Bool,alpha::Integer,A::CuModMatrix,B::CuModMatrix,beta::Integer,C::CuModMatrix)
-
-Light wrapper over the provided interface in CUDA.jl. 
-
-Does not keep track of overflow, so errors could happen if the matrices are too big.
-
-Also does not check to see if the modulus of the varios matrices agree
-
-Since we are working mod N, `alpha` and `beta` must be integers
-"""
-function unsafe_gemm!(
-    transposeA::Bool,
-    transposeB::Bool,
-    alpha::Integer,
-    A::CuModMatrix,
-    B::CuModMatrix,
-    beta::Integer,
-    C::CuModMatrix,
-)
-
-    tAchar = transposeA ? 'Y' : 'N'
-    tBchar = transposeB ? 'Y' : 'N'
-
-    #TODO: convert alpha and beta to floats?
-
-    _CUDA_BLAS.gemm!(tAchar, tBchar, alpha, parent(A), parent(B), beta, parent(C))
-
-    mod!(parent(C), parent(C), modulus(C))
-end
-
 const _cublas_scalar_cache_f64 = IdDict{Task,Tuple}()
 const _cublas_scalar_cache_f32 = IdDict{Task,Tuple}()
 
