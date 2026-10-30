@@ -17,16 +17,21 @@
         ) === scalar_pair_type
 
         CU = CUDA.CuArray{T,2,CUDA.DeviceMemory}
-        run_signature = Tuple{CU,CU,CU,Int,Int,Nothing}
-        run_code = only(Base.code_typed(GPUFiniteFieldMatrices._stripe_run!, run_signature))
-        run_ir = sprint(show, MIME"text/plain"(), run_code.first)
+        accumulate_signature = Tuple{CU,CU,CU,UnitRange{Int},Bool,scalar_pair_type}
+        accumulate_code = only(
+            Base.code_typed(
+                GPUFiniteFieldMatrices._stripe_accumulate_stripe!,
+                accumulate_signature,
+            ),
+        )
+        accumulate_ir = sprint(show, MIME"text/plain"(), accumulate_code.first)
 
-        @test run_code.second === CU
-        @test occursin("CuRefValue", run_ir)
-        @test occursin("gemm!", run_ir)
+        @test accumulate_code.second === CU
+        @test occursin("CuRefValue", accumulate_ir)
+        @test occursin("gemm!", accumulate_ir)
         @test !any(
             line -> occursin("dynamic (", line) && occursin("gemm!", line),
-            split(run_ir, Char(10)),
+            split(accumulate_ir, Char(10)),
         )
     end
 end
