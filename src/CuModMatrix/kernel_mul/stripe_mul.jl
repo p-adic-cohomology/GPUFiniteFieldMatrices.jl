@@ -73,6 +73,17 @@ function unsafe_gemm!(
     mod!(C.data, C.data, C.N)
 end
 
+@static if isdefined(CUDA, :CuRefValue)
+    const _CUDA_CU_REF_VALUE = CUDA.CuRefValue
+elseif isdefined(CUDA, :CUDACore) && isdefined(CUDA.CUDACore, :CuRefValue)
+    const _CUDA_CU_REF_VALUE = CUDA.CUDACore.CuRefValue
+else
+    error("the supported CUDA version does not expose its CuRef value type")
+end
+
+const _CUBLAS_SCALAR_PAIR{T} =
+    Tuple{_CUDA_CU_REF_VALUE{T},_CUDA_CU_REF_VALUE{T}}
+
 const _cublas_scalar_cache_f64 = IdDict{Task,Tuple}()
 const _cublas_scalar_cache_f32 = IdDict{Task,Tuple}()
 const _cublas_scalar_cache_f16 = IdDict{Task,Tuple}()
@@ -80,7 +91,7 @@ const _cublas_scalar_cache_f16 = IdDict{Task,Tuple}()
 """
 returns (0, 1) as pointers that can be used with low-level cuBLAS APIs
 """
-@inline function cublas_scalars_f64()
+@inline function cublas_scalars_f64()::_CUBLAS_SCALAR_PAIR{Float64}
     t = current_task()
     get!(_cublas_scalar_cache_f64, t) do
         (CuRef(Float64(0.0)), CuRef(Float64(1.0)))
@@ -90,7 +101,7 @@ end
 """
 returns (0, 1) as pointers that can be used with low-level cuBLAS APIs
 """
-@inline function cublas_scalars_f32()
+@inline function cublas_scalars_f32()::_CUBLAS_SCALAR_PAIR{Float32}
     t = current_task()
     get!(_cublas_scalar_cache_f32, t) do
         (CuRef(Float32(0.0)), CuRef(Float32(1.0)))
@@ -100,7 +111,7 @@ end
 """
 returns (0, 1) as pointers that can be used with low-level cuBLAS APIs
 """
-@inline function cublas_scalars_f16()
+@inline function cublas_scalars_f16()::_CUBLAS_SCALAR_PAIR{Float16}
     t = current_task()
     get!(_cublas_scalar_cache_f16, t) do
         (CuRef(Float16(0.0)), CuRef(Float16(1.0)))
@@ -110,15 +121,15 @@ end
 # The same-type GEMM entry points used below take scalars in the default compute
 # type. Float16 therefore uses Float16 scalars here; no alternate compute type is
 # requested by this call.
-@inline function _stripe_gemm_scalars(::Type{Float64})
+@inline function _stripe_gemm_scalars(::Type{Float64})::_CUBLAS_SCALAR_PAIR{Float64}
     return cublas_scalars_f64()
 end
 
-@inline function _stripe_gemm_scalars(::Type{Float32})
+@inline function _stripe_gemm_scalars(::Type{Float32})::_CUBLAS_SCALAR_PAIR{Float32}
     return cublas_scalars_f32()
 end
 
-@inline function _stripe_gemm_scalars(::Type{Float16})
+@inline function _stripe_gemm_scalars(::Type{Float16})::_CUBLAS_SCALAR_PAIR{Float16}
     return cublas_scalars_f16()
 end
 
