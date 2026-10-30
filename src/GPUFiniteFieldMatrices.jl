@@ -82,6 +82,6 @@ public inverse_batched_4x4!,
     inverse_batched_8x8!, inverse_batched_16x16!, inverse_batched_32x32!
 public upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
 public forward_sub_gpu_type_32, backward_sub_gpu_type_32
-public mat_mul_gpu_type, mat_mul_type_inplace!, stripe_mul!, TILE_WIDTH
+public stripe_mul, stripe_mul!, TILE_WIDTH
 
 end
