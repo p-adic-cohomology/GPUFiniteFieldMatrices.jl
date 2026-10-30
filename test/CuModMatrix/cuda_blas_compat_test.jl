@@ -1,6 +1,7 @@
 @testset "CPU-safe cuBLAS scalar cache inference" begin
     for T in (Float16, Float32, Float64)
-        cache_name = T === Float16 ? :cublas_scalars_f16 :
+        cache_name =
+            T === Float16 ? :cublas_scalars_f16 :
             T === Float32 ? :cublas_scalars_f32 : :cublas_scalars_f64
         cache_f = getfield(GPUFiniteFieldMatrices, cache_name)
         cu_ref_type = only(Base.return_types(CUDA.CuRef, Tuple{T}))
@@ -23,7 +24,10 @@
         @test run_code.second === CU
         @test occursin("CuRefValue", run_ir)
         @test occursin("gemm!", run_ir)
-        @test !any(line -> occursin("dynamic (", line) && occursin("gemm!", line), split(run_ir, Char(10)))
+        @test !any(
+            line -> occursin("dynamic (", line) && occursin("gemm!", line),
+            split(run_ir, Char(10)),
+        )
     end
 end
 
