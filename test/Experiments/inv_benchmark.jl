@@ -152,6 +152,65 @@ function _time_gpu_batch(f, batch)
     return t / length(batch)
 end
 
+function _tiny_inverse_writer(n::Int)
+    n == 4 && return GPUFiniteFieldMatrices.inverse_batched_4x4!
+    n == 8 && return GPUFiniteFieldMatrices.inverse_batched_8x8!
+    n == 16 && return GPUFiniteFieldMatrices.inverse_batched_16x16!
+    n == 32 && return GPUFiniteFieldMatrices.inverse_batched_32x32!
+    throw(ArgumentError("supported tiny inverse sizes are 4, 8, 16, and 32"))
+end
+
+function _warm_gpu_tiny_inverse_batch(f, host_batch, p::Int)
+    T = eltype(first(host_batch))
+    mats = [CuModMatrix{T}(copy(A); modulus = p) for A in host_batch]
+    dests = [
+        CuModMatrix(CUDA.zeros(T, size(parent(A))...); modulus = p, new_size = size(A))
+        for A in mats
+    ]
+    f(dests, mats)
+    CUDA.synchronize()
+    return nothing
+end
+
+function _warm_gpu_scalar_inverse_batch(host_batch, p::Int)
+    T = eltype(first(host_batch))
+    mats = [CuModMatrix{T}(copy(A); modulus = p) for A in host_batch]
+    CUDA.synchronize()
+    for A in mats
+        inv(A)
+    end
+    CUDA.synchronize()
+    return nothing
+end
+
+function _time_gpu_tiny_inverse_batch(f, host_batch, p::Int)
+    T = eltype(first(host_batch))
+    mats = [CuModMatrix{T}(copy(A); modulus = p) for A in host_batch]
+    dests = [
+        CuModMatrix(CUDA.zeros(T, size(parent(A))...); modulus = p, new_size = size(A))
+        for A in mats
+    ]
+    CUDA.synchronize()
+    t = @elapsed begin
+        f(dests, mats)
+        CUDA.synchronize()
+    end
+    return t / length(mats)
+end
+
+function _time_gpu_scalar_inverse_batch(host_batch, p::Int)
+    T = eltype(first(host_batch))
+    mats = [CuModMatrix{T}(copy(A); modulus = p) for A in host_batch]
+    CUDA.synchronize()
+    t = @elapsed begin
+        for A in mats
+            inv(A)
+        end
+        CUDA.synchronize()
+    end
+    return t / length(mats)
+end
+
 function _time_cpu_call(f)
     t = @elapsed f()
     return t
@@ -440,42 +499,30 @@ function run_tiny_batched_kernel_benchmark(;
     warmup && prime_gpu!(p = p, elem_type = elem_type, n = 32)
     ns = (4, 8, 16, 32)
     rng = Random.MersenneTwister(23)
+    options = PLUQOptions(inverse_strategy = :augmented)
     rows = NamedTuple[]
     for n in ns
-        mats = CuModMatrix[]
+        host_mats = Matrix{elem_type}[]
         for _ = 1:batch_size
             A = Matrix{elem_type}(I, n, n)
             for i = 1:n
-                for j = 1:n
-                    if i != j
-                        A[i, j] = elem_type(rand(rng, 0:(p-1)))
-                    end
+                for j = (i+1):n
+                    A[i, j] = elem_type(rand(rng, 1:(p-1)))
                 end
             end
-            push!(mats, CuModMatrix{elem_type}(A; modulus = p))
+            push!(host_mats, A)
+        end
+        inverse! = _tiny_inverse_writer(n)
+        measured_tiny_call = (D, B) -> inverse!(D, B; options = options)
+        if warmup
+            _warm_gpu_tiny_inverse_batch(measured_tiny_call, host_mats, p)
+            _warm_gpu_scalar_inverse_batch(host_mats, p)
         end
         t_fast = Float64[]
         t_generic = Float64[]
         for _ = 1:trials
-            t1 = _time_gpu_batch(
-                B -> begin
-                    if n == 4
-                        GPUFiniteFieldMatrices.inverse_batched_4x4!(B)
-                    elseif n == 8
-                        GPUFiniteFieldMatrices.inverse_batched_8x8!(B)
-                    elseif n == 16
-                        GPUFiniteFieldMatrices.inverse_batched_16x16!(B)
-                    else
-                        GPUFiniteFieldMatrices.inverse_batched_32x32!(B)
-                    end
-                end,
-                mats,
-            )
-            t2 = _time_gpu_batch(B -> begin
-                for A in B
-                    inv(A)
-                end
-            end, mats)
+            t1 = _time_gpu_tiny_inverse_batch(measured_tiny_call, host_mats, p)
+            t2 = _time_gpu_scalar_inverse_batch(host_mats, p)
             push!(t_fast, t1)
             push!(t_generic, t2)
         end
