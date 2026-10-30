@@ -11,10 +11,10 @@ function k_mod!(out, A, m)
 end
 
 function mod!(C::CuModArray, A::CuModArray, m::Integer; threads::Int = DEFAULT_THREADS)
-    mT = convert(eltype(C.data), m)
-    len = length(A.data)
+    mT = convert(eltype(parent(C)), m)
+    len = length(parent(A))
     blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_mod!(C.data, A.data, mT)
+    @cuda threads=threads blocks=blocks k_mod!(parent(C), parent(A), mT)
     return C
 end
 

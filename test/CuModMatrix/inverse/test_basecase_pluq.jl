@@ -6,9 +6,9 @@ function test_basecase_pluq()
         1 7 6 4
         2 8 9 10
     ]
-    A = CuModMatrix(Ahost, N)
+    A = CuModMatrix(Ahost; modulus = N)
     p = GPUFiniteFieldMatrices.pluq_init_perm(4)
     q = GPUFiniteFieldMatrices.pluq_init_perm(4)
-    rank = GPUFiniteFieldMatrices.pluq_basecase_gpu!(A.data, N, p, q, 1, 4, 4)
+    rank = GPUFiniteFieldMatrices.pluq_basecase_gpu!(parent(A), N, p, q, 1, 4, 4)
     @test rank == 4
 end
