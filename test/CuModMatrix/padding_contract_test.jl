@@ -374,12 +374,77 @@ if CUDA.functional()
         @test mod.div!(destination, left, 3) === destination
         @test Array(destination) == expected_divided
 
-        # Explicit mod!(C, A, m) keeps its working-modulus behavior. Its
-        # metadata preflight covers logical shape and backing storage only.
+        # A direct mutator requires equal stored moduli even when the working
+        # modulus is independent. Keep this negative case geometrically valid:
+        # both logical matrices are 2x2, both parents have 12 elements, and
+        # the parent pitches differ.
         other_metadata = _wrapped_cumod_for_test(zeros(2, 2), (6, 2), 103, -4444.0)
-        @test mod.mod!(other_metadata, left, 13) === other_metadata
-        @test Array(other_metadata) == Float64.(Base.mod.(left_values, 13))
+        @test parent(other_metadata) !== parent(left)
+        @test size(other_metadata) == size(left) == (2, 2)
+        @test size(parent(other_metadata)) == (6, 2)
+        @test size(parent(left)) == (3, 4)
+        @test length(parent(other_metadata)) == length(parent(left)) == 12
         @test mod.modulus(other_metadata) == 103
+        @test mod.modulus(left) == 101
+        @test all(==(-4444.0), _padding_values_for_test(other_metadata))
+        @test all(==(-1111.0), _padding_values_for_test(left))
+
+        mismatched_destination_parent = parent(other_metadata)
+        mismatched_source_parent = parent(left)
+        mismatched_destination_before = Array(mismatched_destination_parent)
+        mismatched_source_before = Array(mismatched_source_parent)
+        mismatched_destination_size = size(other_metadata)
+        mismatched_source_size = size(left)
+        mismatched_destination_modulus = mod.modulus(other_metadata)
+        mismatched_source_modulus = mod.modulus(left)
+
+        @test_throws mod.CuModArrayModulusMismatchException mod.mod!(
+            other_metadata,
+            left,
+            13,
+        )
+        @test parent(other_metadata) === mismatched_destination_parent
+        @test parent(left) === mismatched_source_parent
+        @test Array(parent(other_metadata)) == mismatched_destination_before
+        @test Array(parent(left)) == mismatched_source_before
+        @test all(==(-4444.0), _padding_values_for_test(other_metadata))
+        @test all(==(-1111.0), _padding_values_for_test(left))
+        @test size(other_metadata) == mismatched_destination_size == (2, 2)
+        @test size(left) == mismatched_source_size == (2, 2)
+        @test mod.modulus(other_metadata) == mismatched_destination_modulus == 103
+        @test mod.modulus(left) == mismatched_source_modulus == 101
+
+        # Equal stored N still permits an independent positional working
+        # modulus, while preserving the destination's dirty padding and both
+        # arrays' metadata.
+        working_modulus = 13
+        @test mod.modulus(destination) == mod.modulus(left) == 101
+        @test working_modulus == 13
+        @test working_modulus != mod.modulus(left)
+        working_destination_parent = parent(destination)
+        working_source_parent = parent(left)
+        working_destination_before = Array(working_destination_parent)
+        working_source_before = Array(working_source_parent)
+        working_destination_size = size(destination)
+        working_source_size = size(left)
+        working_destination_modulus = mod.modulus(destination)
+        working_source_modulus = mod.modulus(left)
+        expected_working_reduction =
+            Float64.(Base.mod.(BigInt.(left_values), BigInt(working_modulus)))
+        expected_working_destination = copy(working_destination_before)
+        expected_working_destination[1:2, 1:2] .= expected_working_reduction
+
+        @test mod.mod!(destination, left, working_modulus) === destination
+        @test parent(destination) === working_destination_parent
+        @test parent(left) === working_source_parent
+        @test Array(parent(destination)) == expected_working_destination
+        @test Array(parent(left)) == working_source_before
+        @test Array(destination) == expected_working_reduction
+        @test all(==(-3333.0), _padding_values_for_test(destination))
+        @test size(destination) == working_destination_size == (2, 2)
+        @test size(left) == working_source_size == (2, 2)
+        @test mod.modulus(destination) == working_destination_modulus == 101
+        @test mod.modulus(left) == working_source_modulus == 101
 
         # Allocating operators retain the standard padded geometry. A custom
         # parent that cannot match that output geometry is rejected before the
