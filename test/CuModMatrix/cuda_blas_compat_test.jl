@@ -1,3 +1,32 @@
+@testset "CPU-safe cuBLAS scalar cache inference" begin
+    for T in (Float16, Float32, Float64)
+        cache_name = T === Float16 ? :cublas_scalars_f16 :
+            T === Float32 ? :cublas_scalars_f32 : :cublas_scalars_f64
+        cache_f = getfield(GPUFiniteFieldMatrices, cache_name)
+        cu_ref_type = only(Base.return_types(CUDA.CuRef, Tuple{T}))
+        scalar_pair_type = Tuple{cu_ref_type,cu_ref_type}
+
+        @test isconcretetype(cu_ref_type)
+        @test only(Base.return_types(cache_f, Tuple{})) === scalar_pair_type
+        @test only(
+            Base.return_types(GPUFiniteFieldMatrices._stripe_gemm_scalars, Tuple{Type{T}}),
+        ) === scalar_pair_type
+        @test only(
+            Base.return_types(GPUFiniteFieldMatrices._stripe_gemv_scalars, Tuple{Type{T}}),
+        ) === scalar_pair_type
+
+        CU = CUDA.CuArray{T,2,CUDA.DeviceMemory}
+        run_signature = Tuple{CU,CU,CU,Int,Int,Nothing}
+        run_code = only(Base.code_typed(GPUFiniteFieldMatrices._stripe_run!, run_signature))
+        run_ir = sprint(show, MIME"text/plain"(), run_code.first)
+
+        @test run_code.second === CU
+        @test occursin("CuRefValue", run_ir)
+        @test occursin("gemm!", run_ir)
+        @test !any(line -> occursin("dynamic (", line) && occursin("gemm!", line), split(run_ir, Char(10)))
+    end
+end
+
 function test_cuda_blas_compatibility()
     @testset "task-local cuBLAS GEMM scalar cache" begin
         for T in (Float16, Float32, Float64)
