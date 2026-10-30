@@ -1147,6 +1147,57 @@ function _validate_batch_destinations(
     return nothing
 end
 
+function _validate_inverse_tiny_destinations(
+    dests::AbstractVector{<:CuModMatrix},
+    mats::AbstractVector{<:CuModMatrix},
+    n::Int,
+    options::PLUQOptions;
+    inplace::Bool = false,
+)
+    length(dests) == length(mats) ||
+        throw(ArgumentError("destination and input batches must have the same length"))
+    _validate_batch_inputs(mats, options)
+    _batch_validate_tiny_matrices(mats, n)
+    for i in eachindex(mats)
+        src = mats[i]
+        dest = dests[i]
+        rows(dest) == n && cols(dest) == n ||
+            throw(CuModArraySizeMismatchException("destination $(i) must be $(n)x$(n)"))
+        modulus(dest) == modulus(src) || throw(
+            CuModArrayModulusMismatchException(
+                "destination $(i) must match its input modulus",
+            ),
+        )
+        eltype(parent(dest)) === eltype(parent(src)) ||
+            throw(ArgumentError("destination $(i) must match its input element type"))
+        size(parent(dest), 1) >= n && size(parent(dest), 2) >= n || throw(
+            CuModArraySizeMismatchException(
+                "destination $(i) storage is smaller than its logical size",
+            ),
+        )
+    end
+
+    if inplace
+        dests === mats || throw(
+            ArgumentError("in-place inverse batches must use the same matrix wrappers"),
+        )
+        _validate_batch_input_aliases(mats)
+    else
+        for i in eachindex(dests)
+            for j in eachindex(mats)
+                _batch_mightalias(parent(dests[i]), parent(mats[j])) && throw(
+                    ArgumentError("destination storage must not alias any input storage"),
+                )
+            end
+            for j = firstindex(dests):(i-1)
+                _batch_mightalias(parent(dests[i]), parent(dests[j])) &&
+                    throw(ArgumentError("destination matrices must not alias each other"))
+            end
+        end
+    end
+    return nothing
+end
+
 """
     pluq_batched!(dests, mats; options=PLUQOptions())
 
@@ -1203,34 +1254,11 @@ function pluq_batched(
     return pluq_batched!(_copy_batch_matrices(mats); options = options)
 end
 
-"""
-    inverse_batched(mats; options=PLUQOptions())
-
-Run the fastest inverse path across a batch. For rectangular matrices this
-dispatches to one-sided inverses.
-
-Each modulus must be prime. Pass `check_prime=true` in `PLUQOptions` to validate
-the precondition before launching GPU kernels. `batch_streams` applies only to
-fallback batches. The tiny inverse kernel implements the augmented strategy;
-other square strategies use the existing scalar fallback.
-"""
-function inverse_batched(
-    mats::AbstractVector{<:CuModMatrix};
-    options::PLUQOptions = PLUQOptions(),
+function _inverse_batched_fallback(
+    mats::AbstractVector{<:CuModMatrix},
+    options::PLUQOptions,
+    opts::PLUQOptions,
 )
-    isempty(mats) && return CuModMatrix[]
-    _validate_batch_inputs(mats, options)
-    opts = _resolve_options(options, mats[1])
-    is_square_batch, n = _batch_uniform_square_size(mats)
-    if is_square_batch && _batch_supported_n(n)
-        T = eltype(parent(first(mats)))
-        all(A -> eltype(parent(A)) === T, mats) ||
-            throw(ArgumentError("batch matrices must have the same element type"))
-        _batch_validate_tiny_matrices(mats, n)
-        if _batch_has_default_augmented_options(opts)
-            return _inverse_batched_tiny(mats, n; options = opts)
-        end
-    end
     out = Vector{CuModMatrix}(undef, length(mats))
     nstreams = min(opts.batch_streams, length(mats))
     if nstreams == 1
@@ -1264,4 +1292,45 @@ function inverse_batched(
         synchronize(s)
     end
     return out
+end
+
+"""
+    inverse_batched(mats; options=PLUQOptions())
+
+Return inverses without modifying `mats`. For rectangular matrices this
+dispatches to one-sided inverses. The 4x4, 8x8, 16x16, and 32x32 augmented
+kernel writes into newly allocated result destinations; the qualified
+size-specific `inverse_batched_NxN!` forms can instead write into caller-owned
+destinations or overwrite their input wrappers.
+
+Each modulus must be prime. Pass `check_prime=true` in `PLUQOptions` to validate
+the precondition before launching GPU kernels. `batch_streams` applies only to
+fallback batches. The tiny inverse kernel implements the augmented strategy;
+other square strategies use the existing scalar fallback.
+"""
+function inverse_batched(
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+)
+    isempty(mats) && return CuModMatrix[]
+    _validate_batch_inputs(mats, options)
+    opts = _resolve_options(options, mats[1])
+    is_square_batch, n = _batch_uniform_square_size(mats)
+    if is_square_batch && _batch_supported_n(n)
+        T = eltype(parent(first(mats)))
+        all(A -> eltype(parent(A)) === T, mats) ||
+            throw(ArgumentError("batch matrices must have the same element type"))
+        _batch_validate_tiny_matrices(mats, n)
+        if _batch_has_default_augmented_options(opts)
+            dests = _allocate_inverse_batched_tiny_destinations(mats)
+            return _inverse_batched_tiny!(
+                dests,
+                mats,
+                n;
+                options = options,
+                resolved_options = opts,
+            )
+        end
+    end
+    return _inverse_batched_fallback(mats, options, opts)
 end
