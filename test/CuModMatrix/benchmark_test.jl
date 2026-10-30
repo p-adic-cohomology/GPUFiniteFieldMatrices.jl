@@ -52,15 +52,15 @@ function benchmark_inplace_vs_standard()
     println()
 
     # Benchmark direct matrix multiplication
-    t4 = @benchmark GPUFiniteFieldMatrices.mat_mul_gpu_type($A, $B)
-    println("Direct multiplication (GPUFiniteFieldMatrices.mat_mul_gpu_type(A, B)):")
+    t4 = @benchmark GPUFiniteFieldMatrices.stripe_mul($A, $B)
+    println("Allocating stripe multiplication (GPUFiniteFieldMatrices.stripe_mul(A, B)):")
     display(t4)
     println()
 
     # Benchmark in-place matrix multiplication
-    t5 = @benchmark GPUFiniteFieldMatrices.mat_mul_type_inplace!($C, $A, $B)
+    t5 = @benchmark GPUFiniteFieldMatrices.stripe_mul!($C, $A, $B)
     println(
-        "In-place multiplication (GPUFiniteFieldMatrices.mat_mul_type_inplace!(C, A, B)):",
+        "Destination-writing stripe multiplication (GPUFiniteFieldMatrices.stripe_mul!(C, A, B)):",
     )
     display(t5)
     println()
@@ -83,7 +83,7 @@ end
 Benchmark performance of different matrix multiplication regimes.
 """
 function benchmark_matmul_regimes()
-    println("Benchmarking different matrix multiplication regimes...")
+    println("Benchmarking the standard and qualified stripe multiplication routes...")
 
     n = 128  # Use multiples of 32
     modulus = 101  # Prime modulus
@@ -97,16 +97,17 @@ function benchmark_matmul_regimes()
     println("Matrix dimensions: $n × $n")
     println("Modulus: $modulus")
 
-    # Benchmark standard regime
-    println("\nBenchmarking matrix multiplication regimes:")
-    t1 = @benchmark GPUFiniteFieldMatrices.mat_mul_gpu_type($A, $B; REGIME = "⊠")
-    println("Standard regime (⊠):")
+    # The previous direct wrappers accepted unused regime keywords. Compare the
+    # ordinary operator with its qualified allocating adapter instead.
+    println("\nBenchmarking matrix multiplication routes:")
+    t1 = @benchmark $A * $B
+    println("A * B:")
     display(t1)
     println()
 
-    # Benchmark hybrid regime
-    t2 = @benchmark GPUFiniteFieldMatrices.mat_mul_gpu_type($A, $B; REGIME = "hybrid")
-    println("Hybrid regime (hybrid):")
+    # Benchmark the shared allocating stripe adapter.
+    t2 = @benchmark GPUFiniteFieldMatrices.stripe_mul($A, $B)
+    println("stripe_mul(A, B):")
     display(t2)
     println()
 
@@ -116,13 +117,13 @@ function benchmark_matmul_regimes()
 
     if median_standard > median_hybrid
         speedup = median_standard / median_hybrid
-        println("Hybrid regime is $(round(speedup, digits=2))x faster than standard regime")
+        println("Qualified stripe_mul is $(round(speedup, digits=2))x faster than A * B")
     else
         speedup = median_hybrid / median_standard
-        println("Standard regime is $(round(speedup, digits=2))x faster than hybrid regime")
+        println("A * B is $(round(speedup, digits=2))x faster than qualified stripe_mul")
     end
 
-    println("All regime benchmarks completed successfully!")
+    println("Route benchmarks completed successfully!")
 end
 
 """

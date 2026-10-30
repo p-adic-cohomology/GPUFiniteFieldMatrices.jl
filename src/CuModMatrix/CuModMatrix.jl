@@ -723,10 +723,10 @@ end
 In-place matrix multiplication: `C = A * B mod C.N`. `input_bound` is the
 exclusive upper bound on nonnegative multiplicands. When supplied, it keeps
 the existing single-stripe route, including when `max_ops` is also supplied.
-`max_ops` counts product contributions accumulated per output entry between
-modular reductions when the operation uses multiple stripes. The forced
-single-stripe route can accumulate the full inner dimension before reducing,
-even if it exceeds the supplied `max_ops`.
+The full inner dimension must fit the exact-integer accumulation budget; an
+unsafe single-stripe request throws `ArgumentError`. Otherwise, `max_ops`
+counts product contributions accumulated per output entry between modular
+reductions.
 """
 function LinearAlgebra.mul!(
     C::CuModMatrix,
