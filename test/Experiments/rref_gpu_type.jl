@@ -47,7 +47,7 @@
 #         col += 1
 #     end
 
-#     return CuModMatrix(d_A, N; new_size=(rows(A),cols(A)))
+#     return CuModMatrix(d_A; modulus = N, new_size=(rows(A),cols(A)))
 # end
 
 # """
@@ -97,8 +97,8 @@
 #         col += 1
 #     end
 
-#     U = CuModMatrix(d_A, N; new_size=(rows(A), cols(A)))
-#     L = CuModMatrix(d_L, N; new_size=(rows(A), rows(A)))
+#     U = CuModMatrix(d_A; modulus = N, new_size=(rows(A), cols(A)))
+#     L = CuModMatrix(d_L; modulus = N, new_size=(rows(A), rows(A)))
 #     return (U, L, Perm)
 # end
 
@@ -154,7 +154,7 @@
 #             Perm_col_idx -= 1
 #             if Perm_col_idx < col
 #                 print("Ran out of non-zero columns")
-#                 return CuModMatrix(d_A, N; new_size=(rows(A),cols(A))), CuModMatrix(d_L, N; new_size=(rows(A),rows(A))), Perm_rows, Perm_cols
+#                 return CuModMatrix(d_A; modulus = N, new_size=(rows(A),cols(A))), CuModMatrix(d_L; modulus = N, new_size=(rows(A),rows(A))), Perm_rows, Perm_cols
 #             end
 #         end
 #         end
@@ -235,8 +235,8 @@
 #     end
 
 #     NVTX.@range "End PLUQ" begin
-#     U = CuModMatrix(d_A, N; new_size=(rows(A),cols(A)))
-#     L = CuModMatrix(d_L, N; new_size=(rows(A),rows(A)))
+#     U = CuModMatrix(d_A; modulus = N, new_size=(rows(A),cols(A)))
+#     L = CuModMatrix(d_L; modulus = N, new_size=(rows(A),rows(A)))
 #     end
 
 #     if perm_array

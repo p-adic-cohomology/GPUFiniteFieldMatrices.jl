@@ -37,11 +37,13 @@ function sub!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
-    mT = convert(eltype(C.data), m)
-    len = length(A.data)
+    m =
+        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
+        modulus_override
+    mT = convert(eltype(parent(C)), m)
+    len = length(parent(A))
     blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_sub_matrix!(C.data, A.data, B.data, mT)
+    @cuda threads=threads blocks=blocks k_sub_matrix!(parent(C), parent(A), parent(B), mT)
     return C
 end
 
@@ -53,12 +55,14 @@ function scalar_sub!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
-    mT = convert(eltype(C.data), m)
-    sT = convert(eltype(C.data), s)
-    len = length(A.data)
+    m =
+        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
+        modulus_override
+    mT = convert(eltype(parent(C)), m)
+    sT = convert(eltype(parent(C)), s)
+    len = length(parent(A))
     blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_sub_scalar!(C.data, A.data, sT, mT)
+    @cuda threads=threads blocks=blocks k_sub_scalar!(parent(C), parent(A), sT, mT)
     return C
 end
 
@@ -70,12 +74,14 @@ function rscalar_sub!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
-    mT = convert(eltype(C.data), m)
-    sT = convert(eltype(C.data), s)
-    len = length(A.data)
+    m =
+        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
+        modulus_override
+    mT = convert(eltype(parent(C)), m)
+    sT = convert(eltype(parent(C)), s)
+    len = length(parent(A))
     blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_rsub_scalar!(C.data, A.data, sT, mT)
+    @cuda threads=threads blocks=blocks k_rsub_scalar!(parent(C), parent(A), sT, mT)
     return C
 end
 

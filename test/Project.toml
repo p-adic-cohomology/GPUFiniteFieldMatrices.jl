@@ -1,3 +1,8 @@
+[compat]
+Aqua = "0.8.14"
+JET = "0.10.6"
+JuliaFormatter = "=2.14.0"
+
 [deps]
 AllocCheck = "9b6a8646-10ed-4001-bbdc-1d2f46dfbb1a"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
@@ -14,10 +19,9 @@ Suppressor = "fd094767-a336-5f1f-9728-57cf17d0bbfb"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 Unroll = "36e64239-2ab9-4580-84fb-56737a503d36"
 
-[sources]
-ReLint = { url = "https://github.com/RelationalAI-oss/ReLint.jl", rev = "main" }
+[extras]
+GPUFiniteFieldMatrices = "465031f1-b347-4f72-85f6-baf667cdf853"
 
-[compat]
-Aqua = "0.8.14"
-JET = "0.10.6"
-JuliaFormatter = "=2.14.0"
+[sources.ReLint]
+rev = "main"
+url = "https://github.com/RelationalAI-oss/ReLint.jl"

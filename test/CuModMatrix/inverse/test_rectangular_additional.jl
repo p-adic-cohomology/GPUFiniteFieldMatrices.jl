@@ -57,21 +57,21 @@ function test_rectangular_additional_sizes()
         for T in (Float32, Float64)
             for (m, n) in row_cases
                 Ahost = _extra_full_row_rank_host(m, n, p, T, rng)
-                A = CuModMatrix{T}(Ahost, p)
+                A = CuModMatrix{T}(Ahost; modulus = p)
                 X = right_inverse(A, options = PLUQOptions(autotune = true))
                 AX = mod.(Array(A * X), p)
                 @test AX == _extra_id(Int, m)
             end
             for (m, n) in col_cases
                 Ahost = _extra_full_col_rank_host(m, n, p, T, rng)
-                A = CuModMatrix{T}(Ahost, p)
+                A = CuModMatrix{T}(Ahost; modulus = p)
                 X = left_inverse(A, options = PLUQOptions(autotune = true))
                 XA = mod.(Array(X * A), p)
                 @test XA == _extra_id(Int, n)
             end
             for n in square_cases
                 Ahost = _extra_invertible_square_host(n, p, T, rng)
-                A = CuModMatrix{T}(Ahost, p)
+                A = CuModMatrix{T}(Ahost; modulus = p)
                 Xaug = inv(
                     A,
                     options = PLUQOptions(autotune = true, inverse_strategy = :augmented),
@@ -94,7 +94,7 @@ function test_dense_rectangular_right_inverse()
     for i = 1:m
         Ahost[i, m+i] = 1.0f0
     end
-    A = CuModMatrix{Float32}(Ahost, p)
+    A = CuModMatrix{Float32}(Ahost; modulus = p)
     X = right_inverse(A, options = PLUQOptions(autotune = true, check_prime = true))
     @test mod.(Array(A * X), p) == _extra_id(Int, m)
 end
@@ -102,7 +102,7 @@ end
 function test_right_inverse_singular_leading_block_fallback()
     p = 101
     # The leading 2×2 block is singular, but columns 2 and 3 form I₂.
-    A = CuModMatrix{Float32}(Float32[0 1 0; 0 0 1], p)
+    A = CuModMatrix{Float32}(Float32[0 1 0; 0 0 1]; modulus = p)
     X = right_inverse(A, options = PLUQOptions(autotune = true, check_prime = true))
     @test mod.(Array(A * X), p) == _extra_id(Int, 2)
 end

@@ -17,10 +17,10 @@ function test_basic_operations()
     # Test initialization
     A_data = [1 2 3; 4 5 6; 7 8 9]
     modulus = 11  # Use a prime modulus
-    A = CuModMatrix(A_data, modulus)
+    A = CuModMatrix(A_data; modulus = modulus)
 
     cuA = CuArray(A_data)
-    Aprime = CuModMatrix(cuA, modulus)
+    Aprime = CuModMatrix(cuA; modulus = modulus)
     A_data = [1 2 3; 4 5 6; 7 8 9]
     println("A = ")
     display(A)
@@ -34,7 +34,7 @@ function test_basic_operations()
 
     # Test arithmetic operations
     B_data = [9 8 7; 6 5 4; 3 2 1]
-    B = CuModMatrix(B_data, modulus)
+    B = CuModMatrix(B_data; modulus = modulus)
 
     println("B = ")
     display(B)
@@ -71,7 +71,12 @@ function test_basic_operations()
     @test Array(E) == expected
 
     # Element-wise multiplication
-    F = GPUFiniteFieldMatrices.zeros(eltype(A.data), size(A, 1), size(A, 2), modulus)
+    F = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{eltype(parent(A))},
+        size(A, 1),
+        size(A, 2);
+        modulus = modulus,
+    )
     elementwise_multiply!(F, A, B)
     println("A .* B = ")
     display(F)
@@ -127,25 +132,31 @@ function test_utility_functions()
     modulus = 11
 
     # Test identity
-    I3 = eye(Int, 3, modulus)
-    println("eye(Int, 3, $modulus) = ")
+    I3 = identity_matrix(CuModMatrix{Int}, 3; modulus = modulus)
+    println("identity_matrix(CuModMatrix{Int}, 3; modulus = $modulus) = ")
     display(I3)
     println()
     @test Array(I3) == Matrix{Int}(I, 3, 3)
 
     # Test zeros
-    Z = GPUFiniteFieldMatrices.zeros(Int, 2, 3, modulus)
+    Z = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Int},
+        2,
+        3;
+        modulus = modulus,
+    )
     println("zeros(Int, 2, 3, $modulus) = ")
     display(Z)
     println()
     @test Array(Z) == Base.zeros(Int, 2, 3)
 
     # Test rand
-    R = GPUFiniteFieldMatrices.rand(Int, 2, 2, modulus)
+    R = GPUFiniteFieldMatrices.rand(CuModMatrix{Int}, 2, 2; modulus = modulus)
     println("rand(Int, 2, 2, $modulus) = ")
     display(R)
     println()
     @test all(0 .<= Array(R) .< modulus)
+    @test all(isinteger, Array(R))
 
     println("All utility functions tests passed!")
 end
@@ -159,7 +170,7 @@ function test_matrix_operations()
 
     # Create an invertible matrix mod 11
     G_data = [1 2 3; 0 1 4; 5 6 0]
-    G = CuModMatrix(G_data, modulus)
+    G = CuModMatrix(G_data; modulus = modulus)
 
     println("G = ")
     display(G)
@@ -202,7 +213,7 @@ function test_matrix_operations()
     # TODO: fix
     # Test non-invertible matrix
     N_data = [1 2 3; 2 4 6; 3 6 9]  # Linearly dependent rows
-    N = CuModMatrix(N_data, modulus)
+    N = CuModMatrix(N_data; modulus = modulus)
 
     println("N = ")
     display(N)
@@ -222,7 +233,7 @@ function test_modulus_functions()
     modulus1 = 11  # First modulus
     modulus2 = 7   # Second modulus
 
-    A = CuModMatrix(A_data, modulus1)
+    A = CuModMatrix(A_data; modulus = modulus1)
 
     println("A (mod $modulus1) = ")
     display(A)
@@ -236,15 +247,15 @@ function test_modulus_functions()
     println()
 
     # Check properties and values
-    @test B.N == modulus2
+    @test GPUFiniteFieldMatrices.modulus(B) == modulus2
     @test size(B) == size(A)
     @test Array(B) == mod.(A_data, modulus2)
 
     # Test that A is unchanged
-    @test A.N == modulus1
+    @test GPUFiniteFieldMatrices.modulus(A) == modulus1
 
     # Test change_modulus! (in-place)
-    C = CuModMatrix(A_data, modulus1)
+    C = CuModMatrix(A_data; modulus = modulus1)
     Cprime = change_modulus_no_alloc!(C, modulus2)
 
     println("C after change_modulus_no_alloc!(C, $modulus2) = ")
@@ -254,7 +265,7 @@ function test_modulus_functions()
     println()
 
     # Check properties and values
-    @test Cprime.N == modulus2
+    @test GPUFiniteFieldMatrices.modulus(Cprime) == modulus2
     @test Array(C) == mod.(A_data, modulus2)
 
     println("All modulus-changing function tests passed!")

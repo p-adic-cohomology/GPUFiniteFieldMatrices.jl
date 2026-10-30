@@ -22,6 +22,7 @@ using ExplicitImports
 using GPUFiniteFieldMatrices
 
 include("api_surface_test.jl")
+include("KaratsubaMatrix/api_regressions_test.jl")
 
 @testset "Stripe budget input validation" begin
     for input_bound in (1, 0, -1)
@@ -126,6 +127,7 @@ if CUDA.functional()
             test_cuda_blas_compatibility()
             test_stripe_mul()
         end
+        test_karatsuba_api_regressions()
         @testset "Allocations" begin
             test_allocations()
         end
