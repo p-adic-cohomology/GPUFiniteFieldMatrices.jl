@@ -74,9 +74,9 @@ function unsafe_gemm!(
 end
 
 @static if isdefined(CUDA, :CuRefValue)
-    const _CUDA_CU_REF_VALUE = CUDA.CuRefValue
+    const _CUDA_CU_REF_VALUE = getfield(CUDA, :CuRefValue)
 elseif isdefined(CUDA, :CUDACore) && isdefined(CUDA.CUDACore, :CuRefValue)
-    const _CUDA_CU_REF_VALUE = CUDA.CUDACore.CuRefValue
+    const _CUDA_CU_REF_VALUE = getfield(CUDA.CUDACore, :CuRefValue)
 else
     error("the supported CUDA version does not expose its CuRef value type")
 end
