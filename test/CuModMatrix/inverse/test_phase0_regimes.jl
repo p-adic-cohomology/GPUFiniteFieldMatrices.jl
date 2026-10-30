@@ -94,29 +94,61 @@ end
 
 function _phase0_mod_ok(A::CuModMatrix)
     H = Array(A)
-    return all(x -> 0 <= round(Int, x) < A.N, H)
+    return all(x -> 0 <= round(Int, x) < GPUFiniteFieldMatrices.modulus(A), H)
 end
 
 function _phase0_kernel_square_checks(A::CuModMatrix)
     n = size(A, 1)
     p = GPUFiniteFieldMatrices.pluq_init_perm(n)
     q = GPUFiniteFieldMatrices.pluq_init_perm(n)
-    Awork = copy(A.data)
+    Awork = copy(parent(A))
     kend = min(16, n)
-    rank1 = GPUFiniteFieldMatrices.pluq_basecase_gpu!(Awork, A.N, p, q, 1, kend, n)
+    rank1 = GPUFiniteFieldMatrices.pluq_basecase_gpu!(
+        Awork,
+        GPUFiniteFieldMatrices.modulus(A),
+        p,
+        q,
+        1,
+        kend,
+        n,
+    )
     @test rank1 >= 1
     @test length(p) == n
     @test length(q) == n
     if kend < n
-        GPUFiniteFieldMatrices.pluq_trsm_left_lower_unit_gpu!(Awork, A.N, 1, kend, n)
-        GPUFiniteFieldMatrices.pluq_trsm_right_upper_gpu!(Awork, A.N, 1, kend, n)
-        GPUFiniteFieldMatrices.pluq_schur_update_gpu!(Awork, A.N, 1, kend, n)
+        GPUFiniteFieldMatrices.pluq_trsm_left_lower_unit_gpu!(
+            Awork,
+            GPUFiniteFieldMatrices.modulus(A),
+            1,
+            kend,
+            n,
+        )
+        GPUFiniteFieldMatrices.pluq_trsm_right_upper_gpu!(
+            Awork,
+            GPUFiniteFieldMatrices.modulus(A),
+            1,
+            kend,
+            n,
+        )
+        GPUFiniteFieldMatrices.pluq_schur_update_gpu!(
+            Awork,
+            GPUFiniteFieldMatrices.modulus(A),
+            1,
+            kend,
+            n,
+        )
     end
-    Achecked = CuModMatrix(Awork, A.N; new_size = (n, n))
+    Achecked =
+        CuModMatrix(Awork; modulus = GPUFiniteFieldMatrices.modulus(A), new_size = (n, n))
     @test _phase0_mod_ok(Achecked)
     if n <= 128
         popts = PLUQOptions(blocksize = kend, basecase = kend)
-        p2, q2, r2 = GPUFiniteFieldMatrices.pluq_blocked_gpu!(copy(A.data), A.N, popts, n)
+        p2, q2, r2 = GPUFiniteFieldMatrices.pluq_blocked_gpu!(
+            copy(parent(A)),
+            GPUFiniteFieldMatrices.modulus(A),
+            popts,
+            n,
+        )
         @test length(p2) == n
         @test length(q2) == n
         @test 0 <= r2 <= n
@@ -126,7 +158,12 @@ end
 function _phase0_kernel_rect_checks(A::CuModMatrix)
     m = size(A, 1)
     n = size(A, 2)
-    p, q, r = GPUFiniteFieldMatrices.pluq_rectangular_rank_gpu!(copy(A.data), A.N, m, n)
+    p, q, r = GPUFiniteFieldMatrices.pluq_rectangular_rank_gpu!(
+        copy(parent(A)),
+        GPUFiniteFieldMatrices.modulus(A),
+        m,
+        n,
+    )
     @test length(p) == m
     @test length(q) == n
     @test 0 <= r <= min(m, n)
@@ -135,7 +172,7 @@ end
 function _phase0_main_case(reg::Phase0Regime, shape::Symbol, T::DataType, p::Int, rng)
     if shape == :square
         Ahost = _phase0_square_host(reg.square_n, p, T, rng; force_invertible = true)
-        A = CuModMatrix{T}(Ahost, p)
+        A = CuModMatrix{T}(Ahost; modulus = p)
         F = pluq(A)
         @test length(F.p) == reg.square_n
         @test length(F.q) == reg.square_n
@@ -156,7 +193,7 @@ function _phase0_main_case(reg::Phase0Regime, shape::Symbol, T::DataType, p::Int
         return
     end
     Ahost = _phase0_full_row_rank_host(reg.rect_m, reg.rect_n, p, T, rng)
-    A = CuModMatrix{T}(Ahost, p)
+    A = CuModMatrix{T}(Ahost; modulus = p)
     F = pluq(A)
     @test length(F.p) == reg.rect_m
     @test length(F.q) == reg.rect_n
@@ -165,8 +202,10 @@ function _phase0_main_case(reg::Phase0Regime, shape::Symbol, T::DataType, p::Int
         Xr = right_inverse(A)
         AX = mod.(round.(Int, Array(A * Xr)), p)
         @test AX == _phase0_id(Int, reg.rect_m)
-        At =
-            CuModMatrix{T}(_phase0_full_col_rank_host(reg.rect_n, reg.rect_m, p, T, rng), p)
+        At = CuModMatrix{T}(
+            _phase0_full_col_rank_host(reg.rect_n, reg.rect_m, p, T, rng);
+            modulus = p,
+        )
         Xl = left_inverse(At)
         XA = mod.(round.(Int, Array(Xl * At)), p)
         @test XA == _phase0_id(Int, reg.rect_m)

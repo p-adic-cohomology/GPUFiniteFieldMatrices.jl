@@ -10,14 +10,14 @@ function _pack_square_batch(mats::AbstractVector{<:CuModMatrix}, n::Int, T::Data
         if rows(m) != n || cols(m) != n
             throw(ArgumentError("all matrices must be $(n)x$(n)"))
         end
-        A[:, :, i] .= @view m.data[1:n, 1:n]
+        A[:, :, i] .= @view parent(m)[1:n, 1:n]
     end
     return A
 end
 
 function _unpack_square_batch!(mats::AbstractVector{<:CuModMatrix}, A::CuArray, n::Int)
     for i in eachindex(mats)
-        mats[i].data[1:n, 1:n] .= @view A[:, :, i]
+        parent(mats[i])[1:n, 1:n] .= @view A[:, :, i]
     end
     return mats
 end
@@ -194,11 +194,11 @@ end
 function _pluq_batched_tiny!(mats::AbstractVector{<:CuModMatrix}, n::Int)
     isempty(mats) && return PLUQ[]
     !_batch_supported_n(n) && throw(ArgumentError("supported sizes are 4, 8, 16, 32"))
-    N = mats[1].N
+    N = modulus(mats[1])
     _validate_inverse_modulus(PLUQOptions(), mats[1])
-    T = eltype(mats[1].data)
+    T = eltype(parent(mats[1]))
     for m in mats
-        if m.N != N || eltype(m.data) != T
+        if modulus(m) != N || eltype(parent(m)) != T
             throw(
                 CuModArrayModulusMismatchException(
                     "batch matrices must have same modulus and element type",
@@ -233,14 +233,14 @@ end
 function _inverse_batched_tiny(mats::AbstractVector{<:CuModMatrix}, n::Int)
     isempty(mats) && return CuModMatrix[]
     !_batch_supported_n(n) && throw(ArgumentError("supported sizes are 4, 8, 16, 32"))
-    N = mats[1].N
+    N = modulus(mats[1])
     _validate_inverse_modulus(PLUQOptions(), mats[1])
-    T = eltype(mats[1].data)
+    T = eltype(parent(mats[1]))
     for m in mats
         if rows(m) != n || cols(m) != n
             throw(CuModArraySizeMismatchException("all matrices must be $(n)x$(n)"))
         end
-        if m.N != N || eltype(m.data) != T
+        if modulus(m) != N || eltype(parent(m)) != T
             throw(
                 CuModArrayModulusMismatchException(
                     "batch matrices must have same modulus and element type",
@@ -266,9 +266,9 @@ function _inverse_batched_tiny(mats::AbstractVector{<:CuModMatrix}, n::Int)
                 InverseNotDefinedException("matrix $(i) in batch is singular modulo $(N)"),
             )
         end
-        data = CUDA.zeros(T, size(mats[i].data, 1), size(mats[i].data, 2))
+        data = CUDA.zeros(T, size(parent(mats[i]), 1), size(parent(mats[i]), 2))
         data[1:n, 1:n] .= @view invA[:, :, i]
-        out[i] = CuModMatrix(data, N; new_size = (n, n))
+        out[i] = CuModMatrix(data; modulus = N, new_size = (n, n))
     end
     return out
 end

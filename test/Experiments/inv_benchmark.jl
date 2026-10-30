@@ -71,7 +71,7 @@ function random_invertible_cumod(
     for _ = 1:max_tries
         Ahost = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
         Atyped = Matrix{spec.elem_type}(Ahost)
-        A = CuModMatrix{spec.elem_type}(Atyped, spec.p)
+        A = CuModMatrix{spec.elem_type}(Atyped; modulus = spec.p)
         if GPUFiniteFieldMatrices.is_invertible(A)
             return A
         end
@@ -92,12 +92,12 @@ function random_one_sided_invertible_cumod(
     if spec.rows != spec.cols && !rectangular_requires_full_rank
         Ahost = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
         Atyped = Matrix{spec.elem_type}(Ahost)
-        return CuModMatrix{spec.elem_type}(Atyped, spec.p)
+        return CuModMatrix{spec.elem_type}(Atyped; modulus = spec.p)
     end
     for _ = 1:max_tries
         Ahost = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
         Atyped = Matrix{spec.elem_type}(Ahost)
-        A = CuModMatrix{spec.elem_type}(Atyped, spec.p)
+        A = CuModMatrix{spec.elem_type}(Atyped; modulus = spec.p)
         ok = if spec.rows == spec.cols
             GPUFiniteFieldMatrices.is_invertible(A)
         elseif spec.rows < spec.cols
@@ -131,7 +131,7 @@ Warm up the GPU with scalar and batched inverse calls.
 """
 function prime_gpu!(; p::Int = 101, elem_type::DataType = Float32, n::Int = 100)
     Ih = Matrix{elem_type}(I, n, n)
-    A = CuModMatrix{elem_type}(Ih, p)
+    A = CuModMatrix{elem_type}(Ih; modulus = p)
     CUDA.@sync inv(A)
     CUDA.@sync GPUFiniteFieldMatrices.inverse_batched([A])
     return nothing
@@ -452,7 +452,7 @@ function run_tiny_batched_kernel_benchmark(;
                     end
                 end
             end
-            push!(mats, CuModMatrix{elem_type}(A, p))
+            push!(mats, CuModMatrix{elem_type}(A; modulus = p))
         end
         t_fast = Float64[]
         t_generic = Float64[]

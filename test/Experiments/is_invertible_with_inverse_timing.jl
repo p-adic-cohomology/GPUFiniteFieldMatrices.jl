@@ -19,7 +19,7 @@ end
 function random_matrix_from_spec(spec::MatrixSpec; rng::AbstractRNG = Random.default_rng())
     A = rand(rng, 0:(spec.p-1), spec.rows, spec.cols)
     A_typed = Matrix{spec.elem_type}(A)
-    return CuModMatrix{spec.elem_type}(A_typed, spec.p)
+    return CuModMatrix{spec.elem_type}(A_typed; modulus = spec.p)
 end
 
 function _append_time!(times::Dict{Symbol,Vector{Float64}}, key::Symbol, value::Float64)
@@ -210,13 +210,13 @@ function pluq_gpu_kernel_timed(A::CuModMatrix; debug::Bool = false)
     end
 
     t_finalize = CUDA.@elapsed begin
-        U = CuModMatrix(d_A, N; new_size = (rows, cols))
-        L = CuModMatrix(d_L, N; new_size = (rows, rows))
+        U = CuModMatrix(d_A; modulus = N, new_size = (rows, cols))
+        L = CuModMatrix(d_L; modulus = N, new_size = (rows, rows))
     end
     _append_time!(times, :finalize, t_finalize)
 
-    U = CuModMatrix(d_A, N; new_size = (rows, cols))
-    L = CuModMatrix(d_L, N; new_size = (rows, rows))
+    U = CuModMatrix(d_A; modulus = N, new_size = (rows, cols))
+    L = CuModMatrix(d_L; modulus = N, new_size = (rows, rows))
 
     return U, L, Perm_rows, Perm_cols, times
 end

@@ -18,13 +18,15 @@ function div!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
+    m =
+        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
+        modulus_override
     s_inv = mod_inv(s, m)
-    mT = convert(eltype(C.data), m)
-    sT = convert(eltype(C.data), s_inv)
-    len = length(A.data)
+    mT = convert(eltype(parent(C)), m)
+    sT = convert(eltype(parent(C)), s_inv)
+    len = length(parent(A))
     blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_div_scalar!(C.data, A.data, sT, mT)
+    @cuda threads=threads blocks=blocks k_div_scalar!(parent(C), parent(A), sT, mT)
     return C
 end
 

@@ -181,7 +181,7 @@
 #         return backward_sub_gpu_type(A)
 #     end
 
-#     A_inv = GPUFiniteFieldMatrices.zeros(eltype(A.data), size(A)[2], size(A)[1], A.N)
+#     A_inv = GPUFiniteFieldMatrices.zeros(GPUFiniteFieldMatrices.CuModMatrix{eltype(A.data)}, size(A)[2], size(A)[1]; modulus = A.N)
 
 #     if debug
 #         println("size(A.data): ", size(A.data))
@@ -365,7 +365,7 @@
 #         return forward_sub_gpu_type(A)
 #     end
 
-#     A_inv = GPUFiniteFieldMatrices.zeros(eltype(A.data), size(A)[2], size(A)[1], A.N)
+#     A_inv = GPUFiniteFieldMatrices.zeros(GPUFiniteFieldMatrices.CuModMatrix{eltype(A.data)}, size(A)[2], size(A)[1]; modulus = A.N)
 
 #     if rows <= cols #square or wide
 #         _recursive_lower_triangular_inverse(

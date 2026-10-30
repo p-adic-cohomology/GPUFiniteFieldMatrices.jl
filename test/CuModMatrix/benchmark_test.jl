@@ -18,9 +18,9 @@ function benchmark_inplace_vs_standard()
     B_data = rand(0:(modulus-1), n, n)
     C_data = zeros(Int, n, n)
 
-    A = CuModMatrix(A_data, modulus)
-    B = CuModMatrix(B_data, modulus)
-    C = CuModMatrix(C_data, modulus)
+    A = CuModMatrix(A_data; modulus = modulus)
+    B = CuModMatrix(B_data; modulus = modulus)
+    C = CuModMatrix(C_data; modulus = modulus)
 
     println("Matrix dimensions: $n × $n")
     println("Modulus: $modulus")
@@ -91,8 +91,8 @@ function benchmark_matmul_regimes()
     A_data = rand(0:(modulus-1), n, n)
     B_data = rand(0:(modulus-1), n, n)
 
-    A = CuModMatrix(A_data, modulus)
-    B = CuModMatrix(B_data, modulus)
+    A = CuModMatrix(A_data; modulus = modulus)
+    B = CuModMatrix(B_data; modulus = modulus)
 
     println("Matrix dimensions: $n × $n")
     println("Modulus: $modulus")
@@ -141,7 +141,7 @@ function benchmark_rref_operations()
 
         # Create test matrix
         A_data = rand(0:(modulus-1), n, n)
-        A = CuModMatrix(A_data, modulus)
+        A = CuModMatrix(A_data; modulus = modulus)
 
         # Benchmark standard RREF
         t1 = @benchmark rref_gpu_type($A)

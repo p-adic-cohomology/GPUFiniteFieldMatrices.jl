@@ -8,12 +8,21 @@ function test_allocations()
     B_data = Base.rand(0:10, n, n)
     x_data = Base.rand(0:10, n)
 
-    A = CuModMatrix(A_data, 11)
-    B = CuModMatrix(B_data, 11)
-    x = CuModVector(x_data, 11)
+    A = CuModMatrix(A_data; modulus = 11)
+    B = CuModMatrix(B_data; modulus = 11)
+    x = CuModVector(x_data; modulus = 11)
 
-    C = GPUFiniteFieldMatrices.zeros(Float32, n, n, 11)
-    z = GPUFiniteFieldMatrices.zeros(Float32, n, 11)
+    C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        n,
+        n;
+        modulus = 11,
+    )
+    z = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModVector{Float32},
+        n;
+        modulus = 11,
+    )
 
     #Note: BenchmarkTools doesn't seem to support tracking gpu allocations
     #as of May 2025
@@ -53,9 +62,14 @@ function test_allocations()
 
     # A mutating multi-stripe product reuses its destination and does not
     # allocate a GPU result buffer for each stripe.
-    A_small = CuModMatrix{Float32}([1 2 3 4; 5 6 7 8], 11)
-    B_small = CuModMatrix{Float32}([1 2; 3 4; 5 6; 7 8], 11)
-    C_small = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, 11)
+    A_small = CuModMatrix{Float32}([1 2 3 4; 5 6 7 8]; modulus = 11)
+    B_small = CuModMatrix{Float32}([1 2; 3 4; 5 6; 7 8]; modulus = 11)
+    C_small = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        2,
+        2;
+        modulus = 11,
+    )
     GPUFiniteFieldMatrices.stripe_mul!(C_small, A_small, B_small; max_ops = 1)
     result = CUDA.@timed GPUFiniteFieldMatrices.stripe_mul!(
         C_small,
@@ -66,8 +80,8 @@ function test_allocations()
     @test result[:gpu_bytes] < 20
 
     A_fl_data = convert.(Float64, A_data)
-    trash = CUDA.@timed CuModMatrix{Float64}(A_fl_data, 11) # prime thie jitter
-    result = CUDA.@timed CuModMatrix{Float64}(A_fl_data, 11)
+    trash = CUDA.@timed CuModMatrix{Float64}(A_fl_data; modulus = 11) # prime thie jitter
+    result = CUDA.@timed CuModMatrix{Float64}(A_fl_data; modulus = 11)
     @test result[:cpu_bytes] < 1_000_000 # 1 megabyte
 
     CUDA.@sync println("Done testing allocations.")

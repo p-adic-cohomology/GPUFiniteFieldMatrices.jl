@@ -29,11 +29,11 @@ function mul_elementwise!(
     threads::Int = DEFAULT_THREADS,
 )
     _validate_positive_modulus_override(modulus_override)
-    m = modulus_override === nothing ? C.N : modulus_override
-    mT = convert(eltype(C.data), m)
-    len = length(A.data)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
+    mT = convert(eltype(parent(C)), m)
+    len = length(parent(A))
     blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_mul_matrix!(C.data, A.data, B.data, mT)
+    @cuda threads=threads blocks=blocks k_mul_matrix!(parent(C), parent(A), parent(B), mT)
     return C
 end
 
@@ -46,12 +46,12 @@ function LinearAlgebra.mul!(
     threads::Int = DEFAULT_THREADS,
 )
     _validate_positive_modulus_override(modulus_override)
-    m = modulus_override === nothing ? C.N : modulus_override
-    mT = convert(eltype(C.data), m)
-    sT = convert(eltype(C.data), s)
-    len = length(A.data)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
+    mT = convert(eltype(parent(C)), m)
+    sT = convert(eltype(parent(C)), s)
+    len = length(parent(A))
     blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_mul_scalar!(C.data, A.data, sT, mT)
+    @cuda threads=threads blocks=blocks k_mul_scalar!(parent(C), parent(A), sT, mT)
     return C
 end
 
