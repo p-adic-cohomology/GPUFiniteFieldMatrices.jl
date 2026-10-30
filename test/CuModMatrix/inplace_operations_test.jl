@@ -170,10 +170,9 @@ function test_inplace_modulus_override()
 
     A_data = [1 5 10; 15 20 25; 30 35 40]
     modulus1 = 27
-    modulus2 = 9
 
     A = CuModMatrix(A_data; modulus = modulus1)
-    B = CuModMatrix(A_data; modulus = modulus2)
+    B = CuModMatrix(A_data; modulus = modulus1)
     C = GPUFiniteFieldMatrices.zeros(
         GPUFiniteFieldMatrices.CuModMatrix{Int},
         3,
@@ -255,62 +254,145 @@ function test_inplace_modulus_override()
     @test Array(C) == expected
     @test GPUFiniteFieldMatrices.modulus(C) == modulus1
 
-    # Invalid overrides are errors for multiplication paths.
+    # Every supplied override must be positive, including under @inbounds.
+    # Each rejected call must leave the complete input and destination storage
+    # unchanged, including dirty padding.
+    function assert_invalid_override_no_write(call, inbounds_call, destination, source)
+        destination_before = Array(parent(destination))
+        source_before = Array(parent(source))
+        @test_throws ArgumentError call()
+        @test Array(parent(destination)) == destination_before
+        @test Array(parent(source)) == source_before
+        @test_throws ArgumentError inbounds_call()
+        @test Array(parent(destination)) == destination_before
+        @test Array(parent(source)) == source_before
+    end
+
     for fallback_override in (0, -1)
-        GPUFiniteFieldMatrices.add!(C, A, A; modulus_override = fallback_override)
-        @test Array(C) == mod.(A_data .+ A_data, modulus1)
-        @test GPUFiniteFieldMatrices.modulus(C) == modulus1
-
-        elementwise_before = Array(C)
-        @test_throws ArgumentError elementwise_multiply!(
+        assert_invalid_override_no_write(
+            () ->
+                GPUFiniteFieldMatrices.add!(C, A, B; modulus_override = fallback_override),
+            () -> (@inbounds GPUFiniteFieldMatrices.add!(
+                C,
+                A,
+                B;
+                modulus_override = fallback_override,
+            )),
             C,
             A,
-            A;
-            modulus_override = fallback_override,
         )
-        @test Array(C) == elementwise_before
-
-        scalar_add!(C, A, scalar; modulus_override = fallback_override)
-        @test Array(C) == mod.(A_data .+ scalar, modulus1)
-
-        GPUFiniteFieldMatrices.sub!(C, A, A; modulus_override = fallback_override)
-        @test Array(C) == zeros(eltype(A_data), size(A_data))
-        @test GPUFiniteFieldMatrices.modulus(C) == modulus1
-
-        direct_elementwise_before = Array(C)
-        @test_throws ArgumentError GPUFiniteFieldMatrices.mul_elementwise!(
+        assert_invalid_override_no_write(
+            () ->
+                GPUFiniteFieldMatrices.sub!(C, A, B; modulus_override = fallback_override),
+            () -> (@inbounds GPUFiniteFieldMatrices.sub!(
+                C,
+                A,
+                B;
+                modulus_override = fallback_override,
+            )),
             C,
             A,
-            A;
-            modulus_override = fallback_override,
         )
-        @test Array(C) == direct_elementwise_before
-
-        GPUFiniteFieldMatrices.scalar_sub!(
+        assert_invalid_override_no_write(
+            () -> elementwise_multiply!(C, A, B; modulus_override = fallback_override),
+            () -> (@inbounds elementwise_multiply!(
+                C,
+                A,
+                B;
+                modulus_override = fallback_override,
+            )),
             C,
             A,
-            scalar;
-            modulus_override = fallback_override,
         )
-        @test Array(C) == mod.(A_data .- scalar, modulus1)
-
-        GPUFiniteFieldMatrices.rscalar_sub!(
+        assert_invalid_override_no_write(
+            () -> GPUFiniteFieldMatrices.mul_elementwise!(
+                C,
+                A,
+                B;
+                modulus_override = fallback_override,
+            ),
+            () -> (@inbounds GPUFiniteFieldMatrices.mul_elementwise!(
+                C,
+                A,
+                B;
+                modulus_override = fallback_override,
+            )),
             C,
             A,
-            scalar;
-            modulus_override = fallback_override,
         )
-        @test Array(C) == mod.(scalar .- A_data, modulus1)
-
-        GPUFiniteFieldMatrices.neg!(C, A; modulus_override = fallback_override)
-        @test Array(C) == mod.(-A_data, modulus1)
-
-        GPUFiniteFieldMatrices.div!(C, A, 2; modulus_override = fallback_override)
-        @test Array(C) == mod.(A_data .* invmod(2, modulus1), modulus1)
-
-        scalar_before = Array(C)
-        @test_throws ArgumentError mul!(C, A, scalar; modulus_override = fallback_override)
-        @test Array(C) == scalar_before
+        assert_invalid_override_no_write(
+            () -> scalar_add!(C, A, scalar; modulus_override = fallback_override),
+            () ->
+                (@inbounds scalar_add!(C, A, scalar; modulus_override = fallback_override)),
+            C,
+            A,
+        )
+        assert_invalid_override_no_write(
+            () -> GPUFiniteFieldMatrices.scalar_sub!(
+                C,
+                A,
+                scalar;
+                modulus_override = fallback_override,
+            ),
+            () -> (@inbounds GPUFiniteFieldMatrices.scalar_sub!(
+                C,
+                A,
+                scalar;
+                modulus_override = fallback_override,
+            )),
+            C,
+            A,
+        )
+        assert_invalid_override_no_write(
+            () -> GPUFiniteFieldMatrices.rscalar_sub!(
+                C,
+                A,
+                scalar;
+                modulus_override = fallback_override,
+            ),
+            () -> (@inbounds GPUFiniteFieldMatrices.rscalar_sub!(
+                C,
+                A,
+                scalar;
+                modulus_override = fallback_override,
+            )),
+            C,
+            A,
+        )
+        assert_invalid_override_no_write(
+            () -> GPUFiniteFieldMatrices.neg!(C, A; modulus_override = fallback_override),
+            () -> (@inbounds GPUFiniteFieldMatrices.neg!(
+                C,
+                A;
+                modulus_override = fallback_override,
+            )),
+            C,
+            A,
+        )
+        assert_invalid_override_no_write(
+            () ->
+                GPUFiniteFieldMatrices.div!(C, A, 2; modulus_override = fallback_override),
+            () -> (@inbounds GPUFiniteFieldMatrices.div!(
+                C,
+                A,
+                2;
+                modulus_override = fallback_override,
+            )),
+            C,
+            A,
+        )
+        assert_invalid_override_no_write(
+            () -> mul!(C, A, scalar; modulus_override = fallback_override),
+            () -> (@inbounds mul!(C, A, scalar; modulus_override = fallback_override)),
+            C,
+            A,
+        )
+        assert_invalid_override_no_write(
+            () -> mod_elements!(C; modulus_override = fallback_override),
+            () -> (@inbounds mod_elements!(C; modulus_override = fallback_override)),
+            C,
+            C,
+        )
     end
 
     # Test matrix multiplication with modulus override
@@ -374,8 +456,9 @@ function test_inplace_copy_and_mod()
 
     for fallback_override in (0, -1)
         copyto!(F, Float32.(A_data .* 2))
-        mod_elements!(F; modulus_override = fallback_override)
-        @test Array(F) == mod.(A_data .* 2, modulus)
+        before = Array(parent(F))
+        @test_throws ArgumentError mod_elements!(F; modulus_override = fallback_override)
+        @test Array(parent(F)) == before
         @test GPUFiniteFieldMatrices.modulus(F) == modulus
     end
 

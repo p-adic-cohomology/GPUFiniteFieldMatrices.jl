@@ -30,16 +30,16 @@ function k_rsub_scalar!(out, A, s, m)
     return
 end
 
-function sub!(
+Base.@propagate_inbounds @inline function sub!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray;
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    @boundscheck _check_elementwise_compatible(C, A, B)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     output = _logical_view(parent(C), size(C))
     left = _logical_view(parent(A), size(A))
@@ -52,7 +52,7 @@ function sub!(
     return C
 end
 
-function scalar_sub!(
+Base.@propagate_inbounds @inline function scalar_sub!(
     C::CuModArray,
     A::CuModArray,
     s::Number,
@@ -60,9 +60,9 @@ function scalar_sub!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    @boundscheck _check_elementwise_compatible(C, A)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s)
     output = _logical_view(parent(C), size(C))
@@ -75,7 +75,7 @@ function scalar_sub!(
     return C
 end
 
-function rscalar_sub!(
+Base.@propagate_inbounds @inline function rscalar_sub!(
     C::CuModArray,
     A::CuModArray,
     s::Number,
@@ -83,9 +83,9 @@ function rscalar_sub!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    @boundscheck _check_elementwise_compatible(C, A)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s)
     output = _logical_view(parent(C), size(C))
@@ -113,19 +113,22 @@ function rscalar_sub!(
     return C
 end
 
-function -(A::CuModArray, B::CuModArray)
+Base.@propagate_inbounds @inline function -(A::CuModArray, B::CuModArray)
+    @boundscheck _check_elementwise_allocating_inputs(A, B)
     C = similar(A)
     sub!(C, A, B)
     return C
 end
 
-function -(A::CuModArray, s::Number)
+Base.@propagate_inbounds @inline function -(A::CuModArray, s::Number)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar(A)
     scalar_sub!(C, A, s)
     return C
 end
 
-function -(s::Number, A::CuModArray)
+Base.@propagate_inbounds @inline function -(s::Number, A::CuModArray)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar(A)
     rscalar_sub!(C, A, s)
     return C
