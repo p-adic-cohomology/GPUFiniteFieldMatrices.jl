@@ -150,16 +150,22 @@ function test_inplace_matmul_operations()
     @test Array(C_default) ≈ expected_default
     @test C_default.N == default_modulus
 
-    for fallback_override in (0, -1)
-        C_fallback = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, default_modulus)
-        GPUFiniteFieldMatrices.stripe_mul!(
-            C_fallback,
+    for invalid_override in (0, -1)
+        C_invalid = GPUFiniteFieldMatrices.zeros(Float32, 2, 2, default_modulus)
+        C_invalid.data[1:2, 1:2] .= 7
+        C_invalid_before = Array(C_invalid)
+        @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
+            C_invalid,
             A,
             B;
-            modulus_override = fallback_override,
+            modulus_override = invalid_override,
         )
-        @test Array(C_fallback) ≈ expected_default
-        @test C_fallback.N == default_modulus
+        @test Array(C_invalid) == C_invalid_before
+        @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul(
+            A,
+            B;
+            modulus_override = invalid_override,
+        )
     end
 
     println("All in-place matrix multiplication operations tests passed!")
