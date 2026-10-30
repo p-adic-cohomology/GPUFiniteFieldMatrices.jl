@@ -906,41 +906,93 @@ function left_inverse(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     return CuModMatrix(Ldata; modulus = modulus(A), new_size = (n, m))
 end
 
-"""
-    pluq_batched(mats; options=PLUQOptions())
+function _batch_has_default_pluq_options(options::PLUQOptions)
+    defaults = PLUQOptions()
+    return options.blocksize == defaults.blocksize &&
+           options.basecase == defaults.basecase &&
+           options.pivot_policy == defaults.pivot_policy &&
+           options.lazy_q == defaults.lazy_q &&
+           options.nftb == defaults.nftb &&
+           options.pivot_warp_kernel == defaults.pivot_warp_kernel &&
+           options.trsm_mode == defaults.trsm_mode &&
+           options.trsm_warp_threshold == defaults.trsm_warp_threshold &&
+           options.schur_tile == defaults.schur_tile &&
+           options.schur_transpose_u == defaults.schur_transpose_u &&
+           options.mod_backend == defaults.mod_backend &&
+           !options.autotune
+end
 
-Run `pluq` across a batch of matrices and return factorization objects.
+function _batch_has_default_augmented_options(options::PLUQOptions)
+    return options.inverse_strategy == :augmented &&
+           _batch_has_default_pluq_options(options)
+end
 
-Each modulus must be prime. Pass `check_prime=true` in `PLUQOptions` to validate
-the precondition for the first matrix before launching GPU kernels.
-"""
-function pluq_batched(
-    mats::AbstractVector{<:CuModMatrix};
-    options::PLUQOptions = PLUQOptions(),
+function _validate_batch_inputs(mats::AbstractVector{<:CuModMatrix}, options::PLUQOptions)
+    isempty(mats) && return nothing
+    for A in mats
+        size(parent(A), 1) >= rows(A) && size(parent(A), 2) >= cols(A) || throw(
+            CuModArraySizeMismatchException(
+                "matrix storage is smaller than its logical size",
+            ),
+        )
+        _validate_inverse_modulus(options, A)
+    end
+    return nothing
+end
+
+function _validate_pluq_batch_inputs(
+    mats::AbstractVector{<:CuModMatrix},
+    options::PLUQOptions,
 )
-    if !isempty(mats)
-        n = rows(mats[1])
-        if n == cols(mats[1]) && all(A -> rows(A) == n && cols(A) == n, mats)
-            if n == 4
-                return pluq_batched_4x4!(mats)
-            elseif n == 8
-                return pluq_batched_8x8!(mats)
-            elseif n == 16
-                return pluq_batched_16x16!(mats)
-            elseif n == 32
-                return pluq_batched_32x32!(mats)
-            end
+    _validate_batch_inputs(mats, options)
+    isempty(mats) && return nothing
+    T = eltype(parent(first(mats)))
+    for A in mats
+        eltype(parent(A)) === T ||
+            throw(ArgumentError("batch matrices must have the same element type"))
+    end
+    return nothing
+end
+
+function _batch_uniform_square_size(mats::AbstractVector{<:CuModMatrix})
+    isempty(mats) && return (false, 0)
+    n = rows(first(mats))
+    return all(A -> rows(A) == n && cols(A) == n, mats) ? (true, n) : (false, 0)
+end
+
+function _batch_validate_tiny_matrices(mats::AbstractVector{<:CuModMatrix}, n::Int)
+    N = modulus(first(mats))
+    T = eltype(parent(first(mats)))
+    for A in mats
+        if modulus(A) != N || eltype(parent(A)) !== T
+            throw(
+                CuModArrayModulusMismatchException(
+                    "batch matrices must have same modulus and element type",
+                ),
+            )
+        end
+        if rows(A) != n || cols(A) != n
+            throw(CuModArraySizeMismatchException("all matrices must be $(n)x$(n)"))
         end
     end
-    isempty(mats) && return Any[]
-    opts = _resolve_options(options, mats[1])
-    firstF = pluq(mats[1], options = opts)
+    return nothing
+end
+
+function _empty_pluq_batch(::Type{CuModMatrix{T}}) where {T}
+    return PLUQ{T}[]
+end
+
+_empty_pluq_batch(::Type) = PLUQ[]
+
+function _pluq_batched_fallback!(mats::AbstractVector{<:CuModMatrix}, options::PLUQOptions)
+    opts = _resolve_options(options, first(mats))
+    firstF = pluq!(mats[1], options = opts)
     out = Vector{typeof(firstF)}(undef, length(mats))
     out[1] = firstF
     nstreams = min(opts.batch_streams, length(mats))
     if nstreams == 1
         for i = 2:length(mats)
-            out[i] = pluq(mats[i], options = opts)
+            out[i] = pluq!(mats[i], options = opts)
         end
         return out
     end
@@ -948,13 +1000,207 @@ function pluq_batched(
     for i = 2:length(mats)
         s = streams[(i-1)%nstreams+1]
         CUDA.stream!(s) do
-            out[i] = pluq(mats[i], options = opts)
+            out[i] = pluq!(mats[i], options = opts)
         end
     end
     for s in streams
         synchronize(s)
     end
     return out
+end
+
+function _pluq_batched_inplace_nonempty!(
+    mats::AbstractVector{<:CuModMatrix},
+    options::PLUQOptions,
+)
+    _validate_pluq_batch_inputs(mats, options)
+    _validate_batch_input_aliases(mats)
+    is_square_batch, n = _batch_uniform_square_size(mats)
+    if is_square_batch && _batch_has_default_pluq_options(options) && _batch_supported_n(n)
+        _batch_validate_tiny_matrices(mats, n)
+        return _pluq_batched_tiny!(mats, n; options = options)
+    elseif is_square_batch && _batch_supported_n(n)
+        # The tiny kernels do not implement the configurable PLUQ strategy.
+        # Use the existing scalar PLUQ fallback so caller options take effect.
+        _batch_validate_tiny_matrices(mats, n)
+    end
+    return _pluq_batched_fallback!(mats, options)
+end
+
+function _pluq_batched_inplace!(
+    mats::AbstractVector{<:CuModMatrix{T}},
+    options::PLUQOptions,
+) where {T}
+    isempty(mats) && return PLUQ{T}[]
+    return _pluq_batched_inplace_nonempty!(mats, options)
+end
+
+function _pluq_batched_inplace!(mats::AbstractVector{<:CuModMatrix}, options::PLUQOptions)
+    isempty(mats) && return PLUQ[]
+    factors = _pluq_batched_inplace_nonempty!(mats, options)
+    out = Vector{PLUQ}(undef, length(factors))
+    for i in eachindex(factors)
+        out[i] = factors[i]
+    end
+    return out
+end
+
+"""
+    pluq_batched!(mats; options=PLUQOptions())
+
+Factor each matrix in place and return `PLUQ` values whose `LU` fields wrap
+the corresponding input matrices. Input matrices with overlapping storage are
+rejected before any factorization starts. Rectangular batches use the existing
+scalar PLUQ fallback. Tiny kernels use their fixed strategy; when a configurable
+PLUQ option is not supported by that kernel, the scalar fallback honors the
+option. `batch_streams` applies only to fallback batches.
+"""
+function pluq_batched!(
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+)
+    return _pluq_batched_inplace!(mats, options)
+end
+
+"""
+    pluq_batched_NxN!(mats; options=PLUQOptions())
+
+Public square-batch helper. It overwrites each matrix and returns factorizations
+whose `LU` fields wrap the supplied matrices. Input matrices with overlapping
+storage are rejected before factorization starts. Use the exported
+`pluq_batched!` for square and rectangular batches.
+"""
+function pluq_batched_NxN!(
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+)
+    is_square_batch, _ = _batch_uniform_square_size(mats)
+    (is_square_batch || isempty(mats)) || throw(
+        CuModArraySizeMismatchException("all matrices must have the same square shape"),
+    )
+    return _pluq_batched_inplace!(mats, options)
+end
+
+function _batch_storage_range(A::CuArray)
+    first_address = UInt(pointer(A))
+    return first_address, first_address + UInt(sizeof(eltype(A)) * length(A))
+end
+
+function _batch_mightalias(A::CuArray, B::CuArray)
+    first_A, last_A = _batch_storage_range(A)
+    first_B, last_B = _batch_storage_range(B)
+    return first_A < last_B && first_B < last_A
+end
+
+function _validate_batch_input_aliases(mats::AbstractVector{<:CuModMatrix})
+    for i in eachindex(mats)
+        for j in eachindex(mats)
+            j < i || continue
+            _batch_mightalias(parent(mats[i]), parent(mats[j])) &&
+                throw(ArgumentError("in-place batch inputs must not alias each other"))
+        end
+    end
+    return nothing
+end
+
+function _validate_batch_destinations(
+    dests::AbstractVector{<:CuModMatrix},
+    mats::AbstractVector{<:CuModMatrix},
+    options::PLUQOptions,
+)
+    length(dests) == length(mats) ||
+        throw(ArgumentError("destination and input batches must have the same length"))
+    _validate_pluq_batch_inputs(mats, options)
+    for i in eachindex(mats)
+        src = mats[i]
+        dest = dests[i]
+        size(dest) == size(src) || throw(
+            CuModArraySizeMismatchException("destination $(i) must match its input shape"),
+        )
+        modulus(dest) == modulus(src) || throw(
+            CuModArrayModulusMismatchException(
+                "destination $(i) must match its input modulus",
+            ),
+        )
+        eltype(parent(dest)) === eltype(parent(src)) ||
+            throw(ArgumentError("destination $(i) must match its input element type"))
+        size(parent(dest), 1) >= rows(src) && size(parent(dest), 2) >= cols(src) || throw(
+            CuModArraySizeMismatchException(
+                "destination $(i) storage is smaller than its logical size",
+            ),
+        )
+    end
+    is_square_batch, n = _batch_uniform_square_size(mats)
+    if is_square_batch && _batch_supported_n(n)
+        _batch_validate_tiny_matrices(mats, n)
+    end
+    for i in eachindex(dests)
+        for j in eachindex(mats)
+            _batch_mightalias(parent(dests[i]), parent(mats[j])) &&
+                throw(ArgumentError("destination storage must not alias any input storage"))
+        end
+        for j = firstindex(dests):(i-1)
+            _batch_mightalias(parent(dests[i]), parent(dests[j])) &&
+                throw(ArgumentError("destination matrices must not alias each other"))
+        end
+    end
+    return nothing
+end
+
+"""
+    pluq_batched!(dests, mats; options=PLUQOptions())
+
+Factor each input into the corresponding caller-provided destination. Inputs
+remain unchanged, and each returned `PLUQ.LU` wraps its destination. Destination
+length, shape, modulus, element type, capacity, and storage aliasing are checked
+before any destination is written. Permutations and ranks are fresh host values.
+"""
+function pluq_batched!(
+    dests::AbstractVector{<:CuModMatrix},
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+)
+    _validate_batch_destinations(dests, mats, options)
+    for i in eachindex(mats)
+        src = mats[i]
+        dest = dests[i]
+        m, n = size(src)
+        copyto!(@view(parent(dest)[1:m, 1:n]), @view(parent(src)[1:m, 1:n]))
+    end
+    return _pluq_batched_inplace!(dests, options)
+end
+
+function _copy_batch_matrices(mats::AbstractVector{<:CuModMatrix{T}}) where {T}
+    out = Vector{CuModMatrix{T}}(undef, length(mats))
+    for i in eachindex(mats)
+        A = mats[i]
+        out[i] = CuModMatrix(copy(parent(A)); modulus = modulus(A), new_size = size(A))
+    end
+    return out
+end
+
+function _copy_batch_matrices(mats::AbstractVector{<:CuModMatrix})
+    out = Vector{CuModMatrix}(undef, length(mats))
+    for i in eachindex(mats)
+        A = mats[i]
+        out[i] = CuModMatrix(copy(parent(A)); modulus = modulus(A), new_size = size(A))
+    end
+    return out
+end
+
+"""
+    pluq_batched(mats; options=PLUQOptions())
+
+Factor copies of the matrices and return factorization objects, leaving `mats`
+unchanged. Each modulus must be prime. `batch_streams` applies only to fallback
+batches; tiny kernels use a fixed strategy or fall back when caller PLUQ options
+require it.
+"""
+function pluq_batched(
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+)
+    return pluq_batched!(_copy_batch_matrices(mats); options = options)
 end
 
 """
@@ -964,39 +1210,38 @@ Run the fastest inverse path across a batch. For rectangular matrices this
 dispatches to one-sided inverses.
 
 Each modulus must be prime. Pass `check_prime=true` in `PLUQOptions` to validate
-the precondition for the first matrix before launching GPU kernels.
+the precondition before launching GPU kernels. `batch_streams` applies only to
+fallback batches. The tiny inverse kernel implements the augmented strategy;
+other square strategies use the existing scalar fallback.
 """
 function inverse_batched(
     mats::AbstractVector{<:CuModMatrix};
     options::PLUQOptions = PLUQOptions(),
 )
-    if !isempty(mats)
-        n = rows(mats[1])
-        if n == cols(mats[1]) && all(A -> rows(A) == n && cols(A) == n, mats)
-            if n == 4
-                return inverse_batched_4x4!(mats)
-            elseif n == 8
-                return inverse_batched_8x8!(mats)
-            elseif n == 16
-                return inverse_batched_16x16!(mats)
-            elseif n == 32
-                return inverse_batched_32x32!(mats)
-            end
+    isempty(mats) && return CuModMatrix[]
+    _validate_batch_inputs(mats, options)
+    opts = _resolve_options(options, mats[1])
+    is_square_batch, n = _batch_uniform_square_size(mats)
+    if is_square_batch && _batch_supported_n(n)
+        T = eltype(parent(first(mats)))
+        all(A -> eltype(parent(A)) === T, mats) ||
+            throw(ArgumentError("batch matrices must have the same element type"))
+        _batch_validate_tiny_matrices(mats, n)
+        if _batch_has_default_augmented_options(opts)
+            return _inverse_batched_tiny(mats, n; options = opts)
         end
     end
-    isempty(mats) && return CuModMatrix[]
-    opts = _resolve_options(options, mats[1])
     out = Vector{CuModMatrix}(undef, length(mats))
     nstreams = min(opts.batch_streams, length(mats))
     if nstreams == 1
         for i in eachindex(mats)
             A = mats[i]
             if rows(A) == cols(A)
-                out[i] = inv(A, options = opts)
+                out[i] = inv(A, options = options)
             elseif rows(A) < cols(A)
-                out[i] = right_inverse(A, options = opts)
+                out[i] = right_inverse(A, options = options)
             else
-                out[i] = left_inverse(A, options = opts)
+                out[i] = left_inverse(A, options = options)
             end
         end
         return out
@@ -1007,11 +1252,11 @@ function inverse_batched(
         s = streams[(i-1)%nstreams+1]
         CUDA.stream!(s) do
             if rows(A) == cols(A)
-                out[i] = inv(A, options = opts)
+                out[i] = inv(A, options = options)
             elseif rows(A) < cols(A)
-                out[i] = right_inverse(A, options = opts)
+                out[i] = right_inverse(A, options = options)
             else
-                out[i] = left_inverse(A, options = opts)
+                out[i] = left_inverse(A, options = options)
             end
         end
     end
