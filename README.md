@@ -133,9 +133,12 @@ fallback for zero or negative overrides.
 For stripe multiplication, `input_bound` is the exclusive upper bound on
 nonnegative multiplicands, and `max_ops` limits product contributions
 accumulated per output entry between modular reductions. A supplied
-matrix-matrix `input_bound` selects one stripe only when the full inner
-dimension fits the exact-integer budget. The low-level matrix-vector adapter
-retains `respect_max_ops=false` to recompute its safe stripe budget.
+`max_ops` is used when it is safe for the input bound and reduction modulus;
+otherwise the call throws `ArgumentError`. If omitted, the safe budget is
+derived from those values. A matrix-matrix `input_bound` may require multiple
+stripes when the inner dimension exceeds that budget. The low-level
+matrix-vector adapter retains `respect_max_ops=false` to recompute its safe
+stripe budget.
 
 ## License
 
