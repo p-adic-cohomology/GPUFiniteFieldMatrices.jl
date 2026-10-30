@@ -23,6 +23,15 @@ using GPUFiniteFieldMatrices
 
 include("api_surface_test.jl")
 
+@testset "Stripe budget input validation" begin
+    for input_bound in (1, 0, -1)
+        @test_throws ArgumentError GPUFiniteFieldMatrices.find_max_stripe_ops(
+            Float32,
+            input_bound,
+        )
+    end
+end
+
 # Exercise the return type check on CPU, even when CUDA is unavailable.
 @testset "DispatchDoctor — return type stability" begin
     @test GPUFiniteFieldMatrices.mod_inv(3, 7) == 5
