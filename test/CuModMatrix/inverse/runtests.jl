@@ -8,6 +8,7 @@ include("test_rectangular.jl")
 include("test_rectangular_additional.jl")
 include("test_phase0_regimes.jl")
 include("test_batched_tiny.jl")
+include("test_batched_streams.jl")
 
 function test_inverse_rewrite()
     @testset "Mod Arithmetic" begin
@@ -81,5 +82,8 @@ function test_inverse_rewrite()
     end
     @testset "Batched Tiny Kernels" begin
         test_batched_tiny_kernels()
+    end
+    @testset "Batched CUDA Streams" begin
+        test_batched_streams()
     end
 end
