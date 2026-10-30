@@ -55,8 +55,6 @@
         :inverse_batched_32x32!,
         :upper_triangular_inverse_no_copy,
         :lower_triangular_inverse_no_copy,
-        :forward_sub_gpu_type_32,
-        :backward_sub_gpu_type_32,
         :stripe_mul,
         :stripe_mul!,
         :TILE_WIDTH,
@@ -64,6 +62,15 @@
     @test all(name -> isdefined(mod, name), public_names)
     @test all(name -> Base.ispublic(mod, name), public_names)
     @test all(name -> !Base.isexported(mod, name), public_names)
+    internal_triangular_helpers = (
+        :_lower_triangular_inv_32!,
+        :_upper_triangular_inv_32!,
+        :_lower_triangular_inv_32_kernel!,
+        :_upper_triangular_inv_32_kernel!,
+    )
+    @test all(name -> isdefined(mod, name), internal_triangular_helpers)
+    @test all(name -> !Base.ispublic(mod, name), internal_triangular_helpers)
+    @test all(name -> !Base.isexported(mod, name), internal_triangular_helpers)
     expected_public = union(Set(exported), Set(public_names))
     @test Set(filter(name -> Base.ispublic(mod, name), module_names)) == expected_public
     @test !Base.ispublic(mod, :pluq_check_identity)
@@ -71,6 +78,10 @@
 
     removed = (
         :CuModcopy,
+        :forward_sub_gpu_type_32,
+        :backward_sub_gpu_type_32,
+        :forward_sub_kernel_32,
+        :backward_sub_kernel_32,
         :mulN!,
         :inverse,
         :inverse_new,

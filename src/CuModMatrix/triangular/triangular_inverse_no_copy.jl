@@ -42,14 +42,7 @@ function _recursive_upper_triangular_inverse_no_copy(
         end
 
         n_active = min(TILE_WIDTH, row_upper - row_lower + 1, col_upper - col_lower + 1)
-        @cuda threads=TILE_WIDTH blocks=1 backward_sub_kernel_32(
-            A,
-            A_all_inv,
-            N,
-            row_lower-1,
-            col_lower-1,
-            n_active,
-        )
+        _upper_triangular_inv_32!(A_all_inv, A, N, row_lower-1, col_lower-1, n_active)
 
         if debug
             println("A_all_inv:")
@@ -106,14 +99,7 @@ function _recursive_upper_triangular_inverse_no_copy(
         end
 
         n11 = min(TILE_WIDTH, row_mid - row_lower + 1, col_mid - col_lower + 1)
-        @cuda threads=TILE_WIDTH blocks=1 backward_sub_kernel_32(
-            A,
-            A_11_inv,
-            N,
-            row_lower-1,
-            col_lower-1,
-            n11,
-        )
+        _upper_triangular_inv_32!(A_11_inv, A, N, row_lower-1, col_lower-1, n11)
 
         if debug
             println("A_11_inv:")
@@ -148,14 +134,7 @@ function _recursive_upper_triangular_inverse_no_copy(
         end
 
         n22 = min(TILE_WIDTH, row_upper - row_mid, col_upper - col_mid)
-        @cuda threads=TILE_WIDTH blocks=1 backward_sub_kernel_32(
-            A,
-            A_22_inv,
-            N,
-            row_mid,
-            col_mid,
-            n22,
-        )
+        _upper_triangular_inv_32!(A_22_inv, A, N, row_mid, col_mid, n22)
 
         if debug
             println("A_22_inv:")
@@ -254,7 +233,11 @@ function upper_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
     rows, cols = size(A)
 
     if rows <= MAX_INVERSE_SIZE
-        return backward_sub_gpu_type_32(A, 0, 0)
+        A_inv_data =
+            CUDA.zeros(eltype(A.data), TILE_WIDTH + size(A, 2), TILE_WIDTH + size(A, 1))
+        n_active = min(TILE_WIDTH, size(A, 1), size(A, 2))
+        _upper_triangular_inv_32!(A_inv_data, A.data, A.N, 0, 0, n_active)
+        return CuModMatrix(A_inv_data, A.N; new_size = (size(A, 2), size(A, 1)))
     end
 
     A_inv = zeros(eltype(A.data), size(A)[2], size(A)[1], A.N)
@@ -343,14 +326,7 @@ function _recursive_lower_triangular_inverse_no_copy(
         end
 
         n_active = min(TILE_WIDTH, row_upper - row_lower + 1, col_upper - col_lower + 1)
-        @cuda threads=TILE_WIDTH blocks=1 forward_sub_kernel_32(
-            A,
-            A_all_inv,
-            N,
-            row_lower-1,
-            col_lower-1,
-            n_active,
-        )
+        _lower_triangular_inv_32!(A_all_inv, A, N, row_lower-1, col_lower-1, n_active)
 
         if debug
             println("A_all_inv:")
@@ -430,14 +406,7 @@ function _recursive_lower_triangular_inverse_no_copy(
         end
 
         n11 = min(TILE_WIDTH, row_mid - row_lower + 1, col_mid - col_lower + 1)
-        @cuda threads=TILE_WIDTH blocks=1 forward_sub_kernel_32(
-            A,
-            A_11_inv,
-            N,
-            row_lower-1,
-            col_lower-1,
-            n11,
-        )
+        _lower_triangular_inv_32!(A_11_inv, A, N, row_lower-1, col_lower-1, n11)
 
         if debug
             println("A_11_inv:")
@@ -472,14 +441,7 @@ function _recursive_lower_triangular_inverse_no_copy(
         end
 
         n22 = min(TILE_WIDTH, row_upper - row_mid, col_upper - col_mid)
-        @cuda threads=TILE_WIDTH blocks=1 forward_sub_kernel_32(
-            A,
-            A_22_inv,
-            N,
-            row_mid,
-            col_mid,
-            n22,
-        )
+        _lower_triangular_inv_32!(A_22_inv, A, N, row_mid, col_mid, n22)
 
         if debug
             println("A_22_inv:")
@@ -575,7 +537,11 @@ function lower_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
     rows, cols = size(A)
 
     if cols <= MAX_INVERSE_SIZE
-        return forward_sub_gpu_type_32(A, 0, 0)
+        A_inv_data =
+            CUDA.zeros(eltype(A.data), TILE_WIDTH + size(A, 2), TILE_WIDTH + size(A, 1))
+        n_active = min(TILE_WIDTH, size(A, 1), size(A, 2))
+        _lower_triangular_inv_32!(A_inv_data, A.data, A.N, 0, 0, n_active)
+        return CuModMatrix(A_inv_data, A.N; new_size = (size(A, 2), size(A, 1)))
     end
 
     A_inv = zeros(eltype(A.data), size(A)[2], size(A)[1], A.N)

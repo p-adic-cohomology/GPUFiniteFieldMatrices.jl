@@ -44,6 +44,11 @@ precondition on the host before GPU kernels launch. The current CUDA kernels pas
   PLUQ factorization, triangular inverses, modular matrix multiplication, and
   permutation application. `inverse_strategy = :augmented` is kept as a
   reference baseline using GPU Gauss-Jordan elimination over `[A I]`.
+- Triangular-inverse leaf kernels write into caller-provided storage through
+  internal destination-first helpers. The qualified
+  `upper_triangular_inverse_no_copy` and `lower_triangular_inverse_no_copy`
+  entry points allocate their result buffers; recursive paths keep the source
+  factors separate from those destinations.
 - Rectangular one-sided inverses: use rank-revealing row and column pivoting over
   augmented systems to construct right inverses for full row-rank matrices, with
   left inverses handled through transposition. The square `inverse_strategy`

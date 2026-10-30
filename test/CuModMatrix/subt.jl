@@ -15,11 +15,11 @@ function test_sub(p, i)
     # end
 
     # NVTX.@range "Lower triangular inverse p=$p, i=$i" begin
-    L_inv = GPUFiniteFieldMatrices.forward_sub_gpu_type_32(L, 0, 0)
+    L_inv = GPUFiniteFieldMatrices.lower_triangular_inverse_no_copy(L)
     # end
 
     # NVTX.@range "Upper triangular inverse p=$p, i=$i" begin
-    U_inv = GPUFiniteFieldMatrices.backward_sub_gpu_type_32(U, 0, 0)
+    U_inv = GPUFiniteFieldMatrices.upper_triangular_inverse_no_copy(U)
     # end
 
     println("A")

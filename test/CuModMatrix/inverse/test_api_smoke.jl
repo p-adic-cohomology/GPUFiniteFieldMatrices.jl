@@ -15,6 +15,13 @@ function test_api_smoke()
     @test F.L isa CuModMatrix
     @test F.U isa CuModMatrix
     @test GPUFiniteFieldMatrices.pluq_check_identity(F, A)
+
+    A_inplace = CuModMatrix(copy(Ahost), N)
+    F_inplace = pluq!(A_inplace)
+    @test F_inplace.rank == 3
+    @test F_inplace.LU.data === A_inplace.data
+    @test GPUFiniteFieldMatrices.pluq_check_identity(F_inplace, A)
+
     Ainv = inv(A)
     I1 = mod.(Array(A * Ainv), N)
     expected = Matrix{eltype(I1)}([1 0 0; 0 1 0; 0 0 1])
