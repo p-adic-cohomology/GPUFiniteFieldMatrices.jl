@@ -20,6 +20,24 @@ function test_inplace_basic_operations()
     A = CuModMatrix(A_data, modulus)
     B = CuModMatrix(B_data, modulus)
 
+    # The renamed alternate-modulus allocator preserves shape and element type
+    # without changing the source matrix.
+    original_A = Array(A)
+    A_other_modulus = GPUFiniteFieldMatrices.similar_with_modulus(A, 7)
+    @test size(A_other_modulus) == size(A)
+    @test eltype(A_other_modulus) == eltype(A)
+    @test A_other_modulus.N == 7
+    @test Array(A) == original_A
+
+    # Base.copy preserves metadata and owns independent device storage.
+    A_copy = copy(A)
+    @test A_copy.N == A.N
+    @test size(A_copy) == size(A)
+    @test eltype(A_copy) == eltype(A)
+    GPUFiniteFieldMatrices.neg!(A_copy, A_copy)
+    @test Array(A_copy) == mod.(-A_data, modulus)
+    @test Array(A) == A_data
+
     C = GPUFiniteFieldMatrices.zeros(Int, 3, 3, modulus)
     D = GPUFiniteFieldMatrices.zeros(Int, 3, 3, modulus)
 
@@ -95,6 +113,14 @@ function test_inplace_basic_operations()
 
     expected = mod.(A_data .* scalar, modulus)
     @test Array(C) == expected
+
+    # Exercise both standard LinearAlgebra in-place scaling argument orders.
+    right_scaled = copy(A)
+    left_scaled = copy(A)
+    LinearAlgebra.rmul!(right_scaled, scalar)
+    LinearAlgebra.lmul!(scalar, left_scaled)
+    @test Array(right_scaled) == expected
+    @test Array(left_scaled) == expected
 
     # Test matrix multiplication
     E = GPUFiniteFieldMatrices.zeros(Float32, 3, 3, modulus)
@@ -202,6 +228,65 @@ function test_inplace_modulus_override()
 
     expected = mod.(A_data .* scalar, override_modulus)
     @test Array(C) == expected
+    @test C.N == modulus1
+
+    # Invalid overrides are errors for multiplication paths.
+    for fallback_override in (0, -1)
+        GPUFiniteFieldMatrices.add!(C, A, A; modulus_override = fallback_override)
+        @test Array(C) == mod.(A_data .+ A_data, modulus1)
+        @test C.N == modulus1
+
+        elementwise_before = Array(C)
+        @test_throws ArgumentError elementwise_multiply!(
+            C,
+            A,
+            A;
+            modulus_override = fallback_override,
+        )
+        @test Array(C) == elementwise_before
+
+        scalar_add!(C, A, scalar; modulus_override = fallback_override)
+        @test Array(C) == mod.(A_data .+ scalar, modulus1)
+
+        GPUFiniteFieldMatrices.sub!(C, A, A; modulus_override = fallback_override)
+        @test Array(C) == zeros(eltype(A_data), size(A_data))
+        @test C.N == modulus1
+
+        direct_elementwise_before = Array(C)
+        @test_throws ArgumentError GPUFiniteFieldMatrices.mul_elementwise!(
+            C,
+            A,
+            A;
+            modulus_override = fallback_override,
+        )
+        @test Array(C) == direct_elementwise_before
+
+        GPUFiniteFieldMatrices.scalar_sub!(
+            C,
+            A,
+            scalar;
+            modulus_override = fallback_override,
+        )
+        @test Array(C) == mod.(A_data .- scalar, modulus1)
+
+        GPUFiniteFieldMatrices.rscalar_sub!(
+            C,
+            A,
+            scalar;
+            modulus_override = fallback_override,
+        )
+        @test Array(C) == mod.(scalar .- A_data, modulus1)
+
+        GPUFiniteFieldMatrices.neg!(C, A; modulus_override = fallback_override)
+        @test Array(C) == mod.(-A_data, modulus1)
+
+        GPUFiniteFieldMatrices.div!(C, A, 2; modulus_override = fallback_override)
+        @test Array(C) == mod.(A_data .* invmod(2, modulus1), modulus1)
+
+        scalar_before = Array(C)
+        @test_throws ArgumentError mul!(C, A, scalar; modulus_override = fallback_override)
+        @test Array(C) == scalar_before
+    end
 
     # Test matrix multiplication with modulus override
     #
@@ -256,6 +341,13 @@ function test_inplace_copy_and_mod()
 
     expected = mod.(expected, override_modulus)
     @test Array(F) == expected
+
+    for fallback_override in (0, -1)
+        copyto!(F, Float32.(A_data .* 2))
+        mod_elements!(F; modulus_override = fallback_override)
+        @test Array(F) == mod.(A_data .* 2, modulus)
+        @test F.N == modulus
+    end
 
     # Test filling (and modding)
     fill!(F, 122.0)
