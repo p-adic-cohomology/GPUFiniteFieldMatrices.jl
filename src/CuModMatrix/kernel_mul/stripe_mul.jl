@@ -81,8 +81,7 @@ else
     error("the supported CUDA version does not expose its CuRef value type")
 end
 
-const _CUBLAS_SCALAR_PAIR{T} =
-    Tuple{_CUDA_CU_REF_VALUE{T},_CUDA_CU_REF_VALUE{T}}
+const _CUBLAS_SCALAR_PAIR{T} = Tuple{_CUDA_CU_REF_VALUE{T},_CUDA_CU_REF_VALUE{T}}
 
 const _cublas_scalar_cache_f64 = IdDict{Task,Tuple}()
 const _cublas_scalar_cache_f32 = IdDict{Task,Tuple}()
