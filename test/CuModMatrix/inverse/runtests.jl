@@ -9,6 +9,7 @@ include("test_rectangular_additional.jl")
 include("test_phase0_regimes.jl")
 include("test_batched_tiny.jl")
 include("test_batched_streams.jl")
+include("test_batched_destination.jl")
 
 function test_inverse_rewrite()
     @testset "Mod Arithmetic" begin
@@ -85,5 +86,8 @@ function test_inverse_rewrite()
     end
     @testset "Batched CUDA Streams" begin
         test_batched_streams()
+    end
+    @testset "Batched Destination API" begin
+        test_batched_destination_api()
     end
 end

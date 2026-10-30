@@ -191,11 +191,15 @@ function _tiny_inverse_batched_kernel!(A, invA, ok, n::Int32, N::Int32)
     return
 end
 
-function _pluq_batched_tiny!(mats::AbstractVector{<:CuModMatrix}, n::Int)
-    isempty(mats) && return PLUQ[]
+function _pluq_batched_tiny!(
+    mats::AbstractVector{<:CuModMatrix},
+    n::Int;
+    options::PLUQOptions = PLUQOptions(),
+)
+    isempty(mats) && return _empty_pluq_batch(eltype(mats))
     !_batch_supported_n(n) && throw(ArgumentError("supported sizes are 4, 8, 16, 32"))
     N = modulus(mats[1])
-    _validate_inverse_modulus(PLUQOptions(), mats[1])
+    _validate_inverse_modulus(options, mats[1])
     T = eltype(parent(mats[1]))
     for m in mats
         if modulus(m) != N || eltype(parent(m)) != T
@@ -230,11 +234,15 @@ function _pluq_batched_tiny!(mats::AbstractVector{<:CuModMatrix}, n::Int)
     return out
 end
 
-function _inverse_batched_tiny(mats::AbstractVector{<:CuModMatrix}, n::Int)
+function _inverse_batched_tiny(
+    mats::AbstractVector{<:CuModMatrix},
+    n::Int;
+    options::PLUQOptions = PLUQOptions(),
+)
     isempty(mats) && return CuModMatrix[]
     !_batch_supported_n(n) && throw(ArgumentError("supported sizes are 4, 8, 16, 32"))
     N = modulus(mats[1])
-    _validate_inverse_modulus(PLUQOptions(), mats[1])
+    _validate_inverse_modulus(options, mats[1])
     T = eltype(parent(mats[1]))
     for m in mats
         if rows(m) != n || cols(m) != n

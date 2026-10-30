@@ -56,6 +56,26 @@ precondition on the host before GPU kernels launch. The current CUDA kernels pas
 - Tiny batched PLUQ and inverse kernels: specialize the ICCS-style workload of
   many small matrices for fixed square sizes 4, 8, 16, and 32.
 
+## Batched API mutation and options
+
+`pluq_batched!(mats; options)` overwrites every input with its packed LU data,
+and each returned `PLUQ.LU` wraps the corresponding input matrix. Input
+matrices with overlapping physical storage are rejected before factorization
+starts, including on tiny, fallback, and option-routed fallback paths.
+`pluq_batched!(dests, mats; options)` writes into caller-owned destinations
+while preserving every input. Destination length, logical shape, modulus,
+element type, storage capacity, and aliasing are checked before any writes.
+`pluq_batched(mats; options)` is the allocating, input-preserving convenience.
+`inverse_batched` also preserves its inputs. Its scalar fallback accepts mixed
+element types and resolves options for each matrix; the tiny inverse kernel
+retains its homogeneous-type requirement.
+
+The 4/8/16/32 PLUQ batch kernel uses its fixed elimination strategy. If a PLUQ
+option requires a configurable strategy, the general batch API uses the scalar
+PLUQ fallback. The tiny inverse kernel implements `inverse_strategy=:augmented`;
+other square inverse strategies use the scalar fallback. `batch_streams` applies
+to fallbacks only. Rectangular batches use the existing scalar fallback.
+
 ## Large-Matrix CUDA Optimizations
 
 - A panel is factored by one cooperative CUDA block. Pivot searches, global
