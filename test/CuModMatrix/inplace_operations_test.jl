@@ -17,8 +17,8 @@ function test_inplace_basic_operations()
     B_data = [9 8 7; 6 5 4; 3 2 1]
     modulus = 11  # Use a prime modulus
 
-    A = CuModMatrix(A_data, modulus)
-    B = CuModMatrix(B_data, modulus)
+    A = CuModMatrix(A_data; modulus = modulus)
+    B = CuModMatrix(B_data; modulus = modulus)
 
     # The renamed alternate-modulus allocator preserves shape and element type
     # without changing the source matrix.
@@ -26,20 +26,30 @@ function test_inplace_basic_operations()
     A_other_modulus = GPUFiniteFieldMatrices.similar_with_modulus(A, 7)
     @test size(A_other_modulus) == size(A)
     @test eltype(A_other_modulus) == eltype(A)
-    @test A_other_modulus.N == 7
+    @test GPUFiniteFieldMatrices.modulus(A_other_modulus) == 7
     @test Array(A) == original_A
 
     # Base.copy preserves metadata and owns independent device storage.
     A_copy = copy(A)
-    @test A_copy.N == A.N
+    @test GPUFiniteFieldMatrices.modulus(A_copy) == GPUFiniteFieldMatrices.modulus(A)
     @test size(A_copy) == size(A)
     @test eltype(A_copy) == eltype(A)
     GPUFiniteFieldMatrices.neg!(A_copy, A_copy)
     @test Array(A_copy) == mod.(-A_data, modulus)
     @test Array(A) == A_data
 
-    C = GPUFiniteFieldMatrices.zeros(Int, 3, 3, modulus)
-    D = GPUFiniteFieldMatrices.zeros(Int, 3, 3, modulus)
+    C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Int},
+        3,
+        3;
+        modulus = modulus,
+    )
+    D = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Int},
+        3,
+        3;
+        modulus = modulus,
+    )
 
     println("A = ")
     display(A)
@@ -123,7 +133,12 @@ function test_inplace_basic_operations()
     @test Array(left_scaled) == expected
 
     # Test matrix multiplication
-    E = GPUFiniteFieldMatrices.zeros(Float32, 3, 3, modulus)
+    E = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        3,
+        3;
+        modulus = modulus,
+    )
     mul!(E, A, B)
     println("E = A * B (in-place) = ")
     display(E)
@@ -134,7 +149,12 @@ function test_inplace_basic_operations()
 
     # Test copyto!
     F_data = convert.(Float32, rand(1:(modulus-1), 100, 100))
-    F = GPUFiniteFieldMatrices.zeros(Float32, 100, 100, modulus)
+    F = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        100,
+        100;
+        modulus = modulus,
+    )
 
     copyto!(F, F_data)
     @test Array(F) == F_data
@@ -152,9 +172,14 @@ function test_inplace_modulus_override()
     modulus1 = 27
     modulus2 = 9
 
-    A = CuModMatrix(A_data, modulus1)
-    B = CuModMatrix(A_data, modulus2)
-    C = GPUFiniteFieldMatrices.zeros(Int, 3, 3, modulus1)
+    A = CuModMatrix(A_data; modulus = modulus1)
+    B = CuModMatrix(A_data; modulus = modulus2)
+    C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Int},
+        3,
+        3;
+        modulus = modulus1,
+    )
 
     # Test add! with modulus override
     override_modulus = 3
@@ -186,7 +211,7 @@ function test_inplace_modulus_override()
 
     expected = mod.(A_data .* A_data, override_modulus)
     @test Array(C) == expected
-    @test C.N == modulus1
+    @test GPUFiniteFieldMatrices.modulus(C) == modulus1
 
     scalar = 3
 
@@ -228,13 +253,13 @@ function test_inplace_modulus_override()
 
     expected = mod.(A_data .* scalar, override_modulus)
     @test Array(C) == expected
-    @test C.N == modulus1
+    @test GPUFiniteFieldMatrices.modulus(C) == modulus1
 
     # Invalid overrides are errors for multiplication paths.
     for fallback_override in (0, -1)
         GPUFiniteFieldMatrices.add!(C, A, A; modulus_override = fallback_override)
         @test Array(C) == mod.(A_data .+ A_data, modulus1)
-        @test C.N == modulus1
+        @test GPUFiniteFieldMatrices.modulus(C) == modulus1
 
         elementwise_before = Array(C)
         @test_throws ArgumentError elementwise_multiply!(
@@ -250,7 +275,7 @@ function test_inplace_modulus_override()
 
         GPUFiniteFieldMatrices.sub!(C, A, A; modulus_override = fallback_override)
         @test Array(C) == zeros(eltype(A_data), size(A_data))
-        @test C.N == modulus1
+        @test GPUFiniteFieldMatrices.modulus(C) == modulus1
 
         direct_elementwise_before = Array(C)
         @test_throws ArgumentError GPUFiniteFieldMatrices.mul_elementwise!(
@@ -293,7 +318,7 @@ function test_inplace_modulus_override()
     #NOTE: this feature was removed, but here's the test preserved in this comment
     #if want to put it back.
     #
-    #D = GPUFiniteFieldMatrices.zeros(Float32, 3, 3, modulus1)
+    #D = GPUFiniteFieldMatrices.zeros(GPUFiniteFieldMatrices.CuModMatrix{Float32}, 3, 3; modulus = modulus1)
     #mul!(D, A, B, override_modulus)
     #println("D = A * B (in-place with modulus override $override_modulus) = ")
     #display(D)
@@ -311,8 +336,13 @@ function test_inplace_copy_and_mod()
     A_data = [1 2 3; 4 5 6; 7 8 9]
     modulus = 11
 
-    A = CuModMatrix(A_data, modulus)
-    B = GPUFiniteFieldMatrices.zeros(Float32, 3, 3, modulus)
+    A = CuModMatrix(A_data; modulus = modulus)
+    B = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        3,
+        3;
+        modulus = modulus,
+    )
 
     # Test copy!
     copy!(B, A)
@@ -323,7 +353,7 @@ function test_inplace_copy_and_mod()
     @test Array(B) == A_data
 
     # Test mod_elements!
-    F = CuModMatrix(A_data * 2, modulus)
+    F = CuModMatrix(A_data * 2; modulus = modulus)
     mod_elements!(F)
     println("F with modulus applied in-place = ")
     display(F)
@@ -346,7 +376,7 @@ function test_inplace_copy_and_mod()
         copyto!(F, Float32.(A_data .* 2))
         mod_elements!(F; modulus_override = fallback_override)
         @test Array(F) == mod.(A_data .* 2, modulus)
-        @test F.N == modulus
+        @test GPUFiniteFieldMatrices.modulus(F) == modulus
     end
 
     # Test filling (and modding)

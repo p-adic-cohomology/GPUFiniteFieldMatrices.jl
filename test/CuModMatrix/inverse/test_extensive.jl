@@ -3,7 +3,7 @@ using Random
 function _random_invertible_matrix(n::Int, N::Int; max_tries::Int = 40)
     for _ = 1:max_tries
         Ahost = rand(0:(N-1), n, n)
-        A = CuModMatrix(Ahost, N)
+        A = CuModMatrix(Ahost; modulus = N)
         if is_invertible(A)
             return A
         end
@@ -29,7 +29,7 @@ end
 
 function _assert_inverse_identity(A::CuModMatrix, X::CuModMatrix)
     n = size(A, 1)
-    got = mod.(round.(Int, Array(A * X)), A.N)
+    got = mod.(round.(Int, Array(A * X)), GPUFiniteFieldMatrices.modulus(A))
     want = _id_matrix(Int, n)
     @test got == want
 end
@@ -38,7 +38,7 @@ function test_identity_range()
     N = 101
     for n = 1:64
         Ih = _id_matrix(Int, n)
-        Icu = CuModMatrix(Ih, N)
+        Icu = CuModMatrix(Ih; modulus = N)
         F = pluq(Icu)
         @test F.rank == n
         @test GPUFiniteFieldMatrices.pluq_check_identity(F, Icu)
@@ -51,13 +51,13 @@ function test_square_inverse_strategies()
     N = 101
     for strat in (:augmented, :pluq)
         for n in (4, 16, 32, 33, 64, 129)
-            A = CuModMatrix(_strategy_invertible_host(n, N), N)
+            A = CuModMatrix(_strategy_invertible_host(n, N); modulus = N)
             X = inv(A, options = PLUQOptions(inverse_strategy = strat))
             _assert_inverse_identity(A, X)
         end
     end
 
-    A = CuModMatrix(_strategy_invertible_host(33, N), N)
+    A = CuModMatrix(_strategy_invertible_host(33, N); modulus = N)
     X = GPUFiniteFieldMatrices.inverse_pluq(A)
     _assert_inverse_identity(A, X)
 end
@@ -80,7 +80,7 @@ function test_dense_random_blocked_inverse()
     N = 101
     rng = Random.MersenneTwister(9096)
     Ahost = Float32.(rand(rng, 0:(N-1), 96, 96))
-    A = CuModMatrix{Float32}(Ahost, N)
+    A = CuModMatrix{Float32}(Ahost; modulus = N)
     options = PLUQOptions(blocksize = 64, basecase = 32)
     F = pluq(A, options = options)
     @test F.rank == 96
@@ -95,7 +95,7 @@ function test_random_singular_batch()
         if n > 1
             Ahost[2, :] = Ahost[1, :]
         end
-        A = CuModMatrix(Ahost, N)
+        A = CuModMatrix(Ahost; modulus = N)
         @test !is_invertible(A)
         @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inv(
             A,
@@ -113,7 +113,7 @@ function test_rank_deficient_blocked_pluq()
     n = 64
     Ahost = _strategy_invertible_host(n, N)
     Ahost[2, :] = Ahost[1, :]
-    A = CuModMatrix(Ahost, N)
+    A = CuModMatrix(Ahost; modulus = N)
     F = pluq(A)
     @test F.rank < n
     @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inv(
@@ -123,7 +123,7 @@ function test_rank_deficient_blocked_pluq()
 end
 
 function test_modulus_contracts()
-    A = CuModMatrix([1 0; 0 1], 9)
+    A = CuModMatrix([1 0; 0 1]; modulus = 9)
     @test_throws GPUFiniteFieldMatrices.CuModMatrixModulusNotPrimeException inv(
         A,
         options = PLUQOptions(check_prime = true),
@@ -131,12 +131,12 @@ function test_modulus_contracts()
     @test inv(A, options = PLUQOptions(check_prime = false)) isa CuModMatrix
 
     bigN = Int(typemax(Int32)) + 2
-    Abig = CuModMatrix{Float64}([1.0 0.0; 0.0 1.0], bigN; mod = false)
+    Abig = CuModMatrix{Float64}([1.0 0.0; 0.0 1.0]; modulus = bigN, mod = false)
     @test_throws GPUFiniteFieldMatrices.InverseOverflowError inv(Abig)
 
     mersenne = 2_147_483_647
     H = Float64[mersenne - 1 0; 0 mersenne - 1]
-    Alarge = CuModMatrix{Float64}(H, mersenne)
+    Alarge = CuModMatrix{Float64}(H; modulus = mersenne)
     @test_throws GPUFiniteFieldMatrices.InverseOverflowError inv(
         Alarge,
         options = PLUQOptions(inverse_strategy = :pluq, trsm_mode = :warp),
@@ -147,7 +147,7 @@ end
 
 function test_modulus_diversity()
     for N in (2, 101)
-        A = CuModMatrix([1 1; 0 1], N)
+        A = CuModMatrix([1 1; 0 1]; modulus = N)
         for strategy in (:augmented, :pluq)
             X = inv(
                 A,
@@ -159,8 +159,8 @@ function test_modulus_diversity()
 end
 
 function test_api_rejections()
-    wide = CuModMatrix([1 0 0; 0 1 0], 101)
-    tall = CuModMatrix([1 0; 0 1; 0 0], 101)
+    wide = CuModMatrix([1 0 0; 0 1 0]; modulus = 101)
+    tall = CuModMatrix([1 0; 0 1; 0 0]; modulus = 101)
     @test_throws GPUFiniteFieldMatrices.CuModMatrixNotSquareException inv(wide)
     @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException right_inverse(tall)
     @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException left_inverse(wide)
@@ -181,7 +181,7 @@ function test_noninvolutory_permutation_inverse()
         0 0 -3 0 0 0 2 0 -1 0;
         1 0 0 -3 0 0 0 0 0 -1;
     ]
-    A = CuModMatrix(H, 7)
+    A = CuModMatrix(H; modulus = 7)
     X = inv(A, options = PLUQOptions(inverse_strategy = :pluq))
     @test mod.(round.(Int, Array(A * X)), 7) == Matrix{Int}(I, 10, 10)
 end

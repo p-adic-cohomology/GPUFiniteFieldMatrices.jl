@@ -221,7 +221,7 @@ function run_phase0_regime_benchmark(;
 )
     rng = Random.MersenneTwister(seed)
     if warmup
-        A0 = CuModMatrix(Matrix{Float32}(I, 32, 32), 11)
+        A0 = CuModMatrix(Matrix{Float32}(I, 32, 32); modulus = 11)
         CUDA.@sync pluq(A0)
         CUDA.@sync inv(A0)
     end
@@ -242,7 +242,10 @@ function run_phase0_regime_benchmark(;
             batch = CuModMatrix[]
             for _ = 1:local_batch
                 A = if shape == :square
-                    CuModMatrix{T}(_phase0_bench_square_host(reg.square_n, p, T, rng), p)
+                    CuModMatrix{T}(
+                        _phase0_bench_square_host(reg.square_n, p, T, rng);
+                        modulus = p,
+                    )
                 else
                     CuModMatrix{T}(
                         _phase0_bench_rect_host(reg.rect_m, reg.rect_n, p, T, rng),

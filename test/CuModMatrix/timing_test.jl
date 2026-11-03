@@ -8,12 +8,21 @@ function test_timings()
     B_data = Base.rand(0:10, n, n)
     x_data = Base.rand(0:10, n)
 
-    A = CuModMatrix(A_data, 11)
-    B = CuModMatrix(B_data, 11)
-    x = CuModVector(x_data, 11)
+    A = CuModMatrix(A_data; modulus = 11)
+    B = CuModMatrix(B_data; modulus = 11)
+    x = CuModVector(x_data; modulus = 11)
 
-    C = GPUFiniteFieldMatrices.zeros(Float32, n, n, 11)
-    z = GPUFiniteFieldMatrices.zeros(Float32, n, 11)
+    C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float32},
+        n,
+        n;
+        modulus = 11,
+    )
+    z = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModVector{Float32},
+        n;
+        modulus = 11,
+    )
 
     #These are mostly meant to be sanity checks to detect bugs,
     #rather than minor performance regressions
@@ -30,12 +39,21 @@ function test_timings()
     result = @btimed CUDA.@sync mul!($z, $A, $x)
     @test result[:time] < 0.01 # on a 3070, I can get less than 0.001
 
-    A = CuModMatrix{Float64}(A_data, 11)
-    B = CuModMatrix{Float64}(B_data, 11)
-    x = CuModVector{Float64}(x_data, 11)
+    A = CuModMatrix{Float64}(A_data; modulus = 11)
+    B = CuModMatrix{Float64}(B_data; modulus = 11)
+    x = CuModVector{Float64}(x_data; modulus = 11)
 
-    C = GPUFiniteFieldMatrices.zeros(Float64, n, n, 11)
-    z = GPUFiniteFieldMatrices.zeros(Float64, n, 11)
+    C = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModMatrix{Float64},
+        n,
+        n;
+        modulus = 11,
+    )
+    z = GPUFiniteFieldMatrices.zeros(
+        GPUFiniteFieldMatrices.CuModVector{Float64},
+        n;
+        modulus = 11,
+    )
 
     #These are mostly meant to be sanity checks, rather than
 

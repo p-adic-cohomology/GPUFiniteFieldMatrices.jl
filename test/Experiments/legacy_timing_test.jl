@@ -10,7 +10,7 @@ end
 for i = 1000:1000:10000
     p = 11
     A = rand(1:p, i, i)
-    d_A = CuModMatrix(A, p)
+    d_A = CuModMatrix(A; modulus = p)
     println("Testing matrix of size $(size(d_A))")
     @btime GPUFiniteFieldMatrices.is_invertible_with_inverse($d_A)
 end

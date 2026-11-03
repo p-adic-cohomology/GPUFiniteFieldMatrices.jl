@@ -27,11 +27,13 @@ function add!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
-    mT = convert(eltype(C.data), m)
-    len = length(A.data)
+    m =
+        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
+        modulus_override
+    mT = convert(eltype(parent(C)), m)
+    len = length(parent(A))
     blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_add_matrix!(C.data, A.data, B.data, mT)
+    @cuda threads=threads blocks=blocks k_add_matrix!(parent(C), parent(A), parent(B), mT)
     return C
 end
 
@@ -43,29 +45,31 @@ function scalar_add!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
-    mT = convert(eltype(C.data), m)
-    sT = convert(eltype(C.data), s)
-    len = length(A.data)
+    m =
+        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
+        modulus_override
+    mT = convert(eltype(parent(C)), m)
+    sT = convert(eltype(parent(C)), s)
+    len = length(parent(A))
     blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_add_scalar!(C.data, A.data, sT, mT)
+    @cuda threads=threads blocks=blocks k_add_scalar!(parent(C), parent(A), sT, mT)
     return C
 end
 
 function +(A::CuModArray, B::CuModArray)
-    C = similar_with_modulus(A, A.N)
+    C = similar_with_modulus(A, modulus(A))
     add!(C, A, B)
     return C
 end
 
 function +(A::CuModArray, s::Number)
-    C = similar_with_modulus(A, A.N)
+    C = similar_with_modulus(A, modulus(A))
     scalar_add!(C, A, s)
     return C
 end
 
 function +(s::Number, A::CuModArray)
-    C = similar_with_modulus(A, A.N)
+    C = similar_with_modulus(A, modulus(A))
     scalar_add!(C, A, s)
     return C
 end
