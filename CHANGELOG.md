@@ -25,10 +25,12 @@ This change prepares the 0.4.0 API break. No compatibility aliases are kept.
 | mulN!(C, A, B) | LinearAlgebra.mul!(C, A, B) | The byte-identical duplicate was removed. |
 | Package-local rmul!(A, s), lmul!(s, A) | LinearAlgebra.rmul!(A, s), LinearAlgebra.lmul!(s, A) | Methods now extend LinearAlgebra's generics. |
 | negate!(B, A, mod_N) | neg!(B, A; modulus_override=...) | Negation uses the per-call reduction modulus without changing stored metadata. |
-| mod_N argument or keyword on elementwise/scalar operations and direct matrix helpers | `; modulus_override=...` | One keyword spelling for a per-call reduction modulus; omission uses the destination's stored modulus. |
-| matrix-vector `mul!`/`stripe_mul!`: `R`, `P`, `M` | `input_bound`, `modulus_override`, `max_ops` | `input_bound` is exclusive; `max_ops` counts product contributions accumulated per output entry between reductions. |
-| matrix-matrix `mul!`/`stripe_mul!`: `M`, `N` | `max_ops`, `input_bound` | Supplying `input_bound` preserves the existing single-stripe route; it does not override the reduction modulus and may accumulate more contributions than `max_ops` before reduction. |
-| low-level `stripe_mul!` `maxopsOverride` | `respect_max_ops` | `true` honors a supplied `max_ops`; `false` recomputes it from `input_bound`. High-level matrix-vector `mul!` drops its ineffective `maxopsOverride` keyword. |
+| mod_N argument or keyword on elementwise/scalar operations and direct matrix helpers | `; modulus_override=...` | One keyword spelling for a per-call reduction modulus. Mutating stripe operations leave stored modulus metadata unchanged. |
+| matrix-vector `mul!`/`stripe_mul!`: `R`, `P`, `M` | `input_bound`, `modulus_override`, `max_ops` | `input_bound` is exclusive; `max_ops` counts product contributions accumulated per output entry between reductions. The low-level vector adapter retains `respect_max_ops=false` to recompute its safe budget. |
+| matrix-matrix `mul!`/`stripe_mul!`: `M`, `N` | `max_ops`, `input_bound` | Supplying `input_bound` selects one stripe only when the full inner dimension fits the exact-integer budget. |
+| `mat_mul_gpu_type(A, B)`, `mat_mul_type_inplace!(C, A, B)` | qualified `stripe_mul(A, B)`, `stripe_mul!(C, A, B)` | The allocating and destination-writing adapters share one stripe implementation; the retired direct helper names have no compatibility aliases. |
+| `stripe_mul`, `stripe_mul!` | qualified public functions, not exported | Matrix multiplication uses `C.N` for an omitted in-place override and `A.N` for an omitted allocating override; matrix-vector multiplication uses `z.N`. |
+| low-level `stripe_mul!` `maxopsOverride` | `respect_max_ops` | `true` honors a supplied `max_ops`; `false` recomputes the safe vector stripe budget. High-level matrix-vector `mul!` drops its ineffective `maxopsOverride` keyword. |
 | add!, sub!, zero! | unchanged | These names remain available as qualified public functions. |
 | KMatMul!(C, A, B) | LinearAlgebra.mul!(C, A, B) | Extends LinearAlgebra's multiplication method. |
 | KMatMul_gemv!(C, A, x) | karatsuba_gemv!(C, A, x) | Name only; behavior is unchanged. |

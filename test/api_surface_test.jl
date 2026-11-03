@@ -57,8 +57,7 @@
         :lower_triangular_inverse_no_copy,
         :forward_sub_gpu_type_32,
         :backward_sub_gpu_type_32,
-        :mat_mul_gpu_type,
-        :mat_mul_type_inplace!,
+        :stripe_mul,
         :stripe_mul!,
         :TILE_WIDTH,
     )
@@ -166,18 +165,32 @@
     @test Set(keyword_decl(mod.stripe_mul!, Tuple{vector_type,matrix_type,vector_type})) ==
           Set([:max_ops, :input_bound, :modulus_override, :respect_max_ops])
     @test Set(keyword_decl(mod.stripe_mul!, Tuple{matrix_type,matrix_type,matrix_type})) ==
-          Set([:max_ops, :input_bound])
-    @test :modulus_override in
-          keyword_decl(mod.mat_mul_gpu_type, Tuple{matrix_type,matrix_type})
-    @test :modulus_override in keyword_decl(
-        mod.mat_mul_type_inplace!,
-        Tuple{matrix_type,matrix_type,matrix_type},
-    )
-    @test !hasmethod(mod.mat_mul_gpu_type, Tuple{matrix_type,matrix_type,Int})
-    @test !hasmethod(
-        mod.mat_mul_type_inplace!,
-        Tuple{matrix_type,matrix_type,matrix_type,Int},
-    )
+          Set([:max_ops, :input_bound, :modulus_override])
+    @test Set(keyword_decl(mod.stripe_mul, Tuple{matrix_type,matrix_type})) ==
+          Set([:max_ops, :input_bound, :modulus_override])
+    @test Set(keyword_decl(mod.stripe_mul, Tuple{matrix_type,vector_type})) ==
+          Set([:max_ops, :input_bound, :modulus_override])
+    @test !hasmethod(mod.stripe_mul, Tuple{matrix_type,matrix_type,Int})
+    @test !hasmethod(mod.stripe_mul!, Tuple{matrix_type,matrix_type,matrix_type,Int})
+    @test !isdefined(mod, :mat_mul_gpu_type)
+    @test !isdefined(mod, :mat_mul_type_inplace!)
+    @test which(mod.stripe_mul, Tuple{matrix_type,matrix_type}).module === mod
+    @test which(mod.stripe_mul, Tuple{matrix_type,vector_type}).module === mod
+    @test which(mod.stripe_mul!, Tuple{matrix_type,matrix_type,matrix_type}).module === mod
+    @test which(mod.stripe_mul!, Tuple{vector_type,matrix_type,vector_type}).module === mod
+
+    # Budget and modulus resolution are CPU-only helpers, so safety and metadata
+    # contracts remain checked when CUDA is unavailable.
+    stripe_bound = 100
+    stripe_modulus = 1_000_000
+    stripe_budget = mod.find_max_stripe_ops(Float32, stripe_bound; modulus = stripe_modulus)
+    @test stripe_budget < mod.find_max_stripe_ops(Float32, stripe_bound)
+    @test BigInt(stripe_modulus - 1) + BigInt(stripe_budget) * BigInt(stripe_bound - 1)^2 <=
+          BigInt(2)^24 - 1
+    @test mod._stripe_effective_modulus(101, nothing) == 101
+    @test mod._stripe_effective_modulus(101, 7) == 7
+    @test mod._stripe_effective_modulus(101, 0; fallback_nonpositive = true) == 101
+    @test_throws ArgumentError mod._stripe_effective_modulus(101, 0)
 
     # Unsupported elem_type keywords fail in keyword dispatch before the
     # constructor body can allocate a GPU array.

@@ -117,14 +117,21 @@ Phase 2 issue `gfm-2x1`.
 
 Per-call reduction moduli use the `modulus_override` keyword, for example
 `elementwise_multiply!(C, A, B; modulus_override = 7)` or
-`LinearAlgebra.mul!(z, A, x; modulus_override = 7)`. An omitted override uses the destination's
-stored modulus and leaves that metadata unchanged. For matrix multiplication,
-`input_bound` is the exclusive upper bound on nonnegative multiplicands, and
-`max_ops` is the maximum number of product contributions accumulated per
-output entry between reductions. For matrix-matrix `mul!`, supplying
-`input_bound` keeps the existing single-stripe execution route even when
-`max_ops` is also supplied; that route can accumulate the full inner dimension
-before reducing, even when it exceeds `max_ops`.
+`LinearAlgebra.mul!(z, A, x; modulus_override = 7)`. Qualified matrix
+multiplication is available as `GPUFiniteFieldMatrices.stripe_mul(A, B)` and
+`GPUFiniteFieldMatrices.stripe_mul!(C, A, B)`; the same functions support
+matrix-vector products. `*` and `LinearAlgebra.mul!` use the shared stripe
+implementation. Allocating results store the effective modulus, while mutating
+operations leave stored modulus metadata unchanged. An omitted matrix-matrix
+in-place override uses `C.N`; an omitted allocating override uses `A.N`; an
+omitted matrix-vector override uses `z.N`.
+
+For stripe multiplication, `input_bound` is the exclusive upper bound on
+nonnegative multiplicands, and `max_ops` limits product contributions
+accumulated per output entry between modular reductions. A supplied
+matrix-matrix `input_bound` selects one stripe only when the full inner
+dimension fits the exact-integer budget. The low-level matrix-vector adapter
+retains `respect_max_ops=false` to recompute its safe stripe budget.
 
 ## License
 

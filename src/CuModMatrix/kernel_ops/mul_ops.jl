@@ -66,7 +66,5 @@ function *(s::Number, A::CuModArray)
 end
 
 function *(A::CuModMatrix, B::CuModMatrix)
-    C = zeros(eltype(A.data), rows(A), cols(B), A.N)
-    stripe_mul!(C, A, B)
-    return C
+    return stripe_mul(A, B)
 end
