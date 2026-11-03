@@ -69,6 +69,26 @@
     @test all(name -> isdefined(mod, name), public_names)
     @test all(name -> Base.ispublic(mod, name), public_names)
     @test all(name -> !Base.isexported(mod, name), public_names)
+    tiny_inverse_functions = (
+        :inverse_batched_4x4!,
+        :inverse_batched_8x8!,
+        :inverse_batched_16x16!,
+        :inverse_batched_32x32!,
+    )
+    empty_batch = mod.CuModMatrix[]
+    @test all(
+        name ->
+            applicable(getfield(mod, name), empty_batch) &&
+            applicable(getfield(mod, name), empty_batch, empty_batch),
+        tiny_inverse_functions,
+    )
+    @test all(
+        name ->
+            getfield(mod, name)(empty_batch) === empty_batch &&
+            getfield(mod, name)(empty_batch, empty_batch) === empty_batch,
+        tiny_inverse_functions,
+    )
+    @test !isdefined(mod, :inverse_batched!)
     internal_triangular_helpers = (
         :_lower_triangular_inv_32!,
         :_upper_triangular_inv_32!,

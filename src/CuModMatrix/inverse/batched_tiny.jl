@@ -234,28 +234,46 @@ function _pluq_batched_tiny!(
     return out
 end
 
-function _inverse_batched_tiny(
+function _allocate_inverse_batched_tiny_destinations(mats::AbstractVector{<:CuModMatrix})
+    isempty(mats) && return CuModMatrix[]
+    T = eltype(parent(first(mats)))
+    out = Vector{CuModMatrix{T}}(undef, length(mats))
+    for i in eachindex(mats)
+        src = mats[i]
+        data = CUDA.zeros(T, size(parent(src), 1), size(parent(src), 2))
+        out[i] = CuModMatrix(data; modulus = modulus(src), new_size = size(src))
+    end
+    return out
+end
+
+function _inverse_batched_tiny!(
+    dests::AbstractVector{<:CuModMatrix},
     mats::AbstractVector{<:CuModMatrix},
     n::Int;
     options::PLUQOptions = PLUQOptions(),
+    inplace::Bool = false,
+    resolved_options::Union{Nothing,PLUQOptions} = nothing,
 )
-    isempty(mats) && return CuModMatrix[]
+    length(dests) == length(mats) ||
+        throw(ArgumentError("destination and input batches must have the same length"))
+    isempty(mats) && return dests
     !_batch_supported_n(n) && throw(ArgumentError("supported sizes are 4, 8, 16, 32"))
-    N = modulus(mats[1])
-    _validate_inverse_modulus(options, mats[1])
-    T = eltype(parent(mats[1]))
-    for m in mats
-        if rows(m) != n || cols(m) != n
-            throw(CuModArraySizeMismatchException("all matrices must be $(n)x$(n)"))
+    _validate_inverse_tiny_destinations(dests, mats, n, options; inplace = inplace)
+    opts =
+        isnothing(resolved_options) ? _resolve_options(options, first(mats)) :
+        resolved_options
+    if !_batch_has_default_augmented_options(opts)
+        # Resolve unsupported tiny strategies through the established scalar
+        # path.  Keep every destination untouched until the whole batch succeeds.
+        inverses = _inverse_batched_fallback(mats, options, opts)
+        for i in eachindex(mats)
+            parent(dests[i])[1:n, 1:n] .= @view parent(inverses[i])[1:n, 1:n]
         end
-        if modulus(m) != N || eltype(parent(m)) != T
-            throw(
-                CuModArrayModulusMismatchException(
-                    "batch matrices must have same modulus and element type",
-                ),
-            )
-        end
+        return dests
     end
+
+    N = modulus(first(mats))
+    T = eltype(parent(first(mats)))
     A = _pack_square_batch(mats, n, T)
     invA = CUDA.zeros(T, n, n, length(mats))
     ok = CUDA.zeros(Int32, length(mats))
@@ -267,18 +285,15 @@ function _inverse_batched_tiny(
         Int32(N),
     )
     okh = Array(ok)
-    out = Vector{CuModMatrix{T}}(undef, length(mats))
     for i in eachindex(mats)
-        if okh[i] != 1
-            throw(
-                InverseNotDefinedException("matrix $(i) in batch is singular modulo $(N)"),
-            )
-        end
-        data = CUDA.zeros(T, size(parent(mats[i]), 1), size(parent(mats[i]), 2))
-        data[1:n, 1:n] .= @view invA[:, :, i]
-        out[i] = CuModMatrix(data; modulus = N, new_size = (n, n))
+        okh[i] == 1 || throw(
+            InverseNotDefinedException("matrix $(i) in batch is singular modulo $(N)"),
+        )
     end
-    return out
+    for i in eachindex(mats)
+        parent(dests[i])[1:n, 1:n] .= @view invA[:, :, i]
+    end
+    return dests
 end
 
 """
@@ -293,14 +308,52 @@ pluq_batched_16x16!(mats::AbstractVector{<:CuModMatrix}) = _pluq_batched_tiny!(m
 pluq_batched_32x32!(mats::AbstractVector{<:CuModMatrix}) = _pluq_batched_tiny!(mats, 32)
 
 """
-    inverse_batched_4x4!(mats)
+    inverse_batched_4x4!(mats; options=PLUQOptions())
+    inverse_batched_4x4!(dests, mats; options=PLUQOptions())
 
-Run the tiny batched inverse kernel for fixed-size square matrices over a prime
-modulus. Variants are available for 4, 8, 16, and 32.
+Invert 4x4 matrices in place, or write the inverses of `mats` into distinct
+caller-provided `dests`. The in-place form returns `mats`; the destination form
+returns `dests` and preserves `mats`. Destination validation and the singular
+batch check complete before any destination is changed. The 8x8, 16x16, and
+32x32 variants have the same forms. These qualified public names are not
+exported. `batch_streams` applies only when options select the scalar fallback.
 """
-inverse_batched_4x4!(mats::AbstractVector{<:CuModMatrix}) = _inverse_batched_tiny(mats, 4)
-inverse_batched_8x8!(mats::AbstractVector{<:CuModMatrix}) = _inverse_batched_tiny(mats, 8)
-inverse_batched_16x16!(mats::AbstractVector{<:CuModMatrix}) =
-    _inverse_batched_tiny(mats, 16)
-inverse_batched_32x32!(mats::AbstractVector{<:CuModMatrix}) =
-    _inverse_batched_tiny(mats, 32)
+inverse_batched_4x4!(
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batched_tiny!(mats, mats, 4; options = options, inplace = true)
+inverse_batched_4x4!(
+    dests::AbstractVector{<:CuModMatrix},
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batched_tiny!(dests, mats, 4; options = options)
+
+inverse_batched_8x8!(
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batched_tiny!(mats, mats, 8; options = options, inplace = true)
+inverse_batched_8x8!(
+    dests::AbstractVector{<:CuModMatrix},
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batched_tiny!(dests, mats, 8; options = options)
+
+inverse_batched_16x16!(
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batched_tiny!(mats, mats, 16; options = options, inplace = true)
+inverse_batched_16x16!(
+    dests::AbstractVector{<:CuModMatrix},
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batched_tiny!(dests, mats, 16; options = options)
+
+inverse_batched_32x32!(
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batched_tiny!(mats, mats, 32; options = options, inplace = true)
+inverse_batched_32x32!(
+    dests::AbstractVector{<:CuModMatrix},
+    mats::AbstractVector{<:CuModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batched_tiny!(dests, mats, 32; options = options)

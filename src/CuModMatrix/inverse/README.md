@@ -66,15 +66,29 @@ starts, including on tiny, fallback, and option-routed fallback paths.
 while preserving every input. Destination length, logical shape, modulus,
 element type, storage capacity, and aliasing are checked before any writes.
 `pluq_batched(mats; options)` is the allocating, input-preserving convenience.
-`inverse_batched` also preserves its inputs. Its scalar fallback accepts mixed
-element types and resolves options for each matrix; the tiny inverse kernel
-retains its homogeneous-type requirement.
+`inverse_batched(mats; options)` also preserves its inputs and returns newly
+allocated inverse matrices. Its scalar fallback accepts mixed element types
+and resolves options for each matrix; the tiny inverse kernel retains its
+homogeneous-type requirement. The qualified, non-exported
+`inverse_batched_4x4!`, `inverse_batched_8x8!`, `inverse_batched_16x16!`, and
+`inverse_batched_32x32!` methods each have two forms:
+
+- `inverse_batched_NxN!(mats; options)` overwrites the supplied square matrix
+  wrappers and returns `mats`.
+- `inverse_batched_NxN!(dests, mats; options)` writes into distinct caller-owned
+  destinations, returns `dests`, and preserves all inputs. Batch lengths,
+  logical sizes, modulus, element type, physical capacity, and storage aliases
+  are checked before any destination write. A singular member leaves all input
+  and destination storage unchanged in either form.
 
 The 4/8/16/32 PLUQ batch kernel uses its fixed elimination strategy. If a PLUQ
 option requires a configurable strategy, the general batch API uses the scalar
 PLUQ fallback. The tiny inverse kernel implements `inverse_strategy=:augmented`;
 other square inverse strategies use the scalar fallback. `batch_streams` applies
-to fallbacks only. Rectangular batches use the existing scalar fallback.
+to fallbacks only. The size-specific inverse forms also honor options through
+that fallback, and defer destination writes until the whole fallback batch
+succeeds. Rectangular batches use the existing scalar fallback and do not gain
+a new destination API here.
 
 ## Large-Matrix CUDA Optimizations
 
