@@ -31,6 +31,7 @@ This change prepares the 0.4.0 API break. No compatibility aliases are kept.
 | `mat_mul_gpu_type(A, B)`, `mat_mul_type_inplace!(C, A, B)` | qualified `stripe_mul(A, B)`, `stripe_mul!(C, A, B)` | The allocating and destination-writing adapters share one stripe implementation; the retired direct helper names have no compatibility aliases. |
 | `stripe_mul`, `stripe_mul!` | qualified public functions, not exported | Matrix multiplication uses `C.N` for an omitted in-place override and `A.N` for an omitted allocating override; matrix-vector multiplication uses `z.N`. |
 | low-level `stripe_mul!` `maxopsOverride` | `respect_max_ops` | `true` honors a supplied `max_ops`; `false` recomputes the safe vector stripe budget. High-level matrix-vector `mul!` drops its ineffective `maxopsOverride` keyword. |
+| `forward_sub_gpu_type_32`, `backward_sub_gpu_type_32` | private destination-first triangular launch helpers | The allocating helper names are retired; recursive triangular inversion writes through the private helpers. |
 | add!, sub!, zero! | unchanged | These names remain available as qualified public functions. |
 | KMatMul!(C, A, B) | LinearAlgebra.mul!(C, A, B) | Extends LinearAlgebra's multiplication method. |
 | KMatMul_gemv!(C, A, x) | karatsuba_gemv!(C, A, x) | Name only; behavior is unchanged. |
