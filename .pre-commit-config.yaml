@@ -27,7 +27,7 @@ repos:
     hooks:
       - id: trailing-whitespace
         types: [text]
-        exclude: '^(?:src/CuModMatrix/CuModMatrix\.jl|src/CuModMatrix/kernel_mul/mat_mul_gpu_direct\.jl|src/CuModMatrix/kernel_mul/mat_mul_hybrid\.jl|src/CuModMatrix/kernel_mul/stripe_mul\.jl|src/CuModMatrix/triangular/hensel\.jl|test/CuModMatrix/test_swap\.jl|test/Experiments/max_kernels\.jl)$'
+        exclude: '^(?:src/CuModMatrix/CuModMatrix\.jl|src/CuModMatrix/kernel_mul/mat_mul_gpu_direct\.jl|src/CuModMatrix/kernel_mul/stripe_mul\.jl|test/Experiments/legacy_swap_benchmark\.jl|test/Experiments/max_kernels\.jl)$'
       - id: end-of-file-fixer
         types: [text]
       - id: check-toml

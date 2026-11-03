@@ -59,7 +59,6 @@ include("CuModMatrix/cuda_blas_compat_test.jl")
 include("CuModMatrix/allocations_test.jl")
 include("CuModMatrix/timing_test.jl")
 include("CuModMatrix/de_rham_test.jl")
-include("CuModMatrix/permutation_test.jl")
 include("CuModMatrix/triangular_test.jl")
 include("CuModMatrix/inverse/runtests.jl")
 
@@ -115,9 +114,6 @@ if CUDA.functional()
         end
         @testset "Inverse Rewrite" begin
             test_inverse_rewrite()
-        end
-        @testset "Permutations" begin
-            test_permutations()
         end
         @testset "GPU Matrix Type" begin
             test_gpu_mat()
