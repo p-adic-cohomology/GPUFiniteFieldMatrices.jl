@@ -419,14 +419,27 @@ function test_cuda_blas_compatibility()
     )
     @test Array(precision_C) == precision_matrix_expected
 
-    # The matrix single-stripe compatibility route is retained only while its
-    # complete inner dimension fits the exact-integer bound.
-    @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
+    # The default matrix budget stripes inner dimensions beyond one safe chunk.
+    fill!(precision_C.data, Float32(123))
+    CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
         precision_C,
         precision_A,
         precision_B;
         input_bound = precision_bound,
     )
+    @test Array(precision_C) == precision_matrix_expected
+
+    # An explicitly unsafe budget still rejects before modifying the destination.
+    fill!(precision_C.data, Float32(123))
+    precision_C_before_reject = Array(precision_C)
+    @test_throws ArgumentError GPUFiniteFieldMatrices.stripe_mul!(
+        precision_C,
+        precision_A,
+        precision_B;
+        input_bound = precision_bound,
+        max_ops = precision_max_ops + 1,
+    )
+    @test Array(precision_C) == precision_C_before_reject
 
     # Nested GPU views preserve parent offsets/strides and leave unrelated
     # destination storage unchanged. The k=7 product exercises multiple
