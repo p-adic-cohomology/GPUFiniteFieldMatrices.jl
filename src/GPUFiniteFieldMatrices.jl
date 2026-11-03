@@ -7,9 +7,13 @@ using CUDA:
     CuDeviceMatrix,
     CuDeviceVector,
     CuRef,
+    CuStaticSharedArray,
+    CuStream,
     blockDim,
     blockIdx,
     gridDim,
+    sync_threads,
+    synchronize,
     threadIdx
 
 # CUDA 6 uses cuBLAS while CUDA 5.11 exposes only CUBLAS, so select the available binding with getfield to avoid resolving CUDA 6's deprecated alias.
