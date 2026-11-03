@@ -24,10 +24,10 @@ function add!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray;
-    mod_N::Integer = -1,
+    modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = mod_N > 0 ? mod_N : C.N
+    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
     mT = convert(eltype(C.data), m)
     len = length(A.data)
     blocks = min(cld(len, threads), 65535)
@@ -39,10 +39,11 @@ function scalar_add!(
     C::CuModArray,
     A::CuModArray,
     s::Number,
-    mod_N::Integer = -1;
+    ;
+    modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = mod_N > 0 ? mod_N : C.N
+    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
     mT = convert(eltype(C.data), m)
     sT = convert(eltype(C.data), s)
     len = length(A.data)

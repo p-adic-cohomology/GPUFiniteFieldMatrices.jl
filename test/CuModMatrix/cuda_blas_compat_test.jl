@@ -12,15 +12,43 @@ function test_cuda_blas_compatibility()
         B = GPUFiniteFieldMatrices.CuModMatrix{T}(B_data, N)
         C = GPUFiniteFieldMatrices.zeros(T, size(A_data, 1), size(B_data, 2), N)
 
-        CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(C, A, B; M = stripe_width)
+        CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(C, A, B; max_ops = stripe_width)
         @test Array(C) == T.(matrix_expected)
+
+        C_single_stripe =
+            GPUFiniteFieldMatrices.zeros(T, size(A_data, 1), size(B_data, 2), N)
+        CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
+            C_single_stripe,
+            A,
+            B;
+            max_ops = 1,
+            input_bound = N,
+        )
+        @test Array(C_single_stripe) == T.(matrix_expected)
 
         vector_A = GPUFiniteFieldMatrices.CuModMatrix{T}(vector_A_data, N)
         x = GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data, N)
         z = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N)
 
-        CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(z, vector_A, x; M = stripe_width)
+        CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
+            z,
+            vector_A,
+            x;
+            max_ops = stripe_width,
+        )
         @test Array(z) == T.(vector_expected)
+
+        z_override = GPUFiniteFieldMatrices.zeros(T, size(vector_A_data, 1), N)
+        override_modulus = 31
+        CUDA.@sync LinearAlgebra.mul!(
+            z_override,
+            vector_A,
+            x;
+            input_bound = N,
+            modulus_override = override_modulus,
+        )
+        @test Array(z_override) == T.(mod.(vector_A_data * vector_x_data, override_modulus))
+        @test z_override.N == N
     end
 
     # Exercise the batched GEMV path with initialized plans and an independent

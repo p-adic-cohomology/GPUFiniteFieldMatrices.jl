@@ -39,18 +39,20 @@ function _exact_mod_matmul_data(A, B, N::Integer)
 end
 
 """
-    mat_mul_gpu_type(A::CuModMatrix, B::CuModMatrix, [mod_N])
+    mat_mul_gpu_type(A::CuModMatrix, B::CuModMatrix; modulus_override = nothing)
 
-Matrix multiplication that works directly with CuModMatrix objects.
+Matrix multiplication that works directly with `CuModMatrix` objects. An
+omitted `modulus_override` uses `A.N` for reduction.
 """
 function mat_mul_gpu_type(
     A::CuModMatrix,
     B::CuModMatrix,
-    mod_N::Integer = -1;
+    ;
+    modulus_override::Union{Nothing,Integer} = nothing,
     REGIME = "⊠",
     type = nothing,
 )
-    N = mod_N > 0 ? mod_N : A.N
+    N = modulus_override === nothing || modulus_override <= 0 ? A.N : modulus_override
 
     if cols(A) != rows(B)
         throw(CuModArraySizeMismatchException("Matrix dimensions do not match.
@@ -63,20 +65,22 @@ function mat_mul_gpu_type(
 end
 
 """
-    mat_mul_type_inplace!(C::CuModMatrix, A::CuModMatrix, B::CuModMatrix, [mod_N])
+    mat_mul_type_inplace!(C::CuModMatrix, A::CuModMatrix, B::CuModMatrix; modulus_override = nothing)
 
-In-place matrix multiplication that works directly with CuModMatrix objects.
+In-place matrix multiplication that works directly with `CuModMatrix` objects.
+An omitted `modulus_override` uses `C.N`; reductions leave `C.N` unchanged.
 """
 function mat_mul_type_inplace!(
     C::CuModMatrix,
     A::CuModMatrix,
     B::CuModMatrix,
-    mod_N::Integer = -1,
+    ;
+    modulus_override::Union{Nothing,Integer} = nothing,
     REGIME = "⊠",
     type = nothing,
 )
-    # Use the provided modulus if available, otherwise use A's modulus
-    N = mod_N > 0 ? mod_N : A.N
+    # Use the provided modulus if available, otherwise use C's stored modulus.
+    N = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
 
     if rows(C) != rows(A) || cols(C) != cols(B)
         throw(MatrixSizeMismatchException("Output matrix C has incorrect dimensions"))

@@ -14,10 +14,11 @@ function div!(
     C::CuModArray,
     A::CuModArray,
     s::Integer,
-    mod_N::Integer = -1;
+    ;
+    modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = mod_N > 0 ? mod_N : C.N
+    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
     s_inv = mod_inv(s, m)
     mT = convert(eltype(C.data), m)
     sT = convert(eltype(C.data), s_inv)

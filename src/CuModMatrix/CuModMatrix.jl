@@ -502,23 +502,25 @@ function rand(::Type{T}, rows::Integer, cols::Integer, N::Integer) where {T}
 end
 
 """
-    elementwise_multiply!(C, A, B, [mod_N])
+    elementwise_multiply!(C, A, B; modulus_override = nothing)
 
 In-place element-wise multiplication: C = A .* B mod N. No allocation is performed.
-If mod_N is provided, it will be used instead of C.N for the modulus.
+If `modulus_override` is provided, it is used instead of `C.N` for the reduction
+modulus. The stored modulus on `C` is unchanged.
 """
 function elementwise_multiply!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray,
-    mod_N::Integer = -1,
+    ;
+    modulus_override::Union{Nothing,Integer} = nothing,
 )
-    N = mod_N > 0 ? mod_N : C.N
+    N = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
 
-    if mod_N <= 0 && (A.N != B.N || A.N != C.N)
+    if (modulus_override === nothing || modulus_override <= 0) && (A.N != B.N || A.N != C.N)
         throw(
             CuModArrayModulusMismatchException(
-                "All matrices must have the same modulus N or provide an override mod_N",
+                "All matrices must have the same modulus N or provide a modulus_override",
             ),
         )
     end
@@ -526,23 +528,28 @@ function elementwise_multiply!(
         throw(CuModArraySizeMismatchException("All matrix dimensions must match"))
     end
 
-    mul_elementwise!(C, A, B, N)
+    mul_elementwise!(C, A, B; modulus_override = N)
     return C
 end
 
 """
-    neg!(B, A, [mod_N])
+    neg!(B, A; modulus_override = nothing)
 
 In-place negation: B = -A mod N. No allocation is performed.
-If mod_N is provided, it will be used instead of B.N for the modulus.
+If `modulus_override` is provided, it is used instead of `B.N` for the reduction
+modulus. The stored modulus on `B` is unchanged.
 """
-function neg!(B::CuModArray, A::CuModArray, mod_N::Integer = -1)
-    N = mod_N > 0 ? mod_N : B.N
+function neg!(
+    B::CuModArray,
+    A::CuModArray;
+    modulus_override::Union{Nothing,Integer} = nothing,
+)
+    N = modulus_override === nothing || modulus_override <= 0 ? B.N : modulus_override
 
-    if mod_N <= 0 && A.N != B.N
+    if (modulus_override === nothing || modulus_override <= 0) && A.N != B.N
         throw(
             CuModArrayModulusMismatchException(
-                "Both matrices must have the same modulus N or provide an override mod_N",
+                "Both matrices must have the same modulus N or provide a modulus_override",
             ),
         )
     end
@@ -551,7 +558,7 @@ function neg!(B::CuModArray, A::CuModArray, mod_N::Integer = -1)
         throw(CuModArraySizeMismatchException("Matrix dimensions must match"))
     end
 
-    rscalar_sub!(B, A, 0, N)
+    rscalar_sub!(B, A, 0; modulus_override = N)
     return B
 end
 
@@ -654,13 +661,14 @@ Sets all of the entries of A to zero, in place.
 zero!(A::CuModArray) = fill!(A.data, zero(eltype(A.data)))
 
 """
-    mod_elements!(A, [mod_N])
+    mod_elements!(A; modulus_override = nothing)
 
 Apply modulus to all elements of A in-place.
-If mod_N is provided, it will be used instead of A.N for the modulus.
+If `modulus_override` is provided, it is used instead of `A.N` for the reduction
+modulus. The stored modulus on `A` is unchanged.
 """
-function mod_elements!(A::CuModArray, mod_N::Integer = -1)
-    N = mod_N > 0 ? mod_N : A.N
+function mod_elements!(A::CuModArray; modulus_override::Union{Nothing,Integer} = nothing)
+    N = modulus_override === nothing || modulus_override <= 0 ? A.N : modulus_override
     mod!(A.data, A.data, N)
     return A
 end
@@ -710,16 +718,22 @@ function change_modulus_no_alloc!(A::CuModArray, new_N::Integer)
 end
 
 """
-    mul!(C, A, B)
+    mul!(C, A, B; max_ops=nothing, input_bound=nothing)
 
-In-place matrix multiplication: C = A * B mod N.
+In-place matrix multiplication: `C = A * B mod C.N`. `input_bound` is the
+exclusive upper bound on nonnegative multiplicands. When supplied, it keeps
+the existing single-stripe route, including when `max_ops` is also supplied.
+`max_ops` counts product contributions accumulated per output entry between
+modular reductions when the operation uses multiple stripes. The forced
+single-stripe route can accumulate the full inner dimension before reducing,
+even if it exceeds the supplied `max_ops`.
 """
 function LinearAlgebra.mul!(
     C::CuModMatrix,
     A::CuModMatrix,
     B::CuModMatrix;
-    M = nothing,
-    N = nothing,
+    max_ops = nothing,
+    input_bound = nothing,
 )
 
     if (A.N != B.N || A.N != C.N)
@@ -738,22 +752,24 @@ function LinearAlgebra.mul!(
         throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
     end
 
-    stripe_mul!(C, A, B; M = M, N = N)
+    stripe_mul!(C, A, B; max_ops = max_ops, input_bound = input_bound)
     return C
 end
 
 """
-    mul!(z, A, x)
+    mul!(z, A, x; input_bound=nothing, modulus_override=nothing)
 
-In-place matrix-vector multiplication: z = A * x mod N.
+In-place matrix-vector multiplication: `z = A * x`. `input_bound` is the
+exclusive upper bound on nonnegative multiplicands and controls the default
+`max_ops`. `modulus_override` changes the per-call reduction modulus; when
+omitted, `z.N` is used and its stored modulus is unchanged.
 """
 function LinearAlgebra.mul!(
     z::CuModVector,
     A::CuModMatrix,
     x::CuModVector;
-    R = nothing,
-    P = nothing,
-    maxopsOverride = true,
+    input_bound = nothing,
+    modulus_override = nothing,
 )
 
     if (A.N != z.N || A.N != x.N)
@@ -772,7 +788,7 @@ function LinearAlgebra.mul!(
         throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
     end
 
-    stripe_mul!(z, A, x; R = R, N = P, maxopsOverride = maxopsOverride)
+    stripe_mul!(z, A, x; input_bound = input_bound, modulus_override = modulus_override)
     return z
 end
 

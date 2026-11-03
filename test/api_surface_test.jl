@@ -119,6 +119,66 @@
     @test which(LinearAlgebra.rmul!, Tuple{matrix_type,Float64}).module === mod
     @test which(LinearAlgebra.lmul!, Tuple{Float64,matrix_type}).module === mod
 
+    # Keyword signatures stay CPU-inspectable, so the public names and removed
+    # positional overrides are checked even when no CUDA device is available.
+    vector_type = mod.CuModVector{Float32}
+    keyword_decl(f, signature) = Base.kwarg_decl(which(f, signature))
+    keyword_signatures = (
+        (mod.add!, Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray}),
+        (mod.sub!, Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray}),
+        (mod.neg!, Tuple{mod.CuModArray,mod.CuModArray}),
+        (mod.elementwise_multiply!, Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray}),
+        (mod.scalar_add!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
+        (mod.scalar_sub!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
+        (mod.rscalar_sub!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
+        (mod.mul_elementwise!, Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray}),
+        (mod.div!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
+        (mod.mod_elements!, Tuple{mod.CuModArray}),
+    )
+    for (f, signature) in keyword_signatures
+        @test :modulus_override in keyword_decl(f, signature)
+        @test :mod_N ∉ keyword_decl(f, signature)
+    end
+    @test !hasmethod(mod.neg!, Tuple{mod.CuModArray,mod.CuModArray,Int})
+    @test !hasmethod(mod.mod_elements!, Tuple{mod.CuModArray,Int})
+    @test !hasmethod(
+        mod.elementwise_multiply!,
+        Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray,Int},
+    )
+    @test !hasmethod(mod.scalar_add!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
+    @test !hasmethod(mod.scalar_sub!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
+    @test !hasmethod(mod.rscalar_sub!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
+    @test !hasmethod(
+        mod.mul_elementwise!,
+        Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray,Int},
+    )
+    @test !hasmethod(mod.div!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
+    @test :modulus_override in
+          keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,Float64})
+    @test :input_bound in
+          keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type})
+    @test :max_ops in
+          keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type})
+    @test keyword_decl(LinearAlgebra.mul!, Tuple{vector_type,matrix_type,vector_type}) ==
+          [:input_bound, :modulus_override]
+    @test :maxopsOverride ∉
+          keyword_decl(LinearAlgebra.mul!, Tuple{vector_type,matrix_type,vector_type})
+    @test Set(keyword_decl(mod.stripe_mul!, Tuple{vector_type,matrix_type,vector_type})) ==
+          Set([:max_ops, :input_bound, :modulus_override, :respect_max_ops])
+    @test Set(keyword_decl(mod.stripe_mul!, Tuple{matrix_type,matrix_type,matrix_type})) ==
+          Set([:max_ops, :input_bound])
+    @test :modulus_override in
+          keyword_decl(mod.mat_mul_gpu_type, Tuple{matrix_type,matrix_type})
+    @test :modulus_override in keyword_decl(
+        mod.mat_mul_type_inplace!,
+        Tuple{matrix_type,matrix_type,matrix_type},
+    )
+    @test !hasmethod(mod.mat_mul_gpu_type, Tuple{matrix_type,matrix_type,Int})
+    @test !hasmethod(
+        mod.mat_mul_type_inplace!,
+        Tuple{matrix_type,matrix_type,matrix_type,Int},
+    )
+
     # Unsupported elem_type keywords fail in keyword dispatch before the
     # constructor body can allocate a GPU array.
     @test_throws MethodError mod.CuModMatrix(Float32[1 2; 3 4], 101; elem_type = Float32)
