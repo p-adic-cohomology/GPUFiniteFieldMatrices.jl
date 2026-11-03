@@ -21,6 +21,7 @@
         :PLUQ,
         :pluq,
         :pluq!,
+        :pluq_batched!,
         :pluq_batched,
         :inverse_batched,
         :is_invertible,
@@ -54,6 +55,7 @@
         :pluq_batched_8x8!,
         :pluq_batched_16x16!,
         :pluq_batched_32x32!,
+        :pluq_batched_NxN!,
         :inverse_batched_4x4!,
         :inverse_batched_8x8!,
         :inverse_batched_16x16!,
@@ -203,6 +205,15 @@
     @test which(mod.stripe_mul, Tuple{matrix_type,vector_type}).module === mod
     @test which(mod.stripe_mul!, Tuple{matrix_type,matrix_type,matrix_type}).module === mod
     @test which(mod.stripe_mul!, Tuple{vector_type,matrix_type,vector_type}).module === mod
+
+    empty_batch = mod.CuModMatrix{Float32}[]
+    @test isempty(mod.pluq_batched!(empty_batch))
+    @test isempty(mod.pluq_batched(empty_batch))
+    @test isempty(mod.pluq_batched!(empty_batch, empty_batch))
+    empty_abstract_batch = mod.CuModMatrix[]
+    @test isempty(mod.pluq_batched!(empty_abstract_batch))
+    @test isempty(mod.pluq_batched(empty_abstract_batch))
+    @test isempty(mod.pluq_batched!(empty_abstract_batch, empty_abstract_batch))
 
     # Budget and modulus resolution are CPU-only helpers, so safety and metadata
     # contracts remain checked when CUDA is unavailable.

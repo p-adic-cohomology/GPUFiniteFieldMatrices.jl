@@ -76,7 +76,7 @@ export to_karatsuba, from_karatsuba
 export modulus, low_modulus, high_modulus, low_part, high_part
 export PLUQOptions, PLUQ
 export pluq, pluq!, is_invertible, is_invertible_with_inverse
-export pluq_batched, inverse_batched
+export pluq_batched!, pluq_batched, inverse_batched
 export right_inverse, left_inverse, change_modulus, identity_matrix
 export elementwise_multiply!, scalar_add!, scalar_sub!, mod_elements!
 
@@ -87,6 +87,7 @@ public inverse_pluq
 public pluq_batched_4x4!, pluq_batched_8x8!, pluq_batched_16x16!, pluq_batched_32x32!
 public inverse_batched_4x4!,
     inverse_batched_8x8!, inverse_batched_16x16!, inverse_batched_32x32!
+public pluq_batched_NxN!
 public upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
 public stripe_mul, stripe_mul!, TILE_WIDTH
 

@@ -22,7 +22,8 @@ Fields:
   through the PLUQ path, then falls back to augmented rank-revealing
   elimination if that block is singular.
 - `autotune`: choose size-dependent PLUQ parameters at the API boundary.
-- `batch_streams`: number of CUDA streams used by non-tiny batch fallbacks.
+- `batch_streams`: number of CUDA streams used by batch fallbacks; tiny kernels
+  do not use streams.
 - `check_prime`: validate the finite-field precondition on entry.
 
 The constructor throws `ArgumentError` for unsupported symbols, tiles, or
