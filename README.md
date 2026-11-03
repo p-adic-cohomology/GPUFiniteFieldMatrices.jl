@@ -126,6 +126,10 @@ operations leave stored modulus metadata unchanged. An omitted matrix-matrix
 in-place override uses `C.N`; an omitted allocating override uses `A.N`; an
 omitted matrix-vector override uses `z.N`.
 
+Multiplication paths require a positive `modulus_override` when one is supplied.
+Non-multiplication elementwise and scalar operations retain the stored-modulus
+fallback for zero or negative overrides.
+
 For stripe multiplication, `input_bound` is the exclusive upper bound on
 nonnegative multiplicands, and `max_ops` limits product contributions
 accumulated per output entry between modular reductions. A supplied

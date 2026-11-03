@@ -28,7 +28,8 @@ function mul_elementwise!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    m = modulus_override === nothing ? C.N : modulus_override
     mT = convert(eltype(C.data), m)
     len = length(A.data)
     blocks = min(cld(len, threads), 65535)
@@ -44,7 +45,8 @@ function LinearAlgebra.mul!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m = modulus_override === nothing || modulus_override <= 0 ? C.N : modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    m = modulus_override === nothing ? C.N : modulus_override
     mT = convert(eltype(C.data), m)
     sT = convert(eltype(C.data), s)
     len = length(A.data)
