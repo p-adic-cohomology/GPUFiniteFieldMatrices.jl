@@ -1,3 +1,5 @@
+BitIntegers.@define_integers 24
+
 @testset "CPU API surface and dispatch" begin
     mod = GPUFiniteFieldMatrices
     matrix_type = mod.CuModMatrix{Float32}
@@ -1116,6 +1118,10 @@ end
         (UInt32, 32, 32),
         (UInt64, 64, 64),
         (UInt128, 128, 128),
+        (BitIntegers.Int256, 255, 255),
+        (BitIntegers.UInt256, 256, 256),
+        (Int24, 23, 23),
+        (UInt24, 24, 24),
     )
 
     expected_karatsuba =
@@ -1159,6 +1165,20 @@ end
     @test mod.find_max_ops_karatsuba(UInt128, 1) == typemax(Int)
     @test mod.find_max_ops(Int128, 2) == typemax(Int)
     @test mod.find_max_ops(UInt128, 2) == typemax(Int)
+    @test mod.find_max_ops_karatsuba(BitIntegers.Int256, 1) == typemax(Int)
+    @test mod.find_max_ops_karatsuba(BitIntegers.UInt256, 1) == typemax(Int)
+    @test mod.find_max_ops(BitIntegers.Int256, 2) == typemax(Int)
+    @test mod.find_max_ops(BitIntegers.UInt256, 2) == typemax(Int)
+
+    wide_budget_dimension = BigInt(1) << 100
+    @test mod.find_max_ops_karatsuba(BitIntegers.Int256, wide_budget_dimension) ==
+          expected_karatsuba(255, wide_budget_dimension)
+    @test mod.find_max_ops_karatsuba(BitIntegers.UInt256, wide_budget_dimension) ==
+          expected_karatsuba(256, wide_budget_dimension)
+    @test mod.find_max_ops(BitIntegers.Int256, wide_budget_dimension) ==
+          expected_cumod(255, wide_budget_dimension)
+    @test mod.find_max_ops(BitIntegers.UInt256, wide_budget_dimension) ==
+          expected_cumod(256, wide_budget_dimension)
 
     factory_zero = Base.zeros(
         mod.KaratsubaMatrix{UInt64,Matrix{UInt64}},
@@ -1172,7 +1192,8 @@ end
           mod.KaratsubaMatrix{UInt64,Matrix{UInt64},mod.CuModArray{UInt64,2}}
     @test factory_zero.plan === nothing
 
-    for unsupported in (BigInt, BigFloat, Bool, ComplexF64, AbstractFloat, Signed, Unsigned)
+    for unsupported in
+        (BigInt, BigFloat, Bool, ComplexF64, AbstractFloat, Integer, Signed, Unsigned)
         unsupported_error = try
             mod.get_bits(unsupported)
             nothing
@@ -1186,6 +1207,7 @@ end
     end
     @test_throws ErrorException mod.find_max_ops_karatsuba(BigInt, 2)
     @test_throws ErrorException mod.find_max_ops(BigFloat, 2)
+    @test_throws ErrorException mod.get_bits(1)
 end
 
 @testset "Strict CPU Karatsuba storage and inference" begin

@@ -263,32 +263,25 @@ end
     get_bits(type)
 
 Return the integer precision budget for a supported element type. Floating
-formats use their integer significand width; signed integers exclude the sign
-bit, and unsigned integers use their full fixed width.
+formats use their integer significand width; primitive fixed-width signed
+integers exclude the sign bit, and primitive unsigned integers use their full
+width.
 """
 function get_bits(type::Type)
     if type <: AbstractFloat
         type === Float16 && return 11
         type === Float32 && return 24
         type === Float64 && return 53
-    elseif type <: Unsigned
-        type in (UInt8, UInt16, UInt32, UInt64, UInt128) || error(
-            "unsupported type $type; expected Float16, Float32, Float64, or a fixed-width signed or unsigned integer type",
-        )
-        return 8 * sizeof(type)
-    elseif type <: Signed
-        type in (Int8, Int16, Int32, Int64, Int128) || error(
-            "unsupported type $type; expected Float16, Float32, Float64, or a fixed-width signed or unsigned integer type",
-        )
-        return 8 * sizeof(type) - 1
+    elseif type <: Union{Signed,Unsigned} && isprimitivetype(type)
+        return 8 * sizeof(type) - (type <: Signed ? 1 : 0)
     end
 
     error(
-        "unsupported type $type; expected Float16, Float32, Float64, or a fixed-width signed or unsigned integer type",
+        "unsupported type $type; expected Float16, Float32, Float64, or a primitive fixed-width signed or unsigned integer type",
     )
 end
 get_bits(type) = error(
-    "unsupported type $type; expected Float16, Float32, Float64, or a fixed-width signed or unsigned integer type",
+    "unsupported type $type; expected Float16, Float32, Float64, or a primitive fixed-width signed or unsigned integer type",
 )
 
 """
