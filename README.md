@@ -139,6 +139,11 @@ C = zeros(KaratsubaMatrix{Float64}, 2, 2; split_options...)
 foreach(GPUFiniteFieldMatrices.initialize_plan!, (AK, BK, C))
 mul!(C, AK, BK)
 from_karatsuba(Float64, C)
+
+# The allocating product needs no caller plans and preserves any plans already
+# attached to AK or BK.
+D = AK * BK
+from_karatsuba(Float64, D)
 ```
 
 Use `zeros(KaratsubaMatrix{T}, rows, cols; low_modulus, high_modulus,
@@ -166,6 +171,14 @@ a runtime scan. Constructors and conversions do not establish those bounds:
 made with `mod=false` retain raw component values. Choose high moduli that
 bound the supplied high components.
 
+The allocating matrix form `A * B` supports GPU-backed `Float64`
+`KaratsubaMatrix` components. It delegates to the same three-argument
+`LinearAlgebra.mul!` arithmetic using private plan scratch, so caller plans may
+be uninitialized and existing plans and component storage remain unchanged.
+The result keeps `A`'s split and representation metadata; its component
+capacity is `Q = low_modulus(A) * high_modulus(A)`, independent of the metadata
+modulus `M`.
+
 For CPU-only data, `to_karatsuba` returns CPU component arrays and
 `from_karatsuba(T, K)` returns `Array{T}`. GPU-backed components produce a plain
 `CuArray{T}` result. `Base.Array(K)` uses arbitrary-precision integer
@@ -186,8 +199,9 @@ behavior is deferred to a separate follow-up.
 
 The specialized matrix-vector path is available through qualified access as
 `GPUFiniteFieldMatrices.karatsuba_gemv!`.
-The `*` operator and matrix-matrix keyword paths remain unsupported; use the
-mutating `LinearAlgebra.mul!` path described above for Karatsuba matrix products.
+Matrix-matrix keyword paths remain unsupported; use `A * B` for the allocating
+GPU-backed `Float64` form or the mutating `LinearAlgebra.mul!` path described
+above when the destination should be supplied explicitly.
 
 Per-call reduction moduli use the `modulus_override` keyword, for example
 `elementwise_multiply!(C, A, B; modulus_override = 7)` or
