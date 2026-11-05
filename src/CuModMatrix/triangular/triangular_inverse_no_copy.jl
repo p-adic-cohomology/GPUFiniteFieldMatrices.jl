@@ -541,12 +541,17 @@ end
 """
     lower_triangular_inverse_no_copy(A::CuModMatrix)
 
-Computes the inverse of an lower triangular matrix.
+Compute the inverse of a square lower triangular matrix, or a right inverse
+of a wide lower triangular matrix with an invertible leading square block.
+For an `m`-by-`n` wide input, the result is `n`-by-`m`: its leading `m` rows
+invert the leading square block and the remaining rows are zero. Thus
+`A * result` is the `m`-by-`m` identity modulo `modulus(A)`.
+The input is preserved.
 """
 function lower_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
     rows, cols = size(A)
 
-    if cols <= MAX_INVERSE_SIZE
+    if min(rows, cols) <= MAX_INVERSE_SIZE
         A_inv_data =
             CUDA.zeros(eltype(parent(A)), TILE_WIDTH + size(A, 2), TILE_WIDTH + size(A, 1))
         n_active = min(TILE_WIDTH, size(A, 1), size(A, 2))
@@ -568,7 +573,7 @@ function lower_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
             1,
             rows,
             1,
-            cols,
+            rows,
             modulus(A);
             debug = debug,
         )
