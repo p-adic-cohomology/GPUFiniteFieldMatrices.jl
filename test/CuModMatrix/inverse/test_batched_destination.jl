@@ -341,7 +341,7 @@ function test_batched_destination_api()
     bad_modulus = CuModMatrix{Float32}(_batch_destination_host(4, 4), modulus = 103)
     dests = [good, bad_modulus]
     dest_storage = [Array(parent(A)) for A in dests]
-    @test_throws GPUFiniteFieldMatrices.CuModArrayModulusMismatchException GPUFiniteFieldMatrices.pluq_batched!(
+    @test_throws GPUFiniteFieldMatrices.ModulusMismatchError GPUFiniteFieldMatrices.pluq_batched!(
         dests,
         inputs,
     )
@@ -349,7 +349,7 @@ function test_batched_destination_api()
     @test all(i -> Array(parent(inputs[i])) == input_storage[i], eachindex(inputs))
 
     wrong_shape = CuModMatrix{Float32}(zeros(Float32, 5, 5); modulus = p)
-    @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException GPUFiniteFieldMatrices.pluq_batched!(
+    @test_throws DimensionMismatch GPUFiniteFieldMatrices.pluq_batched!(
         [good, wrong_shape],
         inputs,
     )
@@ -369,7 +369,7 @@ function test_batched_destination_api()
     capacity_dests = [capacity_good, capacity_bad]
     capacity_dest_storage = [Array(parent(A)) for A in capacity_dests]
     capacity_input_storage = [Array(parent(A)) for A in capacity_inputs]
-    @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException GPUFiniteFieldMatrices.pluq_batched!(
+    @test_throws DimensionMismatch GPUFiniteFieldMatrices.pluq_batched!(
         capacity_dests,
         capacity_inputs,
     )
@@ -389,7 +389,7 @@ function test_batched_destination_api()
     )
     @test Array(parent(good)) == dest_storage[1]
 
-    @test_throws ArgumentError GPUFiniteFieldMatrices.pluq_batched!([good], inputs)
+    @test_throws DimensionMismatch GPUFiniteFieldMatrices.pluq_batched!([good], inputs)
     @test Array(parent(good)) == dest_storage[1]
 
     # Both direct and cross-batch input/destination aliases are rejected before writes.
@@ -413,7 +413,7 @@ function test_batched_destination_api()
 
     composite = [CuModMatrix{Float32}(_batch_destination_host(4, 4); modulus = 15)]
     composite_storage = Array(parent(composite[1]))
-    @test_throws GPUFiniteFieldMatrices.CuModMatrixModulusNotPrimeException GPUFiniteFieldMatrices.pluq_batched!(
+    @test_throws DomainError GPUFiniteFieldMatrices.pluq_batched!(
         composite;
         options = PLUQOptions(check_prime = true),
     )

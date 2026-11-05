@@ -734,8 +734,8 @@ function test_karatsuba_api_regressions()
             catch error
                 error
             end
-            @test dimension_error isa ErrorException
-            @test dimension_error isa ErrorException &&
+            @test dimension_error isa DimensionMismatch
+            @test dimension_error isa DimensionMismatch &&
                   dimension_error.msg == "Matrix dimensions don't work for multiplication"
             assert_input_unchanged(ak, preflight_a_before)
             assert_input_unchanged(bad_b, bad_b_before)
@@ -757,7 +757,7 @@ function test_karatsuba_api_regressions()
             )
         mismatch_before =
             (storage_snapshot(mismatched_radix), storage_snapshot(bk), storage_snapshot(ck))
-        @test_throws ArgumentError LinearAlgebra.mul!(ck, mismatched_radix, bk)
+        @test_throws mod.ModulusMismatchError LinearAlgebra.mul!(ck, mismatched_radix, bk)
         mismatch_after =
             (storage_snapshot(mismatched_radix), storage_snapshot(bk), storage_snapshot(ck))
         @test mismatch_after == mismatch_before
@@ -996,8 +996,8 @@ function test_karatsuba_api_regressions()
             catch error
                 error
             end
-            @test inner_error isa ErrorException
-            @test inner_error isa ErrorException && occursin(
+            @test inner_error isa DimensionMismatch
+            @test inner_error isa DimensionMismatch && occursin(
                 "Matrix dimensions don't work for multiplication",
                 inner_error.msg,
             )
@@ -1058,9 +1058,9 @@ function test_karatsuba_api_regressions()
                     catch error
                         error
                     end
-                    @test destination_error isa mod.CuModArraySizeMismatchException
-                    @test destination_error isa mod.CuModArraySizeMismatchException &&
-                          destination_error.message ==
+                    @test destination_error isa DimensionMismatch
+                    @test destination_error isa DimensionMismatch &&
+                          destination_error.msg ==
                           "Output matrix C has incorrect dimensions"
                     destination_after = (
                         alias_fixture_snapshot(destination_a),

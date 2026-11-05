@@ -9,33 +9,12 @@ const DEFAULT_TYPE = Float32
     return view(data, ntuple(i -> 1:dims[i], D)...)
 end
 
-struct CuModArraySizeMismatchException <: Exception
+"""Operand moduli are incompatible for the requested operation."""
+struct ModulusMismatchError <: Exception
     message::String
 end
 
-struct CuModArrayModulusMismatchException <: Exception
-    message::String
-end
-
-struct CuModMatrixTooLargeException <: Exception
-    message::String
-end
-
-struct CuModMatrixNotSquareException <: Exception
-    message::String
-end
-
-struct CuModMatrixModulusNotPrimeException <: Exception
-    message::String
-end
-
-struct InverseOverflowError <: Exception
-    message::String
-end
-
-struct InverseNotDefinedException <: Exception
-    message::String
-end
+Base.showerror(io::IO, err::ModulusMismatchError) = print(io, err.message)
 
 """
     CuModArray{T}
@@ -82,7 +61,7 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
 
         if 2^52 < N
             throw(
-                CuModArrayModulusMismatchException(
+                ArgumentError(
                     "Modulus $N is bigger than 2^52 = $(2^52), the largest supported modulus",
                 ),
             )
@@ -295,12 +274,16 @@ function get_bits(type::Type)
         return 8 * sizeof(type) - (type <: Signed ? 1 : 0)
     end
 
-    error(
-        "unsupported type $type; expected Float16, Float32, Float64, or a primitive fixed-width signed or unsigned integer type",
+    throw(
+        ArgumentError(
+            "unsupported type $type; expected Float16, Float32, Float64, or a primitive fixed-width signed or unsigned integer type",
+        ),
     )
 end
-get_bits(type) = error(
-    "unsupported type $type; expected Float16, Float32, Float64, or a primitive fixed-width signed or unsigned integer type",
+get_bits(type) = throw(
+    ArgumentError(
+        "unsupported type $type; expected Float16, Float32, Float64, or a primitive fixed-width signed or unsigned integer type",
+    ),
 )
 
 """
@@ -390,7 +373,7 @@ Base.show(io::IO, ::MIME"text/plain", A::CuModMatrix) =
 # Recursive binary exponentiation algorithm
 function Base.:^(A::CuModMatrix, n::Integer)
     if rows(A) != cols(A)
-        throw(CuModMatrixNotSquareException("Matrix must be square for power operation"))
+        throw(DimensionMismatch("Matrix must be square for power operation"))
     end
 
     if n == 0
@@ -497,7 +480,7 @@ function mod_inv(a::Integer, m::Integer)
         r, newr = newr, r - q * newr
     end
     if r != 1
-        throw(DomainError((a, m), "inverse does not exist"))
+        throw(LinearAlgebra.SingularException(0))
     end
     return mod(t, m)
 end
@@ -664,7 +647,7 @@ the modulus or normalize entries.
 """
 function Base.copy!(B::CuModArray, A::CuModArray)
     if size(A) != size(B)
-        throw(CuModArraySizeMismatchException("Matrix dimensions must match"))
+        throw(DimensionMismatch("Matrix dimensions must match"))
     end
 
     source = _logical_view(parent(A), size(A))
@@ -689,7 +672,7 @@ Does not mod.
 """
 function Base.copyto!(dest::CuModArray{T,D}, src::DenseArray{T,D}) where {T,D}
     if size(dest) != size(src)
-        throw(CuModArraySizeMismatchException("Matrix dimensions must match"))
+        throw(DimensionMismatch("Matrix dimensions must match"))
     end
 
     #rangesize = map(x -> 1:x,size(dest))
@@ -821,19 +804,13 @@ function LinearAlgebra.mul!(
 )
 
     if (modulus(A) != modulus(B) || modulus(A) != modulus(C))
-        throw(
-            CuModArrayModulusMismatchException("All matrices must have the same modulus N"),
-        )
+        throw(ModulusMismatchError("All matrices must have the same modulus N"))
     end
     if cols(A) != rows(B)
-        throw(
-            CuModArraySizeMismatchException(
-                "Matrix dimensions do not match for multiplication",
-            ),
-        )
+        throw(DimensionMismatch("Matrix dimensions do not match for multiplication"))
     end
     if rows(C) != rows(A) || cols(C) != cols(B)
-        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
+        throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
     end
 
     stripe_mul!(C, A, B; max_ops = max_ops, input_bound = input_bound)
@@ -862,19 +839,13 @@ function LinearAlgebra.mul!(
         modulus(A) != modulus(x) ||
         (modulus_override === nothing && modulus(A) != modulus(z))
     )
-        throw(
-            CuModArrayModulusMismatchException("All matrices must have the same modulus N"),
-        )
+        throw(ModulusMismatchError("All matrices must have the same modulus N"))
     end
     if cols(A) != length(x)
-        throw(
-            CuModArraySizeMismatchException(
-                "Matrix dimensions do not match for multiplication",
-            ),
-        )
+        throw(DimensionMismatch("Matrix dimensions do not match for multiplication"))
     end
     if length(z) != rows(A)
-        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
+        throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
     end
 
     stripe_mul!(z, A, x; input_bound = input_bound, modulus_override = modulus_override)

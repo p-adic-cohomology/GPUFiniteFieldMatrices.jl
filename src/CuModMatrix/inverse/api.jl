@@ -18,17 +18,17 @@ end
 function _validate_inverse_modulus(options::PLUQOptions, A::CuModMatrix)
     N = modulus(A)
     if N < 2
-        throw(CuModMatrixModulusNotPrimeException("modulus $(N) must be at least 2"))
+        throw(DomainError(N, "modulus $(N) must be at least 2"))
     end
     if N > _PLUQ_MAX_SAFE_MODULUS
         throw(
-            InverseOverflowError(
+            OverflowError(
                 "modulus $(N) exceeds the Int32 CUDA-kernel limit $(_PLUQ_MAX_SAFE_MODULUS)",
             ),
         )
     end
     if options.check_prime && !_pluq_is_prime_host(N)
-        throw(CuModMatrixModulusNotPrimeException("modulus $(N) is not prime"))
+        throw(DomainError(N, "modulus $(N) is not prime"))
     end
     return nothing
 end
@@ -36,7 +36,7 @@ end
 function _validate_inverse_matmul_modulus(A::CuModMatrix)
     if find_max_ops(eltype(parent(A)), modulus(A)) < 1
         throw(
-            InverseOverflowError(
+            OverflowError(
                 "modulus $(modulus(A)) is too large for one modular matrix multiplication with datatype $(eltype(parent(A)))",
             ),
         )
@@ -373,7 +373,7 @@ precondition on the host before launching GPU kernels.
 """
 function Base.inv(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     if rows(A) != cols(A)
-        throw(CuModMatrixNotSquareException("matrix must be square"))
+        throw(DimensionMismatch("matrix must be square"))
     end
     opts = _resolve_options(options, A)
     if opts.inverse_strategy == :pluq
@@ -430,7 +430,7 @@ function Base.inv(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
         end
         prow = _pluq_read_i32!(pivot_host, pivot_slot)
         if prow > n
-            throw(InverseNotDefinedException("matrix is singular modulo $(modulus(A))"))
+            throw(LinearAlgebra.SingularException(0))
         end
         if prow != k
             @cuda threads=threads blocks=max(1, cld(n2, threads)) pluq_swap_rows_kernel!(
@@ -477,14 +477,14 @@ precondition on the host before launching GPU kernels.
 """
 function inverse_pluq(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     if rows(A) != cols(A)
-        throw(CuModMatrixNotSquareException("matrix must be square"))
+        throw(DimensionMismatch("matrix must be square"))
     end
     opts = _resolve_options(options, A)
     _validate_inverse_matmul_modulus(A)
     n = rows(A)
     F = pluq(A, options = opts)
     if F.rank != n
-        throw(InverseNotDefinedException("matrix is singular modulo $(modulus(A))"))
+        throw(LinearAlgebra.SingularException(0))
     end
     L = F.L
     U = F.U
@@ -644,7 +644,7 @@ function _right_inverse_leading_block(A::CuModMatrix, opts::PLUQOptions)
     Binv = try
         inverse_pluq(B, options = PLUQOptions(opts; inverse_strategy = :pluq))
     catch err
-        if err isa InverseNotDefinedException
+        if err isa LinearAlgebra.SingularException
             return nothing
         end
         rethrow()
@@ -679,7 +679,7 @@ function _right_inverse_selected_columns(A::CuModMatrix, opts::PLUQOptions)
     Binv = try
         inverse_pluq(B, options = PLUQOptions(opts; inverse_strategy = :pluq))
     catch err
-        err isa InverseNotDefinedException || rethrow()
+        err isa LinearAlgebra.SingularException || rethrow()
         return nothing
     end
     X = zeros(CuModMatrix{T}, n, m; modulus = modulus(A))
@@ -720,7 +720,7 @@ function right_inverse(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     m = rows(A)
     n = cols(A)
     if m > n
-        throw(CuModArraySizeMismatchException("right inverse requires rows(A) <= cols(A)"))
+        throw(DimensionMismatch("right inverse requires rows(A) <= cols(A)"))
     end
     # A dense random wide matrix almost always has a nonsingular leading
     # square block.  Use the blocked PLUQ inverse in that case; the augmented
@@ -846,11 +846,7 @@ function right_inverse(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
         rank += 1
     end
     if rank != m
-        throw(
-            InverseNotDefinedException(
-                "matrix is not full row-rank modulo $(modulus(A)); right inverse undefined",
-            ),
-        )
+        throw(LinearAlgebra.SingularException(0))
     end
     Y = @view aug[1:m, (n+1):(n+m)]
     Z = CUDA.zeros(eltype(parent(A)), n + TILE_WIDTH, m + TILE_WIDTH)
@@ -897,7 +893,7 @@ function left_inverse(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
     m = rows(A)
     n = cols(A)
     if m < n
-        throw(CuModArraySizeMismatchException("left inverse requires rows(A) >= cols(A)"))
+        throw(DimensionMismatch("left inverse requires rows(A) >= cols(A)"))
     end
     ATdata = permutedims(parent(A), (2, 1))
     AT = CuModMatrix(ATdata; modulus = modulus(A), new_size = (n, m))
@@ -930,11 +926,8 @@ end
 function _validate_batch_inputs(mats::AbstractVector{<:CuModMatrix}, options::PLUQOptions)
     isempty(mats) && return nothing
     for A in mats
-        size(parent(A), 1) >= rows(A) && size(parent(A), 2) >= cols(A) || throw(
-            CuModArraySizeMismatchException(
-                "matrix storage is smaller than its logical size",
-            ),
-        )
+        size(parent(A), 1) >= rows(A) && size(parent(A), 2) >= cols(A) ||
+            throw(DimensionMismatch("matrix storage is smaller than its logical size"))
         _validate_inverse_modulus(options, A)
     end
     return nothing
@@ -966,13 +959,13 @@ function _batch_validate_tiny_matrices(mats::AbstractVector{<:CuModMatrix}, n::I
     for A in mats
         if modulus(A) != N || eltype(parent(A)) !== T
             throw(
-                CuModArrayModulusMismatchException(
-                    "batch matrices must have same modulus and element type",
-                ),
+                modulus(A) != N ?
+                ModulusMismatchError("batch matrices must have the same modulus") :
+                ArgumentError("batch matrices must have the same element type"),
             )
         end
         if rows(A) != n || cols(A) != n
-            throw(CuModArraySizeMismatchException("all matrices must be $(n)x$(n)"))
+            throw(DimensionMismatch("all matrices must be $(n)x$(n)"))
         end
     end
     return nothing
@@ -1075,9 +1068,8 @@ function pluq_batched_NxN!(
     options::PLUQOptions = PLUQOptions(),
 )
     is_square_batch, _ = _batch_uniform_square_size(mats)
-    (is_square_batch || isempty(mats)) || throw(
-        CuModArraySizeMismatchException("all matrices must have the same square shape"),
-    )
+    (is_square_batch || isempty(mats)) ||
+        throw(DimensionMismatch("all matrices must have the same square shape"))
     return _pluq_batched_inplace!(mats, options)
 end
 
@@ -1109,25 +1101,19 @@ function _validate_batch_destinations(
     options::PLUQOptions,
 )
     length(dests) == length(mats) ||
-        throw(ArgumentError("destination and input batches must have the same length"))
+        throw(DimensionMismatch("destination and input batches must have the same length"))
     _validate_pluq_batch_inputs(mats, options)
     for i in eachindex(mats)
         src = mats[i]
         dest = dests[i]
-        size(dest) == size(src) || throw(
-            CuModArraySizeMismatchException("destination $(i) must match its input shape"),
-        )
-        modulus(dest) == modulus(src) || throw(
-            CuModArrayModulusMismatchException(
-                "destination $(i) must match its input modulus",
-            ),
-        )
+        size(dest) == size(src) ||
+            throw(DimensionMismatch("destination $(i) must match its input shape"))
+        modulus(dest) == modulus(src) ||
+            throw(ModulusMismatchError("destination $(i) must match its input modulus"))
         eltype(parent(dest)) === eltype(parent(src)) ||
             throw(ArgumentError("destination $(i) must match its input element type"))
         size(parent(dest), 1) >= rows(src) && size(parent(dest), 2) >= cols(src) || throw(
-            CuModArraySizeMismatchException(
-                "destination $(i) storage is smaller than its logical size",
-            ),
+            DimensionMismatch("destination $(i) storage is smaller than its logical size"),
         )
     end
     is_square_batch, n = _batch_uniform_square_size(mats)
@@ -1155,25 +1141,20 @@ function _validate_inverse_tiny_destinations(
     inplace::Bool = false,
 )
     length(dests) == length(mats) ||
-        throw(ArgumentError("destination and input batches must have the same length"))
+        throw(DimensionMismatch("destination and input batches must have the same length"))
     _validate_batch_inputs(mats, options)
     _batch_validate_tiny_matrices(mats, n)
     for i in eachindex(mats)
         src = mats[i]
         dest = dests[i]
         rows(dest) == n && cols(dest) == n ||
-            throw(CuModArraySizeMismatchException("destination $(i) must be $(n)x$(n)"))
-        modulus(dest) == modulus(src) || throw(
-            CuModArrayModulusMismatchException(
-                "destination $(i) must match its input modulus",
-            ),
-        )
+            throw(DimensionMismatch("destination $(i) must be $(n)x$(n)"))
+        modulus(dest) == modulus(src) ||
+            throw(ModulusMismatchError("destination $(i) must match its input modulus"))
         eltype(parent(dest)) === eltype(parent(src)) ||
             throw(ArgumentError("destination $(i) must match its input element type"))
         size(parent(dest), 1) >= n && size(parent(dest), 2) >= n || throw(
-            CuModArraySizeMismatchException(
-                "destination $(i) storage is smaller than its logical size",
-            ),
+            DimensionMismatch("destination $(i) storage is smaller than its logical size"),
         )
     end
 
