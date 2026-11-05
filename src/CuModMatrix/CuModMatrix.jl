@@ -50,6 +50,12 @@ Use `modulus(A)` for the modulus, `size(A)` for the logical dimensions, and
 `parent(A)` for the padded GPU storage. The `data`, `size`, and `N` fields are
 internal implementation details.
 
+Elementwise in-place arithmetic checks that all arrays have equal logical
+sizes, stored moduli and backing lengths before launching a kernel. Those
+compatibility checks are bounds checks and may be elided by an `@inbounds`
+caller, who must then ensure the arrays are compatible. A supplied
+`modulus_override` must always be positive, including inside `@inbounds`.
+
 Note matrices over the permitted size for efficient matmul may be created, but matmul 
 will throw an exception if these matrices are multiplied.
 """
@@ -580,9 +586,12 @@ end
 
 In-place element-wise multiplication: C = A .* B mod N. No allocation is performed.
 Only a positive `modulus_override` replaces `modulus(C)` for the reduction modulus.
-A zero or negative value throws `ArgumentError`. The stored modulus on `C` is unchanged.
+A zero or negative value throws `ArgumentError`. All stored moduli must still
+match, including when an override is supplied. Logical sizes and backing lengths
+must also match. These compatibility checks may be elided by an `@inbounds`
+caller, who is responsible for satisfying them.
 """
-function elementwise_multiply!(
+Base.@propagate_inbounds @inline function elementwise_multiply!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray,
@@ -591,18 +600,6 @@ function elementwise_multiply!(
 )
     _validate_positive_modulus_override(modulus_override)
     N = modulus_override === nothing ? modulus(C) : modulus_override
-
-    if modulus_override === nothing &&
-       (modulus(A) != modulus(B) || modulus(A) != modulus(C))
-        throw(
-            CuModArrayModulusMismatchException(
-                "All matrices must have the same modulus N or provide a modulus_override",
-            ),
-        )
-    end
-    if size(A) != size(B) || size(A) != size(C)
-        throw(CuModArraySizeMismatchException("All matrix dimensions must match"))
-    end
 
     mul_elementwise!(C, A, B; modulus_override = N)
     return C
@@ -613,28 +610,18 @@ end
 
 In-place negation: B = -A mod N. No allocation is performed.
 Only a positive `modulus_override` replaces `modulus(B)` for the reduction modulus.
-Zero or a negative value uses `modulus(B)`. The stored modulus on `B` is unchanged.
+A zero or negative value throws `ArgumentError`. Stored moduli, logical sizes
+and backing lengths must match. Compatibility checks may be elided by an
+`@inbounds` caller, who is responsible for satisfying them.
 """
-function neg!(
+Base.@propagate_inbounds @inline function neg!(
     B::CuModArray,
     A::CuModArray;
     modulus_override::Union{Nothing,Integer} = nothing,
 )
-    N =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(B) :
-        modulus_override
-
-    if (modulus_override === nothing || modulus_override <= 0) && modulus(A) != modulus(B)
-        throw(
-            CuModArrayModulusMismatchException(
-                "Both matrices must have the same modulus N or provide a modulus_override",
-            ),
-        )
-    end
-
-    if size(A) != size(B)
-        throw(CuModArraySizeMismatchException("Matrix dimensions must match"))
-    end
+    _validate_positive_modulus_override(modulus_override)
+    @boundscheck _check_elementwise_compatible(B, A)
+    N = modulus_override === nothing ? modulus(B) : modulus_override
 
     rscalar_sub!(B, A, 0; modulus_override = N)
     return B
@@ -648,7 +635,9 @@ As ZZ/n is commutative, this has the same behavior as lmul!
 
 Extends LinearAlgebra.rmul! and LinearAlgebra.lmul!
 """
-LinearAlgebra.rmul!(A::CuModArray, s::Number) = mul!(A, A, s)
+Base.@propagate_inbounds @inline function LinearAlgebra.rmul!(A::CuModArray, s::Number)
+    return mul!(A, A, s)
+end
 
 """
     lmul!(s,A)
@@ -656,7 +645,9 @@ LinearAlgebra.rmul!(A::CuModArray, s::Number) = mul!(A, A, s)
 Scales the array A by s, overwriting A.
 As ZZ/n is commutative, this has the same behavior as lmul!
 """
-LinearAlgebra.lmul!(s::Number, A::CuModArray) = mul!(A, A, s)
+Base.@propagate_inbounds @inline function LinearAlgebra.lmul!(s::Number, A::CuModArray)
+    return mul!(A, A, s)
+end
 
 function dumb_copy_kernel!(B, A)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
@@ -749,12 +740,12 @@ zero!(A::CuModArray) = fill!(parent(A), zero(eltype(parent(A))))
 
 Apply modulus to all elements of A in-place.
 Only a positive `modulus_override` replaces `modulus(A)` for the reduction modulus.
-Zero or a negative value uses `modulus(A)`. The stored modulus on `A` is unchanged.
+A zero or negative value throws `ArgumentError`. The stored modulus on `A`
+is unchanged.
 """
 function mod_elements!(A::CuModArray; modulus_override::Union{Nothing,Integer} = nothing)
-    N =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(A) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    N = modulus_override === nothing ? modulus(A) : modulus_override
     mod!(parent(A), parent(A), N)
     return A
 end
