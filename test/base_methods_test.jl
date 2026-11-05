@@ -439,7 +439,7 @@ function test_base_methods_gpu()
         composite = mod.CuModMatrix(Float32[1 0; 0 1]; modulus = 15)
         composite_parent = parent(composite)
         composite_before = Array(composite_parent)
-        @test_throws mod.CuModMatrixModulusNotPrimeException LinearAlgebra.rank(
+        @test_throws DomainError LinearAlgebra.rank(
             composite;
             options = mod.PLUQOptions(check_prime = true),
         )

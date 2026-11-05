@@ -87,7 +87,7 @@ function test_empty_stripe_products()
     for (destination, right) in ((wrong_C, B), (wrong_z, x))
         fill!(parent(destination), 7)
         snapshot = Array(parent(destination))
-        @test_throws G.CuModArraySizeMismatchException G.stripe_mul!(destination, A, right)
+        @test_throws DimensionMismatch G.stripe_mul!(destination, A, right)
         @test Array(parent(destination)) == snapshot
     end
     raw = CUDA.zeros(Float32, 0, 0)

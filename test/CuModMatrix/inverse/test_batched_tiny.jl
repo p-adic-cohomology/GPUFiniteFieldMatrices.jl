@@ -196,7 +196,7 @@ function test_batched_tiny_destination_preflight()
         inverse!,
         good[1:1],
         sources,
-        ArgumentError,
+        DimensionMismatch,
     )
 
     wrong_shape = CuModMatrix{Float32}(zeros(Float32, 5, 5); modulus = p)
@@ -204,7 +204,7 @@ function test_batched_tiny_destination_preflight()
         inverse!,
         [good[1], wrong_shape],
         sources,
-        GPUFiniteFieldMatrices.CuModArraySizeMismatchException,
+        DimensionMismatch,
     )
 
     wrong_input_modulus = CuModMatrix{Float32}(Matrix{Float32}(I, 4, 4); modulus = 103)
@@ -212,7 +212,7 @@ function test_batched_tiny_destination_preflight()
         inverse!,
         good,
         [sources[1], wrong_input_modulus],
-        GPUFiniteFieldMatrices.CuModArrayModulusMismatchException,
+        GPUFiniteFieldMatrices.ModulusMismatchError,
     )
 
     wrong_input_type = CuModMatrix{Float64}(Matrix{Float64}(I, 4, 4); modulus = p)
@@ -222,7 +222,7 @@ function test_batched_tiny_destination_preflight()
         inverse!,
         wrong_input_type_dest,
         [sources[1], wrong_input_type],
-        GPUFiniteFieldMatrices.CuModArrayModulusMismatchException,
+        ArgumentError,
     )
 
     short_input_parent = CUDA.fill(Float32(29), 3, 3)
@@ -232,7 +232,7 @@ function test_batched_tiny_destination_preflight()
         inverse!,
         [full_destination],
         [short_input],
-        GPUFiniteFieldMatrices.CuModArraySizeMismatchException,
+        DimensionMismatch,
     )
 
     wrong_modulus = CuModMatrix{Float32}(Matrix{Float32}(I, 4, 4); modulus = 103)
@@ -240,7 +240,7 @@ function test_batched_tiny_destination_preflight()
         inverse!,
         [good[1], wrong_modulus],
         sources,
-        GPUFiniteFieldMatrices.CuModArrayModulusMismatchException,
+        GPUFiniteFieldMatrices.ModulusMismatchError,
     )
 
     wrong_type = CuModMatrix{Float64}(Matrix{Float64}(I, 4, 4); modulus = p)
@@ -259,7 +259,7 @@ function test_batched_tiny_destination_preflight()
         inverse!,
         [good[1], short_capacity],
         sources,
-        GPUFiniteFieldMatrices.CuModArraySizeMismatchException,
+        DimensionMismatch,
     )
 
     _tiny_assert_destination_rejected_without_write(
@@ -298,7 +298,7 @@ function test_batched_tiny_destination_preflight()
         inverse!,
         wrong_input_dest,
         wrong_input,
-        GPUFiniteFieldMatrices.CuModArraySizeMismatchException,
+        DimensionMismatch,
     )
 
     composite = [CuModMatrix{Float32}(Matrix{Float32}(I, 4, 4); modulus = 15)]
@@ -307,7 +307,7 @@ function test_batched_tiny_destination_preflight()
         inverse!,
         composite_dest,
         composite,
-        GPUFiniteFieldMatrices.CuModMatrixModulusNotPrimeException;
+        DomainError;
         options = PLUQOptions(check_prime = true),
     )
     return nothing
@@ -353,7 +353,7 @@ function test_batched_tiny_kernels()
             singular_input_storage = [Array(parent(A)) for A in singular_sources]
             singular_dests = [_tiny_blank_destination(A) for A in singular_sources]
             singular_destination_storage = [Array(parent(A)) for A in singular_dests]
-            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+            @test_throws LinearAlgebra.SingularException inverse!(
                 singular_dests,
                 singular_sources,
             )
@@ -368,9 +368,7 @@ function test_batched_tiny_kernels()
 
             singular_inplace = _tiny_gpu_batch(singular_hosts, p)
             singular_inplace_storage = [Array(parent(A)) for A in singular_inplace]
-            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
-                singular_inplace,
-            )
+            @test_throws LinearAlgebra.SingularException inverse!(singular_inplace)
             @test all(
                 i -> Array(parent(singular_inplace[i])) == singular_inplace_storage[i],
                 eachindex(singular_inplace),
@@ -384,7 +382,7 @@ function test_batched_tiny_kernels()
             singular_input_storage = [Array(parent(A)) for A in singular_sources]
             singular_dests = [_tiny_blank_destination(A) for A in singular_sources]
             singular_destination_storage = [Array(parent(A)) for A in singular_dests]
-            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+            @test_throws LinearAlgebra.SingularException inverse!(
                 singular_dests,
                 singular_sources;
                 options = augmented_options,
@@ -400,7 +398,7 @@ function test_batched_tiny_kernels()
 
             singular_inplace = _tiny_gpu_batch(singular_hosts, p)
             singular_inplace_storage = [Array(parent(A)) for A in singular_inplace]
-            @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+            @test_throws LinearAlgebra.SingularException inverse!(
                 singular_inplace;
                 options = augmented_options,
             )
@@ -470,7 +468,7 @@ function test_batched_tiny_kernels()
         fallback_singular_destination_storage =
             [Array(parent(A)) for A in fallback_singular_dests]
         fallback_options = PLUQOptions(inverse_strategy = :pluq)
-        @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+        @test_throws LinearAlgebra.SingularException inverse!(
             fallback_singular_dests,
             fallback_singular_sources;
             options = fallback_options,
@@ -491,7 +489,7 @@ function test_batched_tiny_kernels()
         fallback_singular_inplace = _tiny_gpu_batch(fallback_singular_hosts, p)
         fallback_singular_inplace_storage =
             [Array(parent(A)) for A in fallback_singular_inplace]
-        @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inverse!(
+        @test_throws LinearAlgebra.SingularException inverse!(
             fallback_singular_inplace;
             options = fallback_options,
         )

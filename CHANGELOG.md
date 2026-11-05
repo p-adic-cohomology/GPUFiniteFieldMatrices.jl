@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Breaking: consistent exceptions
+
+Shape and square-matrix requirements throw `DimensionMismatch`. Incompatible
+operand moduli throw the qualified public `ModulusMismatchError`. Non-prime
+moduli throw `DomainError`; invalid arguments and unsupported sizes throw
+`ArgumentError`; exact-arithmetic overflow throws `OverflowError`; singular
+matrices and unavailable inverses throw `LinearAlgebra.SingularException`.
+The former custom exception types are removed without aliases. Existing guard
+conditions and validation before destination writes are preserved. Exact
+representation conversions continue to use `InexactError`.
+
 ### Allocated GPU padding
 
 Newly allocated `CuModArray` storage now rounds each dimension up to a multiple

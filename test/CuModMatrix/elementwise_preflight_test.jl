@@ -10,7 +10,7 @@ const _ELEMENTWISE_PREFLIGHT = GPUFiniteFieldMatrices
     @test mod._check_elementwise_metadata(size2, size2, n, n, 12, 12) === nothing
     @test mod._check_elementwise_storage(size2, size2, 12, 12) === nothing
 
-    @test_throws mod.CuModArraySizeMismatchException mod._check_elementwise_metadata(
+    @test_throws DimensionMismatch mod._check_elementwise_metadata(
         size2,
         (2, 1),
         size2,
@@ -21,7 +21,7 @@ const _ELEMENTWISE_PREFLIGHT = GPUFiniteFieldMatrices
         12,
         12,
     )
-    @test_throws mod.CuModArraySizeMismatchException mod._check_elementwise_metadata(
+    @test_throws DimensionMismatch mod._check_elementwise_metadata(
         size2,
         size2,
         (2, 1),
@@ -32,7 +32,7 @@ const _ELEMENTWISE_PREFLIGHT = GPUFiniteFieldMatrices
         12,
         12,
     )
-    @test_throws mod.CuModArrayModulusMismatchException mod._check_elementwise_metadata(
+    @test_throws mod.ModulusMismatchError mod._check_elementwise_metadata(
         size2,
         size2,
         size2,
@@ -43,7 +43,7 @@ const _ELEMENTWISE_PREFLIGHT = GPUFiniteFieldMatrices
         12,
         12,
     )
-    @test_throws mod.CuModArrayModulusMismatchException mod._check_elementwise_metadata(
+    @test_throws mod.ModulusMismatchError mod._check_elementwise_metadata(
         size2,
         size2,
         n,
@@ -51,7 +51,7 @@ const _ELEMENTWISE_PREFLIGHT = GPUFiniteFieldMatrices
         12,
         12,
     )
-    @test_throws mod.CuModArraySizeMismatchException mod._check_elementwise_metadata(
+    @test_throws DimensionMismatch mod._check_elementwise_metadata(
         size2,
         size2,
         size2,
@@ -62,18 +62,13 @@ const _ELEMENTWISE_PREFLIGHT = GPUFiniteFieldMatrices
         12,
         16,
     )
-    @test_throws mod.CuModArraySizeMismatchException mod._check_elementwise_storage(
-        size2,
-        size2,
-        12,
-        16,
-    )
+    @test_throws DimensionMismatch mod._check_elementwise_storage(size2, size2, 12, 16)
 
     # Allocating methods require the source storage to match the package's
     # existing rounded geometry before similar/zeros can launch or clear output.
     @test mod._check_elementwise_allocating_metadata(size2, size2, n, n, 1024, 1024) ===
           nothing
-    @test_throws mod.CuModArraySizeMismatchException mod._check_elementwise_allocating_metadata(
+    @test_throws DimensionMismatch mod._check_elementwise_allocating_metadata(
         size2,
         size2,
         n,
@@ -82,10 +77,7 @@ const _ELEMENTWISE_PREFLIGHT = GPUFiniteFieldMatrices
         12,
     )
     @test mod._check_elementwise_allocating_input(size2, 1024) === nothing
-    @test_throws mod.CuModArraySizeMismatchException mod._check_elementwise_allocating_input(
-        size2,
-        12,
-    )
+    @test_throws DimensionMismatch mod._check_elementwise_allocating_input(size2, 12)
 
     @test mod._validate_positive_modulus_override(nothing) === nothing
     @test mod._validate_positive_modulus_override(7) == 7
@@ -137,7 +129,7 @@ function _elementwise_assert_size_no_write(call, arrays...)
     before = map(A -> Array(parent(A)), arrays)
     parent_before = map(parent, arrays)
     metadata_before = map(A -> (size(A), GPUFiniteFieldMatrices.modulus(A)), arrays)
-    @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException call()
+    @test_throws DimensionMismatch call()
     for (A, snapshot, original_parent, (original_size, original_modulus)) in
         zip(arrays, before, parent_before, metadata_before)
         @test Array(parent(A)) == snapshot
@@ -151,7 +143,7 @@ function _elementwise_assert_modulus_no_write(call, arrays...)
     before = map(A -> Array(parent(A)), arrays)
     parent_before = map(parent, arrays)
     metadata_before = map(A -> (size(A), GPUFiniteFieldMatrices.modulus(A)), arrays)
-    @test_throws GPUFiniteFieldMatrices.CuModArrayModulusMismatchException call()
+    @test_throws GPUFiniteFieldMatrices.ModulusMismatchError call()
     for (A, snapshot, original_parent, (original_size, original_modulus)) in
         zip(arrays, before, parent_before, metadata_before)
         @test Array(parent(A)) == snapshot
@@ -265,18 +257,18 @@ if CUDA.functional()
         # These valid logical views have only 12 elements of backing storage.
         C, A, B = _elementwise_preflight_arrays()
         before_a, before_b = Array(parent(A)), Array(parent(B))
-        @test_throws mod.CuModArraySizeMismatchException A + B
-        @test_throws mod.CuModArraySizeMismatchException A - B
-        @test_throws mod.CuModArraySizeMismatchException A * 5
-        @test_throws mod.CuModArraySizeMismatchException 5 * A
-        @test_throws mod.CuModArraySizeMismatchException A / 2
+        @test_throws DimensionMismatch A + B
+        @test_throws DimensionMismatch A - B
+        @test_throws DimensionMismatch A * 5
+        @test_throws DimensionMismatch 5 * A
+        @test_throws DimensionMismatch A / 2
         @test Array(parent(A)) == before_a
         @test Array(parent(B)) == before_b
-        @test_throws mod.CuModArraySizeMismatchException A + 3
-        @test_throws mod.CuModArraySizeMismatchException 3 + A
-        @test_throws mod.CuModArraySizeMismatchException A - 3
-        @test_throws mod.CuModArraySizeMismatchException 3 - A
-        @test_throws mod.CuModArraySizeMismatchException mod.mod(A, 13)
+        @test_throws DimensionMismatch A + 3
+        @test_throws DimensionMismatch 3 + A
+        @test_throws DimensionMismatch A - 3
+        @test_throws DimensionMismatch 3 - A
+        @test_throws DimensionMismatch mod.mod(A, 13)
 
         C, A, B = _elementwise_preflight_arrays(right_size = (2, 1))
         @test size(C) == size(A)
@@ -287,7 +279,7 @@ if CUDA.functional()
         _elementwise_assert_size_no_write(() -> A - B, A, B)
 
         wrong_modulus = _elementwise_preflight_wrap([5.0 7.0; 6.0 8.0], (3, 4), 103, -2222)
-        @test_throws mod.CuModArrayModulusMismatchException A + wrong_modulus
+        @test_throws mod.ModulusMismatchError A + wrong_modulus
 
         # A canonical source geometry still allocates and computes normally.
         values_a = [1.0 2.0; 3.0 4.0]
