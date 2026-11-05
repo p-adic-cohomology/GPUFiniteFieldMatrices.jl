@@ -15,6 +15,7 @@ using Test
 using CUDA
 using LinearAlgebra
 using BenchmarkTools
+using BitIntegers
 using Suppressor
 using Unroll
 using Aqua

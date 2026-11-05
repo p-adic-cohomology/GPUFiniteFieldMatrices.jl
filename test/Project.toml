@@ -1,11 +1,13 @@
 [compat]
 Aqua = "0.8.14"
+BitIntegers = "0.3.7"
 JET = "0.10.6, 0.12, 0.13"
 JuliaFormatter = "=2.14.0"
 
 [deps]
 AllocCheck = "9b6a8646-10ed-4001-bbdc-1d2f46dfbb1a"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+BitIntegers = "c3b6d118-76ef-56ca-8cc7-ebb389d030a1"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 ExplicitImports = "7d51a73a-1435-4ff3-83d9-f097790105c7"
