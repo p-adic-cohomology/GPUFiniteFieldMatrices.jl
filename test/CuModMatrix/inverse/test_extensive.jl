@@ -97,11 +97,11 @@ function test_random_singular_batch()
         end
         A = CuModMatrix(Ahost; modulus = N)
         @test !is_invertible(A)
-        @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inv(
+        @test_throws LinearAlgebra.SingularException inv(
             A,
             options = PLUQOptions(inverse_strategy = :augmented),
         )
-        @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inv(
+        @test_throws LinearAlgebra.SingularException inv(
             A,
             options = PLUQOptions(inverse_strategy = :pluq),
         )
@@ -116,7 +116,7 @@ function test_rank_deficient_blocked_pluq()
     A = CuModMatrix(Ahost; modulus = N)
     F = pluq(A)
     @test F.rank < n
-    @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException inv(
+    @test_throws LinearAlgebra.SingularException inv(
         A,
         options = PLUQOptions(inverse_strategy = :pluq),
     )
@@ -124,20 +124,17 @@ end
 
 function test_modulus_contracts()
     A = CuModMatrix([1 0; 0 1]; modulus = 9)
-    @test_throws GPUFiniteFieldMatrices.CuModMatrixModulusNotPrimeException inv(
-        A,
-        options = PLUQOptions(check_prime = true),
-    )
+    @test_throws DomainError inv(A, options = PLUQOptions(check_prime = true))
     @test inv(A, options = PLUQOptions(check_prime = false)) isa CuModMatrix
 
     bigN = Int(typemax(Int32)) + 2
     Abig = CuModMatrix{Float64}([1.0 0.0; 0.0 1.0]; modulus = bigN, mod = false)
-    @test_throws GPUFiniteFieldMatrices.InverseOverflowError inv(Abig)
+    @test_throws OverflowError inv(Abig)
 
     mersenne = 2_147_483_647
     H = Float64[mersenne - 1 0; 0 mersenne - 1]
     Alarge = CuModMatrix{Float64}(H; modulus = mersenne)
-    @test_throws GPUFiniteFieldMatrices.InverseOverflowError inv(
+    @test_throws OverflowError inv(
         Alarge,
         options = PLUQOptions(inverse_strategy = :pluq, trsm_mode = :warp),
     )
@@ -161,9 +158,9 @@ end
 function test_api_rejections()
     wide = CuModMatrix([1 0 0; 0 1 0]; modulus = 101)
     tall = CuModMatrix([1 0; 0 1; 0 0]; modulus = 101)
-    @test_throws GPUFiniteFieldMatrices.CuModMatrixNotSquareException inv(wide)
-    @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException right_inverse(tall)
-    @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException left_inverse(wide)
+    @test_throws DimensionMismatch inv(wide)
+    @test_throws DimensionMismatch right_inverse(tall)
+    @test_throws DimensionMismatch left_inverse(wide)
 end
 
 function test_noninvolutory_permutation_inverse()

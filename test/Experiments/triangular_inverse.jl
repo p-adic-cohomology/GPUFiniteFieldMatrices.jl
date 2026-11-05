@@ -371,7 +371,7 @@
 #         _recursive_lower_triangular_inverse(
 #             A.data, A_inv.data, 1, rows, 1, cols, A.N; debug=debug)
 #     else #tall
-#         throw(InverseNotDefinedException("(Right) pseudoinverse not defined for tall lower triangular matrices"))
+#         throw(LinearAlgebra.SingularException(0))
 #         # _recursive_lower_triangular_inverse(
 #         #     A.data, A_inv.data, 1, rows, 1, rows, A.N; debug=debug)
 #     end

@@ -91,5 +91,6 @@ public inverse_batched_4x4!,
 public pluq_batched_NxN!
 public upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
 public stripe_mul, stripe_mul!, TILE_WIDTH
+public ModulusMismatchError
 
 end

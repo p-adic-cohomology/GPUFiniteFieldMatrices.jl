@@ -2,18 +2,14 @@ const DEFAULT_THREADS = 256
 
 Base.@noinline function _throw_elementwise_size_mismatch()
     throw(
-        CuModArraySizeMismatchException(
+        DimensionMismatch(
             "Elementwise arrays must have equal logical sizes and backing lengths",
         ),
     )
 end
 
 Base.@noinline function _throw_elementwise_modulus_mismatch()
-    throw(
-        CuModArrayModulusMismatchException(
-            "Elementwise arrays must have the same modulus N",
-        ),
-    )
+    throw(ModulusMismatchError("Elementwise arrays must have the same modulus N"))
 end
 
 Base.@propagate_inbounds @inline function _check_elementwise_metadata(

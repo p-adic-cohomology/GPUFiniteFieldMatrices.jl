@@ -319,7 +319,7 @@ if CUDA.functional()
             Array(parent(oversized_left)),
             Array(parent(oversized_right)),
         )
-        @test_throws mod.CuModArraySizeMismatchException mod.add!(
+        @test_throws DimensionMismatch mod.add!(
             short_destination,
             oversized_left,
             oversized_right,
@@ -398,11 +398,7 @@ if CUDA.functional()
         mismatched_destination_modulus = mod.modulus(other_metadata)
         mismatched_source_modulus = mod.modulus(left)
 
-        @test_throws mod.CuModArrayModulusMismatchException mod.mod!(
-            other_metadata,
-            left,
-            13,
-        )
+        @test_throws mod.ModulusMismatchError mod.mod!(other_metadata, left, 13)
         @test parent(other_metadata) === mismatched_destination_parent
         @test parent(left) === mismatched_source_parent
         @test Array(parent(other_metadata)) == mismatched_destination_before
@@ -449,8 +445,8 @@ if CUDA.functional()
         # Allocating operators retain the standard padded geometry. A custom
         # parent that cannot match that output geometry is rejected before the
         # output is allocated.
-        @test_throws mod.CuModArraySizeMismatchException left + right
-        @test_throws mod.CuModArraySizeMismatchException left + 9
+        @test_throws DimensionMismatch left + right
+        @test_throws DimensionMismatch left + 9
         standard_left = mod.CuModMatrix{Float64}(left_values; modulus = q)
         standard_right = mod.CuModMatrix{Float64}(right_values; modulus = q)
         @test Array(standard_left + standard_right) == expected_sum
@@ -475,7 +471,7 @@ if CUDA.functional()
             Array(parent(vector_left)),
             Array(parent(short_vector_right)),
         )
-        @test_throws mod.CuModArraySizeMismatchException mod.add!(
+        @test_throws DimensionMismatch mod.add!(
             vector_destination,
             vector_left,
             short_vector_right,

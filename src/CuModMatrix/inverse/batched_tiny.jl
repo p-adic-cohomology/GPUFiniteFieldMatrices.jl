@@ -8,7 +8,7 @@ function _pack_square_batch(mats::AbstractVector{<:CuModMatrix}, n::Int, T::Data
     for i = 1:b
         m = mats[i]
         if rows(m) != n || cols(m) != n
-            throw(ArgumentError("all matrices must be $(n)x$(n)"))
+            throw(DimensionMismatch("all matrices must be $(n)x$(n)"))
         end
         A[:, :, i] .= @view parent(m)[1:n, 1:n]
     end
@@ -204,9 +204,9 @@ function _pluq_batched_tiny!(
     for m in mats
         if modulus(m) != N || eltype(parent(m)) != T
             throw(
-                CuModArrayModulusMismatchException(
-                    "batch matrices must have same modulus and element type",
-                ),
+                modulus(m) != N ?
+                ModulusMismatchError("batch matrices must have the same modulus") :
+                ArgumentError("batch matrices must have the same element type"),
             )
         end
     end
@@ -255,7 +255,7 @@ function _inverse_batched_tiny!(
     resolved_options::Union{Nothing,PLUQOptions} = nothing,
 )
     length(dests) == length(mats) ||
-        throw(ArgumentError("destination and input batches must have the same length"))
+        throw(DimensionMismatch("destination and input batches must have the same length"))
     isempty(mats) && return dests
     !_batch_supported_n(n) && throw(ArgumentError("supported sizes are 4, 8, 16, 32"))
     _validate_inverse_tiny_destinations(dests, mats, n, options; inplace = inplace)
@@ -286,9 +286,7 @@ function _inverse_batched_tiny!(
     )
     okh = Array(ok)
     for i in eachindex(mats)
-        okh[i] == 1 || throw(
-            InverseNotDefinedException("matrix $(i) in batch is singular modulo $(N)"),
-        )
+        okh[i] == 1 || throw(LinearAlgebra.SingularException(0))
     end
     for i in eachindex(mats)
         parent(dests[i])[1:n, 1:n] .= @view invA[:, :, i]

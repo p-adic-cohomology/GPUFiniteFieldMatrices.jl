@@ -48,7 +48,7 @@ Throws if no inverse exists.
 function pluq_mod_inv(a::Number, N::Int)
     aa = Int(pluq_mod_reduce(round(Int, a), N))
     if aa == 0
-        throw(DomainError(a, "no inverse for zero modulo N"))
+        throw(LinearAlgebra.SingularException(0))
     end
     t = 0
     newt = 1
@@ -60,7 +60,7 @@ function pluq_mod_inv(a::Number, N::Int)
         r, newr = newr, r - q * newr
     end
     if r != 1
-        throw(DomainError(a, "value is not invertible modulo N"))
+        throw(LinearAlgebra.SingularException(0))
     end
     if t < 0
         t += N

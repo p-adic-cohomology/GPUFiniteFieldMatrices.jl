@@ -30,11 +30,11 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
         isconcretetype(P) ||
             throw(ArgumentError("Karatsuba plans require a concrete storage type"))
         if size(A) != size(B)
-            error("Dimensions of matrices must match")
+            throw(DimensionMismatch("Dimensions of matrices must match"))
         end
         #=
         if !(all(x->x<N,A) && all(x->x<N,B))
-            error("Cannot have entries larger than modulus in matrices")
+            throw(ArgumentError("Cannot have entries larger than modulus in matrices"))
         end
         =#
         N1, N2, M = _karatsuba_parameters(
@@ -48,7 +48,7 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
             throw(ArgumentError("Karatsuba moduli must be positive"))
         bits = T <: AbstractFloat ? get_bits(T) - 2 : get_bits(T)
         if M >= BigInt(2)^bits
-            error("Modulus too large")
+            throw(ArgumentError("Modulus too large"))
         end
 
         return new{T,D,S,P}(A, B, nothing, N1, N2, M)
@@ -170,7 +170,7 @@ end
 
 function _karatsuba_checked_sum_bound(a::Int, b::Int, label::AbstractString)
     value = BigInt(a) + BigInt(b)
-    value <= typemax(Int) || throw(ArgumentError("$label overflows Int"))
+    value <= typemax(Int) || throw(OverflowError("$label overflows Int"))
     # The operands are strictly below a and b, so a sum bound of 2^53 still
     # promises actual Float64 integers no larger than 2^53 - 1.
     value <= _KARATSUBA_FLOAT64_EXACT_BOUND ||
@@ -202,7 +202,7 @@ function _karatsuba_matmul_product_plan(
         (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high),
     ) || throw(ArgumentError("Karatsuba split moduli must be positive"))
     input_low_a == input_low_b || throw(
-        ArgumentError(
+        ModulusMismatchError(
             "three-product Karatsuba matrix multiplication requires a common low modulus for A and B",
         ),
     )
@@ -372,19 +372,19 @@ only.
 """
 function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
-        error("Matrices must have the same modulus m")
+        throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
     if size(low_part(A))[2] != size(low_part(B))[1]
-        error("Matrix dimensions don't work for multiplication")
+        throw(DimensionMismatch("Matrix dimensions don't work for multiplication"))
     end
     if (A.plan == nothing) || (B.plan == nothing) || (C.plan == nothing)
-        error("Must initialize plans first")
+        throw(ArgumentError("Must initialize plans first"))
     end
     if eltype(parent(low_part(A))) != Float64
-        error("Not implemented for non-Float64 entries")
+        throw(ArgumentError("Not implemented for non-Float64 entries"))
     end
     size(low_part(C)) == (size(low_part(A), 1), size(low_part(B), 2)) ||
-        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
+        throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
     data = _karatsuba_prepare_gemm_views(A, B, C)
     products = _karatsuba_matmul_product_plan(
         low_modulus(A),
@@ -537,21 +537,21 @@ end
 
 function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
-        error("Matrices must have the same modulus m")
+        throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
     if size(low_part(A))[2] != size(low_part(B))[1]
-        error("Matrix dimensions don't work for multiplication")
+        throw(DimensionMismatch("Matrix dimensions don't work for multiplication"))
     end
     if (A.plan == nothing) || (B.plan == nothing) || (C.plan == nothing)
-        error("Must initialize plans first")
+        throw(ArgumentError("Must initialize plans first"))
     end
     if eltype(parent(low_part(A))) != Float64
-        error("Not implemented for non-Float64 entries")
+        throw(ArgumentError("Not implemented for non-Float64 entries"))
     end
     # TOD0: enable this
     # maxN = max(low_modulus(A),high_modulus(A))
     # if find_max_stripe_ops(eltype(parent(low_part(A))), maxN) < size(A,1)
-    #     error("Matrix is too big for a single matmul, this is currently not implemented")
+    #     throw(ArgumentError("Matrix is too big for a single matmul, this is currently not implemented"))
     # end
 
     tw = TILE_WIDTH
@@ -1359,11 +1359,11 @@ end
 
 function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
-        error("Matrices must have the same modulus m")
+        throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
     if (size(low_part(A)) != size(low_part(B))) ||
        (size(low_part(A)) != (size(low_part(K))))
-        error("Matrix dimensions must match")
+        throw(DimensionMismatch("Matrix dimensions must match"))
     end
 
     tw = TILE_WIDTH
@@ -1397,13 +1397,13 @@ end
 #"""
 #function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
 #    if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
-#        error("Matrices must have the same modulus m")
+#        throw(ModulusMismatchError("Matrices must have the same modulus m"))
 #    end
 #    if (size(low_part(A)) != size(low_part(B))) || (size(low_part(A)) != (size(low_part(K))))
-#        error("Matrix dimensions must match")
+#        throw(DimensionMismatch("Matrix dimensions must match"))
 #    end
 #    if (A.plan == nothing) || (K.plan == nothing)
-#        error("Must initialize plans first before using fallback implementation")
+#        throw(ArgumentError("Must initialize plans first before using fallback implementation"))
 #    end
 #    #=
 #    high_part(K) .= mod.(trunc.((low_part(A)+low_part(B))./modulus(A)),high_modulus(A))
@@ -1436,11 +1436,11 @@ end
 
 function sub!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
-        error("Matrices must have the same modulus m")
+        throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
     if (size(low_part(A)) != size(low_part(B))) ||
        (size(low_part(A)) != (size(low_part(K))))
-        error("Matrix dimensions must match")
+        throw(DimensionMismatch("Matrix dimensions must match"))
     end
 
     #=
@@ -1488,10 +1488,10 @@ end
 
 function scalar_multiply!(B::KaratsubaArray, A::KaratsubaArray, s::Number)
     if modulus(A) != modulus(B)
-        error("Matrices must have the same modulus m")
+        throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
     if size(low_part(A)) != size(low_part(B))
-        error("Matrix dimensions must match")
+        throw(DimensionMismatch("Matrix dimensions must match"))
     end
 
     # LinearAlgebra.mul!(high_part(B),low_part(A),s,low_modulus(A)^2)

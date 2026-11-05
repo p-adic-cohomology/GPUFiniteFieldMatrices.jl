@@ -578,11 +578,7 @@ function lower_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
             debug = debug,
         )
     else #tall
-        throw(
-            InverseNotDefinedException(
-                "(Right) pseudoinverse not defined for tall lower triangular matrices",
-            ),
-        )
+        throw(LinearAlgebra.SingularException(0))
         # _recursive_lower_triangular_inverse_no_copy(
         #     parent(A), parent(A_inv), 1, rows, 1, rows, modulus(A); debug=debug)
     end
