@@ -57,6 +57,7 @@ include("cuda_kernel_bindings_test.jl")
 include("CuModMatrix/display_test.jl")
 
 include("CuModMatrix/basic_operations_test.jl")
+include("CuModMatrix/modulus_caller_bindings_test.jl")
 include("CuModMatrix/inplace_operations_test.jl")
 include("CuModMatrix/matmul_operations_test.jl")
 include("CuModMatrix/benchmark_test.jl")
