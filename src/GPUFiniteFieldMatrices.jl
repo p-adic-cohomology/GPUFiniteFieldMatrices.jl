@@ -66,6 +66,7 @@ const DEBUG = false
     include("CuModMatrix/inverse/validation.jl")
     include("CuModMatrix/inverse/api.jl")
     include("CuModMatrix/inverse/batched_tiny.jl")
+    include("base_methods.jl")
 
 end # @stable default_mode = "disable"
 
