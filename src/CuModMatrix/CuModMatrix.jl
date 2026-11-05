@@ -746,8 +746,9 @@ end
 """
     change_modulus(A, new_N)
 
-Creates a new CuModArray with the same values as A but with a different modulus.
-Logical elements are reduced modulo new_N. The new storage rounds each logical
+Create an independent CuModArray with modulus `new_N`. Logical elements are
+reduced only when `new_N` is smaller than `modulus(A)`; otherwise they are copied.
+The new storage rounds each logical
 dimension up to a multiple of `TILE_WIDTH` and has zero padding.
 """
 function change_modulus(A::CuModArray, new_N::Integer)
