@@ -8,6 +8,13 @@ All algorithms in this directory assume that the modulus `N` is prime. Pass
 precondition on the host before GPU kernels launch. The current CUDA kernels pass
 `N` as `Int32`, so inverse routines reject moduli larger than `typemax(Int32)`.
 
+Non-prime moduli throw `DomainError` when primality checking is enabled.
+Exact-arithmetic limits throw `OverflowError`, incompatible shapes throw
+`DimensionMismatch`, and singular matrices or unavailable inverses throw
+`LinearAlgebra.SingularException`. Batch operand-modulus mismatches use the
+qualified public `GPUFiniteFieldMatrices.ModulusMismatchError`; invalid options
+and element types use `ArgumentError`.
+
 ## Source Papers
 
 - Jingen Xiang, Huangdong Meng, and Ashraf Aboulnaga, "Scalable Matrix
@@ -49,6 +56,9 @@ precondition on the host before GPU kernels launch. The current CUDA kernels pas
   `upper_triangular_inverse_no_copy` and `lower_triangular_inverse_no_copy`
   entry points allocate their result buffers; recursive paths keep the source
   factors separate from those destinations.
+- For wide triangular inputs with an invertible leading square block, both
+  triangular helpers return an `n`-by-`m` right inverse of the `m`-by-`n` input,
+  with zero rows below the inverse of that block.
 - Rectangular one-sided inverses: use rank-revealing row and column pivoting over
   augmented systems to construct right inverses for full row-rank matrices, with
   left inverses handled through transposition. The square `inverse_strategy`

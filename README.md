@@ -10,8 +10,10 @@ This package aims to implement fast finite field matrix operations on the GPU.
 
 We currently implement:
 
-- `CuModMatrix`, a `CuArray` wrapper which represents a matrix modulo `N`. `CuModMatrix` pads elements to 32 bits, and has various matrix operations implemented as GPU kernels. This includes:
-  - matrix multiplication (for `N < ~2^26`)
+- `CuModMatrix`, a `CuArray` wrapper representing a matrix modulo `N`, with
+  logical dimensions separate from its padded GPU storage. This includes:
+  - exact modular matrix and matrix-vector multiplication, with an element-type
+    dependent safe stripe budget
   - if `N` is prime, row reduction, LU decomposition, PLUQ decomposition, square
     inversion, and rectangular one-sided inverses. See
     [`src/CuModMatrix/inverse/README.md`](src/CuModMatrix/inverse/README.md) for
@@ -161,8 +163,10 @@ factories retain their requested logical shapes and backend.
 For `LinearAlgebra.mul!`, all three matrices must use the same representation
 modulus, the inner dimensions of `A` and `B` must match, and all three matrices
 must have initialized plans. The caller must size `C` to `(size(A, 1), size(B, 2))`:
-Karatsuba multiplication checks this before any device write. This multiplication
-path currently supports `Float64` storage only.
+Karatsuba multiplication checks this before any device write. All nine input,
+output, and plan storage roots must reside on one CUDA device; this is checked
+before staging or product kernels. This multiplication path currently supports
+`Float64` storage only.
 
 For Karatsuba matrix multiplication, `A` and `B` must share input low radix
 `R`, while `C` may use an independent low radix `R_C`. The output components
@@ -189,10 +193,6 @@ For CPU-only data, `to_karatsuba` returns CPU component arrays and
 `CuArray{T}` result. `Base.Array(K)` uses arbitrary-precision integer
 reconstruction to avoid overflowing an intermediate type.
 
-`KaratsubaArray` records its component and plan storage types, so
-`from_karatsuba` infers a CPU `Array` or GPU `CuArray` result from the stored
-components. The strict DispatchDoctor test preference remains enabled.
-
 `Base.copy` preserves the source's representation metadata `M` and split
 moduli `N1` and `N2`. It deep-copies the low and high component storage and
 creates a fresh plan when the source has one. The component capacity
@@ -204,36 +204,58 @@ when their metadata matches.
 
 The specialized matrix-vector path is available through qualified access as
 `GPUFiniteFieldMatrices.karatsuba_gemv!`.
-Matrix-matrix keyword paths remain unsupported; use `A * B` for the allocating
-GPU-backed `Float64` form or the mutating `LinearAlgebra.mul!` path described
-above when the destination should be supplied explicitly.
+Its general high-plane arithmetic still has a known correctness limitation;
+the matrix-matrix contract above does not establish general GEMV correctness.
+The legacy Karatsuba matrix-matrix keyword adapters have been removed. Use
+`A * B` for the allocating GPU-backed Float64 form, or call
+`LinearAlgebra.mul!` directly when supplying the destination.
 
-Per-call reduction moduli use the `modulus_override` keyword, for example
-`elementwise_multiply!(C, A, B; modulus_override = 7)` or
-`LinearAlgebra.mul!(z, A, x; modulus_override = 7)`. Qualified matrix
-multiplication is available as `GPUFiniteFieldMatrices.stripe_mul(A, B)` and
-`GPUFiniteFieldMatrices.stripe_mul!(C, A, B)`; the same functions support
-matrix-vector products. `*` and `LinearAlgebra.mul!` use the shared stripe
-implementation. Allocating results store the effective modulus, while mutating
-operations leave stored modulus metadata unchanged. An omitted matrix-matrix
-in-place matrix-matrix override uses `modulus(C)`; an omitted allocating
-override uses `modulus(A)`; matrix-vector multiplication uses
-`modulus(A)` and requires the destination to carry that same modulus when
-no override is supplied.
+Per-call reduction moduli use the positive `modulus_override` keyword, for
+example `elementwise_multiply!(C, A, B; modulus_override = 7)`. Mutating
+operations leave stored modulus metadata unchanged; allocating stripe products
+store their effective modulus. Matrix and matrix-vector products share the
+qualified `GPUFiniteFieldMatrices.stripe_mul` / `stripe_mul!` implementation.
+See their docstrings for destination-modulus defaults and the advanced
+`input_bound` and `max_ops` controls. Unsafe explicit budgets are rejected;
+default-budget empty-inner products return correctly shaped zeros.
 
-Multiplication paths require a positive `modulus_override` when one is supplied.
-Non-multiplication elementwise and scalar operations retain the stored-modulus
-fallback for zero or negative overrides.
+The ordinary matrix `LinearAlgebra.mul!(C, A, B)` overload accepts
+`input_bound` and `max_ops`; `modulus_override` is available through
+qualified `stripe_mul!`. Karatsuba matrix multiplication builds logical
+component views and preflights all three raw stripe products before writing
+any plan scratch, then executes through the existing raw `_stripe_mul!` core.
 
-For stripe multiplication, `input_bound` is the exclusive upper bound on
-nonnegative multiplicands, and `max_ops` limits product contributions
-accumulated per output entry between modular reductions. A supplied
-`max_ops` is used when it is safe for the input bound and reduction modulus;
-otherwise the call throws `ArgumentError`. If omitted, the safe budget is
-derived from those values. A matrix-matrix `input_bound` may require multiple
-stripes when the inner dimension exceeds that budget. The low-level
-matrix-vector adapter retains `respect_max_ops=false` to recompute its safe
-stripe budget.
+#### Ownership, inverses, and errors
+
+`copy(A)` allocates independent storage. `change_modulus(A, p)` also allocates;
+it reduces logical values only when `p` shrinks and otherwise copies them.
+The qualified `A = GPUFiniteFieldMatrices.change_modulus!!(A, p)` consumes the
+old wrapper and shares its GPU storage. Keep the returned wrapper and stop
+using the old one; aliases observe the reduction when `p` shrinks. Equal or
+larger moduli leave values unchanged. This operation allocates no GPU storage.
+
+The qualified upper- and lower-triangular inverse helpers preserve their input.
+For a wide `m`-by-`n` triangular matrix with an invertible leading square block,
+they return an `n`-by-`m` right inverse: the leading `m` rows invert that block,
+the remaining rows are zero, and `A * X` is the identity modulo `modulus(A)`.
+These helpers do not provide a general rectangular rank-revealing algorithm.
+
+For batched factorization, `pluq_batched!(mats)` overwrites inputs, while
+`pluq_batched!(dests, mats)` preserves inputs and writes distinct destinations.
+`inverse_batched(mats)` allocates and preserves inputs. Qualified fixed-size
+`inverse_batched_NxN!(mats)` methods overwrite inputs; their two-argument forms
+write distinct destinations after validating the batch. `batch_streams` affects
+scalar fallbacks; fixed-size kernels use their own batch strategy. See the
+[inverse API notes](src/CuModMatrix/inverse/README.md) for supported options.
+
+Wrong shapes throw `DimensionMismatch`, incompatible operand moduli throw
+`GPUFiniteFieldMatrices.ModulusMismatchError`, non-prime moduli throw
+`DomainError`, invalid arguments throw `ArgumentError`, exact-arithmetic
+overflow throws `OverflowError`, and unavailable inverses throw
+`LinearAlgebra.SingularException`. Exact conversion failures use `InexactError`.
+`A == B` compares logical shape, modulus, and entries while ignoring padding;
+unary `-A` preserves its input, and `LinearAlgebra.rank(A)` uses non-mutating
+PLUQ factorization.
 
 ## License
 
@@ -242,3 +264,8 @@ GPUFiniteFieldMatrices.jl is distributed under the MIT license.
 ## Developer checks
 
 For local checks, run `python -m pip install pre-commit==4.6.2` followed by `pre-commit install`; CI runs these checks automatically. The hook installs JuliaFormatter 2.14.0 in an isolated environment, and ReLint remains an optional manual check.
+
+`Pkg.test()` runs the CPU interface and quality checks on hosts without CUDA.
+Arithmetic, allocation, triangular, batch, and raw-CuArray regression suites
+run inside the CUDA-functional gate. A CPU pass with that gate skipped does not
+verify GPU numerical results or allocation budgets.
