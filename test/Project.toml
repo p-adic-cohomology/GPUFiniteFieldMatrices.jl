@@ -1,6 +1,6 @@
 [compat]
 Aqua = "0.8.14"
-JET = "0.10.6"
+JET = "0.10.6, 0.12, 0.13"
 JuliaFormatter = "=2.14.0"
 
 [deps]
