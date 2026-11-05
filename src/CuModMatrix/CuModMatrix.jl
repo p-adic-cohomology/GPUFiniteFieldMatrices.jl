@@ -260,34 +260,43 @@ function identity_matrix(::Type{CuModArray{T,2}}, n::Integer; modulus::Int) wher
 end
 
 """
+    get_bits(type)
+
+Return the integer precision budget for a supported element type. Floating
+formats use their integer significand width; signed integers exclude the sign
+bit, and unsigned integers use their full fixed width.
+"""
+function get_bits(type::Type)
+    if type <: AbstractFloat
+        type === Float16 && return 11
+        type === Float32 && return 24
+        type === Float64 && return 53
+    elseif type <: Unsigned
+        type in (UInt8, UInt16, UInt32, UInt64, UInt128) || error(
+            "unsupported type $type; expected Float16, Float32, Float64, or a fixed-width signed or unsigned integer type",
+        )
+        return 8 * sizeof(type)
+    elseif type <: Signed
+        type in (Int8, Int16, Int32, Int64, Int128) || error(
+            "unsupported type $type; expected Float16, Float32, Float64, or a fixed-width signed or unsigned integer type",
+        )
+        return 8 * sizeof(type) - 1
+    end
+
+    error(
+        "unsupported type $type; expected Float16, Float32, Float64, or a fixed-width signed or unsigned integer type",
+    )
+end
+get_bits(type) = error(
+    "unsupported type $type; expected Float16, Float32, Float64, or a fixed-width signed or unsigned integer type",
+)
+
+"""
     find_max_ops(type, N)
 
-Returns the maximum number of operations before a N is necessary given a datatype and N N.
+Return the maximum operation count permitted by the precision budget for a
+supported element type and dimension `N`.
 """
-function get_bits(type)
-    if occursin("Float", string(type))
-        # Number of integer-significand bits guaranteed by IEEE arithmetic.
-        # Every integer through 2^p is represented exactly by the format.
-        bits_dict = Dict("64" => 53, "32" => 24, "16" => 11)
-        bits_match = match(r"\d+", string(type))
-        bits = get(bits_dict, bits_match.match, -1)
-    elseif occursin("UInt", string(type))
-        bits_match = match(r"\d+", string(type))
-        bits = parse(Int, bits_match.match) - 1
-    elseif occursin("Int", string(type))
-        bits_match = match(r"\d+", string(type))
-        bits = parse(Int, bits_match.match)
-    else
-        error("The input type is neither Int, UInt, nor Float.")
-    end
-
-    if bits == -1
-        error("Input type is not recognized.")
-    end
-
-    return bits
-end
-
 function find_max_ops(type, N)
     bits = get_bits(type)
     maxterm = BigInt(max(N - 1, 1))^2
