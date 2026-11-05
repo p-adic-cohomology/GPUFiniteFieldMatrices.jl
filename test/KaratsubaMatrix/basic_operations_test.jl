@@ -4,70 +4,27 @@ using LinearAlgebra
 using CUDA
 #using GPUFiniteFieldMatrices
 
-function test_basic_operations()
-    #=
-    A = [1 2; 3 4]
-    B = [5 6; 7 8]
+function test_karatsuba_basic_operations()
+    A = GPUFiniteFieldMatrices.CuModMatrix{Float64}([1 2; 3 4]; modulus = 100)
+    B = GPUFiniteFieldMatrices.CuModMatrix{Float64}([5 6; 7 8]; modulus = 100)
     a = 9
-    AK = to_karatsuba(A)
-    BK = to_karatsuba(B)
-    CK = KaratsubaMatrix([1 0 3; 8 11 2; 2 4 6], [10 3 2; 7 13 7; 1 0 9])
-    DK = KaratsubaMatrix([9 6 5; 2 17 9; 4 4 23], [5 5 11; 6 4 3; 7 3 19])
-    C = Array(CK)
-    D = Array(DK)
-
-    @testset "Cpu Matrices" begin
-        @test A + B == Array(AK + BK)
-        @test A - B == Array(AK - BK)
-        @test a*A == Array(a*AK)
-        #@test A*B == Array(AK*BK)
-        @test C + D == Array(CK + DK)
-        @test C - D == Array(CK - DK)
-        @test a*C == Array(a*CK)
-        #@test C*D == Array(CK*DK)
-    end
-
-    A = CuArray([1 2; 3 4])
-    B = CuArray([5 6; 7 8])
-    a = 9
-    AK = to_karatsuba(A; modulus = 100)
-    BK = to_karatsuba(B; modulus = 100)
+    AK = to_karatsuba(A; low_modulus = 10, high_modulus = 10, modulus = 100)
+    BK = to_karatsuba(B; low_modulus = 10, high_modulus = 10, modulus = 100)
     CK = KaratsubaMatrix([1 0 3; 8 11 2; 2 4 6], [10 3 2; 7 13 7; 1 0 9]; modulus = 100)
     DK = KaratsubaMatrix([9 6 5; 2 17 9; 4 4 23], [5 5 11; 6 4 3; 7 3 19]; modulus = 100)
-    C = CuArray(Array(CK))
-    D = CuArray(Array(DK))
-
-    @testset "Gpu Matrices" begin
-        @test A + B == CuArray(Array(AK + BK))
-        @test A - B == CuArray(Array(AK - BK))
-        @test a*A == CuArray(Array(a*AK))
-        #@test A*B == CuArray(Array(AK*BK))
-        @test C + D == CuArray(Array(CK + DK))
-        @test C - D == CuArray(Array(CK - DK))
-        @test a*C == CuArray(Array(a*CK))
-        #@test C*D == CuArray(Array(CK*DK))
-    end
-    =#
-    A = GPUFiniteFieldMatrices.CuModMatrix([1 2; 3 4]; modulus = 100)
-    B = GPUFiniteFieldMatrices.CuModMatrix([5 6; 7 8]; modulus = 100)
-    a = 9
-    AK = to_karatsuba(A; modulus = 100)
-    BK = to_karatsuba(B; modulus = 100)
-    CK = KaratsubaMatrix([1 0 3; 8 11 2; 2 4 6], [10 3 2; 7 13 7; 1 0 9]; modulus = 100)
-    DK = KaratsubaMatrix([9 6 5; 2 17 9; 4 4 23], [5 5 11; 6 4 3; 7 3 19]; modulus = 100)
-    C = GPUFiniteFieldMatrices.CuModMatrix(Array(CK); modulus = 100^2)
-    D = GPUFiniteFieldMatrices.CuModMatrix(Array(DK); modulus = 100^2)
+    C = GPUFiniteFieldMatrices.CuModMatrix(Array(CK); modulus = 100)
+    D = GPUFiniteFieldMatrices.CuModMatrix(Array(DK); modulus = 100)
 
     @testset "Gpu Mod Matrices" begin
-        @test A + B == GPUFiniteFieldMatrices.CuModMatrix(Array(AK + BK); modulus = 100^2)
-        @test A - B == GPUFiniteFieldMatrices.CuModMatrix(Array(AK - BK); modulus = 100^2)
-        @test a*A == GPUFiniteFieldMatrices.CuModMatrix(Array(a*AK); modulus = 100^2)
-        @test A*B == GPUFiniteFieldMatrices.CuModMatrix(Array(AK*BK); modulus = 100^2)
+        @test A + B == GPUFiniteFieldMatrices.CuModMatrix(Array(AK + BK); modulus = 100)
+        @test A - B == GPUFiniteFieldMatrices.CuModMatrix(Array(AK - BK); modulus = 100)
+        @test a*A == GPUFiniteFieldMatrices.CuModMatrix(Array(a*AK); modulus = 100)
+        @test A*B == GPUFiniteFieldMatrices.CuModMatrix(Array(AK*BK); modulus = 100)
         #=
-        @test C + D == GPUFiniteFieldMatrices.CuModMatrix(Array(CK + DK); modulus = 100^2)
-        @test C - D == GPUFiniteFieldMatrices.CuModMatrix(Array(CK - DK); modulus = 100^2)
-        @test a*C == GPUFiniteFieldMatrices.CuModMatrix(Array(a*CK); modulus = 100^2)
-        @test C*D == GPUFiniteFieldMatrices.CuModMatrix(Array(CK*DK); modulus = 100^2)
+        @test C + D == GPUFiniteFieldMatrices.CuModMatrix(Array(CK + DK); modulus = 100)
+        @test C - D == GPUFiniteFieldMatrices.CuModMatrix(Array(CK - DK); modulus = 100)
+        @test a*C == GPUFiniteFieldMatrices.CuModMatrix(Array(a*CK); modulus = 100)
+        @test C*D == GPUFiniteFieldMatrices.CuModMatrix(Array(CK*DK); modulus = 100)
         =#
     end
 end
@@ -154,7 +111,8 @@ function test_karatsuba_operations()
             #@testset "Karatsuba Operations" begin
             #@test Array(GPUFiniteFieldMatrices.add!(CK,AK,BK)) == mod.((ACpu + BCpu),(N1*N2))
             #@test Array(GPUFiniteFieldMatrices.sub!(CK,AK,BK)) == mod.((ACpu - BCpu),(N1*N2))
-            @test Array(LinearAlgebra.mul!(yK, AK, xK)) == mod.((ACpu*xCpu), (N1*N2))
+            @test Array(GPUFiniteFieldMatrices.karatsuba_gemv!(yK, AK, xK)) ==
+                  mod.((BigInt.(ACpu)*BigInt.(xCpu)), (N1*N2))
             #@test Array(GPUFiniteFieldMatrices.karatsuba_gemv!(yK,AK,xK)) == mod.((ACpu*xCpu),(N1*N2))
             #@test Array(GPUFiniteFieldMatrices.scalar_multiply!(CK,AK,a)) == mod.((ACpu*a),(N1*N2))
 
