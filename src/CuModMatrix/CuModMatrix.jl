@@ -785,22 +785,27 @@ function change_modulus(A::CuModArray, new_N::Integer)
 end
 
 """
-    change_modulus!(A, new_N)
+    change_modulus!!(A, new_N)
 
-Changes the modulus of A in-place to new_N.
-All elements are reduced modulo new_N.
+Consumes `A` and returns a new immutable `CuModArray` wrapper over the same GPU
+storage with modulus `new_N`. The wrapper shares its parent storage with `A`.
+Use the returned wrapper, for example `A = change_modulus!!(A, p)`, and do not
+use the consumed wrapper afterward. Aliases to the parent share storage and
+observe the in-place reduction when the modulus shrinks.
+
+`new_N` must be positive. A smaller modulus performs one in-place reduction.
+Equal or larger moduli leave values unchanged and reinterpret them.
+The wrapper may allocate small host metadata; no GPU storage is allocated.
 """
-#TODO: we are not allowed to actually change an immutable struct.
-#This returns a new struct, but modifies the underlying data
-#
-#This will allocate a litte bit the way the constructor is written right now.
-function change_modulus_no_alloc!(A::CuModArray, new_N::Integer)
-    if new_N < modulus(A)
-        parent(A) .= mod.(parent(A), new_N)
-        mod!(parent(A), parent(A), new_N)
+function change_modulus!!(A::CuModArray{T,D}, new_N::Integer) where {T,D}
+    new_N > 0 || throw(ArgumentError("new_N must be positive"))
+    new_modulus = Int(new_N)
+
+    if new_modulus < modulus(A)
+        mod!(parent(A), parent(A), new_modulus)
     end
 
-    return CuModArray(parent(A); modulus = Int(new_N), new_size = size(A))
+    return CuModArray{T,D}(parent(A); modulus = new_modulus, new_size = size(A))
 end
 
 """
