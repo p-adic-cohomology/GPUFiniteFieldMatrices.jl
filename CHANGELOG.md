@@ -46,7 +46,7 @@ distinct caller-provided destinations.
 | add!, sub!, zero! | unchanged | These names remain available as qualified public functions. |
 | KMatMul!(C, A, B) | LinearAlgebra.mul!(C, A, B) | Extends LinearAlgebra's multiplication method. |
 | KMatMul_gemv!(C, A, x) | karatsuba_gemv!(C, A, x) | Name only; behavior is unchanged. |
-| Karatsubacopy(A) | Base.copy(A) | Copy semantics are unchanged. |
+| Karatsubacopy(A) | Base.copy(A) | The original rename was name-only; the approved 0.4.0 correction preserves representation metadata `M`, deep-copies component storage, and creates a fresh plan for a planned source. |
 | MatToKMat(...) | to_karatsuba(...) | Conversion helper; all overloads are renamed. |
 | KMatToMat(T, K) | from_karatsuba(T, K) | Conversion helper; argument order is unchanged. |
 
