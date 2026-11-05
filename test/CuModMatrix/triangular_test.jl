@@ -48,6 +48,25 @@ function test_upper_triangular_inverse(DEBUG::Bool = false)
     return nothing
 end
 
+function test_upper_wide_triangular_inverse()
+    N = 13
+    for (m, n) in ((5, 37), (32, 96), (33, 95), (63, 129), (65, 257), (96, 1000))
+        A = [i > j ? 0 : i == j ? mod(i, N - 1) + 1 : mod(7i + 3j, N) for i = 1:m, j = 1:n]
+        expected = zeros(Int, n, m)
+        expected[1:m, :] = _triangular_inverse_integer_oracle(A[:, 1:m], N, false)
+        A_gpu = CuModMatrix{Float32}(A; modulus = N)
+        source_snapshot = Array(parent(A_gpu))
+        result = GPUFiniteFieldMatrices.upper_triangular_inverse_no_copy(A_gpu)
+        actual = Int.(Array(result))
+        @test size(result) == (n, m)
+        @test GPUFiniteFieldMatrices.modulus(result) == N
+        @test actual == expected
+        @test mod.(A * actual, N) == Matrix{Int}(I, m, m)
+        @test all(iszero, actual[(m+1):n, :])
+        @test Array(parent(A_gpu)) == source_snapshot
+    end
+end
+
 function test_lower_triangular_inverse(DEBUG::Bool = false)
 
     function unit_test_lower_triangular_inverse(A::Matrix, N::Int; debug::Bool = false)

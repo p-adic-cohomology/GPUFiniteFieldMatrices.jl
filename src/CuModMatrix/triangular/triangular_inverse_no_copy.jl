@@ -227,7 +227,12 @@ end
 """
     upper_triangular_inverse_no_copy(A::CuModMatrix)
 
-Computes the inverse of an upper triangular matrix.
+Compute the inverse of a square upper triangular matrix, or a right inverse
+of a wide upper triangular matrix with an invertible leading square block.
+For an `m`-by-`n` wide input, the result is `n`-by-`m`: its leading `m` rows
+invert the leading square block and the remaining rows are zero. Thus
+`A * result` is the `m`-by-`m` identity modulo `modulus(A)`.
+The input is preserved.
 """
 function upper_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
     rows, cols = size(A)
@@ -258,7 +263,7 @@ function upper_triangular_inverse_no_copy(A::CuModMatrix; debug::Bool = false)
             1,
             rows,
             1,
-            cols,
+            rows,
             modulus(A);
             debug = debug,
         )
