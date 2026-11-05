@@ -25,6 +25,9 @@ include("api_surface_test.jl")
 include("base_methods_test.jl")
 include("exceptions_test.jl")
 include("KaratsubaMatrix/api_regressions_test.jl")
+include("KaratsubaMatrix/basic_operations_test.jl")
+include("KaratsubaMatrix/allocations_test.jl")
+include("KaratsubaMatrix/raw_unary_test.jl")
 
 @testset "Stripe budget input validation" begin
     for input_bound in (1, 0, -1)
@@ -143,8 +146,14 @@ if CUDA.functional()
             test_empty_stripe_products()
         end
         test_karatsuba_api_regressions()
+        @testset "Karatsuba arithmetic" begin
+            test_karatsuba_basic_operations()
+            test_karatsuba_operations()
+            test_karatsuba_raw_unary()
+        end
         @testset "Allocations" begin
             test_allocations()
+            test_karatsuba_allocations()
         end
         @testset "Timings" begin
             test_timings()
