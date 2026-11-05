@@ -334,9 +334,9 @@ end
 
 Multiply the Karatsuba matrices A and B, storing the product in C. The
 three matrices must share the same representation modulus M, and A's column
-count must match B's row count. The caller must ensure that C has dimensions
-(size(A, 1), size(B, 2)); this method checks the shape and stripe preflights
-before any device write. Call initialize_plan! on all
+count must match B's row count. C must have dimensions (size(A, 1), size(B, 2));
+the Karatsuba shape check rejects mismatches before any plan or device writes.
+Call initialize_plan! on all
 three matrices before multiplying. A and B must share input low radix R; C
 may use an independent low radix R_C. The result components represent the
 product modulo Q = R_C*high_modulus(C), and checked modular recombination
