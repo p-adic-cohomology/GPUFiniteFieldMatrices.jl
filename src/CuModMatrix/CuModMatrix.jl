@@ -772,13 +772,10 @@ function change_modulus_no_alloc!(A::CuModArray, new_N::Integer)
 end
 
 """
-    mul!(C, A, B; max_ops=nothing, input_bound=nothing, modulus_override=nothing)
+    mul!(C, A, B; max_ops=nothing, input_bound=nothing)
 
-In-place matrix multiplication: `C = A * B mod N`. By default `N` is
-`modulus(C)`; a positive `modulus_override` selects another working reduction
-modulus without changing the stored modulus of `C`. The input matrices must
-still have matching stored moduli. `input_bound` is the exclusive upper bound
-on nonnegative multiplicands. `max_ops` counts product
+In-place matrix multiplication: `C = A * B mod modulus(C)`. `input_bound` is the
+exclusive upper bound on nonnegative multiplicands. `max_ops` counts product
 contributions accumulated per output entry between modular reductions. When
 omitted, it is derived from the effective input bound and reduction modulus; a
 safe explicit value is honored, while an unsafe value throws `ArgumentError`.
@@ -791,12 +788,9 @@ function LinearAlgebra.mul!(
     B::CuModMatrix;
     max_ops = nothing,
     input_bound = nothing,
-    modulus_override = nothing,
 )
 
-    _validate_positive_modulus_override(modulus_override)
-    if modulus(A) != modulus(B) ||
-       (modulus_override === nothing && modulus(A) != modulus(C))
+    if (modulus(A) != modulus(B) || modulus(A) != modulus(C))
         throw(
             CuModArrayModulusMismatchException("All matrices must have the same modulus N"),
         )
@@ -812,14 +806,7 @@ function LinearAlgebra.mul!(
         throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
     end
 
-    stripe_mul!(
-        C,
-        A,
-        B;
-        max_ops = max_ops,
-        input_bound = input_bound,
-        modulus_override = modulus_override,
-    )
+    stripe_mul!(C, A, B; max_ops = max_ops, input_bound = input_bound)
     return C
 end
 

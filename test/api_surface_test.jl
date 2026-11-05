@@ -289,8 +289,6 @@
           keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type})
     @test :max_ops in
           keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type})
-    @test :modulus_override in
-          keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type})
     @test keyword_decl(LinearAlgebra.mul!, Tuple{vector_type,matrix_type,vector_type}) ==
           [:input_bound, :modulus_override]
     @test :maxopsOverride ∉

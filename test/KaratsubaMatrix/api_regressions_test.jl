@@ -8,43 +8,6 @@ function test_karatsuba_api_regressions()
         @test mod.modulus(a) == q
         @test size(a) == size(a_values)
 
-        exact_input_bound = 2^25 + 1
-        exact_modulus = 2^53 - 2^50
-        exact_a_values = Float64[1 2 3; 4 5 6]
-        exact_b_values = Float64[2 1; 3 4; 5 6]
-        exact_a = mod.CuModMatrix{Float64}(exact_a_values; modulus = 2^52)
-        exact_b = mod.CuModMatrix{Float64}(exact_b_values; modulus = 2^52)
-        exact_c = mod.CuModMatrix{Float64}(fill(9.0, 2, 2); modulus = 37)
-        exact_c_before = Array(parent(exact_c))
-        exact_budget =
-            mod.find_max_stripe_ops(Float64, exact_input_bound; modulus = exact_modulus)
-        @test exact_budget == 1
-        @test_throws ArgumentError LinearAlgebra.mul!(
-            exact_c,
-            exact_a,
-            exact_b;
-            input_bound = exact_input_bound,
-            modulus_override = exact_modulus,
-            max_ops = exact_budget + 1,
-        )
-        @test Array(parent(exact_c)) == exact_c_before
-        LinearAlgebra.mul!(
-            exact_c,
-            exact_a,
-            exact_b;
-            input_bound = exact_input_bound,
-            modulus_override = exact_modulus,
-            max_ops = exact_budget,
-        )
-        exact_expected = Float64.(
-            Base.mod.(
-                BigInt.(exact_a_values) * BigInt.(exact_b_values),
-                BigInt(exact_modulus),
-            ),
-        )
-        @test Array(exact_c) == exact_expected
-        @test mod.modulus(exact_c) == 37
-
         # Keep the public logical-size wrapper contract over padded CUDA storage.
         backing = CUDA.CuArray(zeros(Float64, 5, 6))
         wrapped_backing = mod.CuModMatrix{Float64}(backing; modulus = q, new_size = (2, 3))
@@ -624,7 +587,7 @@ function test_karatsuba_api_regressions()
             )
             @test inner_after == inner_before
 
-            # A wrong logical C shape reaches the stripe destination guard,
+            # A wrong logical C shape reaches the Karatsuba destination guard,
             # distinct from the earlier A/B inner-dimension rejection.
             destination_a =
                 alias_fixture_matrix(2, 2; low_modulus = 13, high_modulus = 3, seed = 901)

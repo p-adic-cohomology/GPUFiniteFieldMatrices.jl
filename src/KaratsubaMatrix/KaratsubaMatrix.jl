@@ -237,7 +237,7 @@ function _karatsuba_matmul_product_plan(
     )
 end
 
-function _karatsuba_validate_gemm_storage(
+function _karatsuba_prepare_gemm_views(
     A::KaratsubaArray,
     B::KaratsubaArray,
     C::KaratsubaArray,
@@ -294,27 +294,38 @@ function _karatsuba_validate_gemm_storage(
     _stripe_mightalias(parent(A.plan), parent(B.plan)) &&
         A !== B &&
         throw(ArgumentError("Karatsuba input plan scratch must not alias each other"))
-    return nothing
+    return (
+        a_low = _stripe_logical_data(low_part(A)),
+        a_high = _stripe_logical_data(high_part(A)),
+        a_plan = _stripe_logical_data(A.plan),
+        b_low = _stripe_logical_data(low_part(B)),
+        b_high = _stripe_logical_data(high_part(B)),
+        b_plan = _stripe_logical_data(B.plan),
+        c_low = _stripe_logical_data(low_part(C)),
+        c_high = _stripe_logical_data(high_part(C)),
+        c_plan = _stripe_logical_data(C.plan),
+    )
 end
 
-function _karatsuba_stripe_product!(
-    C,
-    A,
-    B,
-    require_matching_input_moduli,
-    product;
-    kwargs...,
-)
-    return _stripe_mul_matrix!(
-        C,
-        A,
-        B,
-        require_matching_input_moduli;
+function _karatsuba_preflight_stripe_product(Cdata, Adata, Bdata, product)
+    return _stripe_preflight(
+        Cdata,
+        Adata,
+        Bdata,
+        product.modulus,
+        product.input_bound,
+        product.max_ops,
+    )
+end
+
+function _karatsuba_stripe_product!(Cdata, Adata, Bdata, product)
+    return _stripe_mul!(
+        Cdata,
+        Adata,
+        Bdata;
+        modulus = product.modulus,
         input_bound = product.input_bound,
-        modulus_override = product.modulus,
         max_ops = product.max_ops,
-        clear_output_padding = false,
-        kwargs...,
     )
 end
 
@@ -324,8 +335,8 @@ end
 Multiply the Karatsuba matrices A and B, storing the product in C. The
 three matrices must share the same representation modulus M, and A's column
 count must match B's row count. The caller must ensure that C has dimensions
-(size(A, 1), size(B, 2)); the stripe preflight checks this before any device
-write. Call initialize_plan! on all
+(size(A, 1), size(B, 2)); this method checks the shape and stripe preflights
+before any device write. Call initialize_plan! on all
 three matrices before multiplying. A and B must share input low radix R; C
 may use an independent low radix R_C. The result components represent the
 product modulo Q = R_C*high_modulus(C), and checked modular recombination
@@ -351,7 +362,9 @@ function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaAr
     if eltype(parent(low_part(A))) != Float64
         error("Not implemented for non-Float64 entries")
     end
-    _karatsuba_validate_gemm_storage(A, B, C)
+    size(low_part(C)) == (size(low_part(A), 1), size(low_part(B), 2)) ||
+        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
+    data = _karatsuba_prepare_gemm_views(A, B, C)
     products = _karatsuba_matmul_product_plan(
         low_modulus(A),
         high_modulus(A),
@@ -361,32 +374,20 @@ function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaAr
         high_modulus(C),
     )
 
-    high_requires_matching_input_moduli = modulus(high_part(A)) == modulus(high_part(B))
     # Validate all stripe calls before the sum kernel writes either input plan.
     # The calls below repeat this preflight at their own execution boundary.
-    _karatsuba_stripe_product!(
-        low_part(C),
-        low_part(A),
-        low_part(B),
-        true,
-        products.low;
-        preflight_only = true,
+    _karatsuba_preflight_stripe_product(data.c_low, data.a_low, data.b_low, products.low)
+    _karatsuba_preflight_stripe_product(
+        data.c_high,
+        data.a_plan,
+        data.b_plan,
+        products.middle,
     )
-    _karatsuba_stripe_product!(
-        high_part(C),
-        A.plan,
-        B.plan,
-        true,
-        products.middle;
-        preflight_only = true,
-    )
-    _karatsuba_stripe_product!(
-        C.plan,
-        high_part(A),
-        high_part(B),
-        high_requires_matching_input_moduli,
-        products.high;
-        preflight_only = true,
+    _karatsuba_preflight_stripe_product(
+        data.c_plan,
+        data.a_high,
+        data.b_high,
+        products.high,
     )
 
     rows_a, cols_a = size(low_part(A))
@@ -419,15 +420,9 @@ function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaAr
         stride(parent(high_part(B)), 2),
     )
 
-    _karatsuba_stripe_product!(low_part(C), low_part(A), low_part(B), true, products.low)
-    _karatsuba_stripe_product!(high_part(C), A.plan, B.plan, true, products.middle)
-    _karatsuba_stripe_product!(
-        C.plan,
-        high_part(A),
-        high_part(B),
-        high_requires_matching_input_moduli,
-        products.high,
-    )
+    _karatsuba_stripe_product!(data.c_low, data.a_low, data.b_low, products.low)
+    _karatsuba_stripe_product!(data.c_high, data.a_plan, data.b_plan, products.middle)
+    _karatsuba_stripe_product!(data.c_plan, data.a_high, data.b_high, products.high)
 
     output_rows, output_cols = size(low_part(C))
     output_count = length(low_part(C))

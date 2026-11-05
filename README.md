@@ -151,7 +151,7 @@ scratch is still initialized separately.
 For `LinearAlgebra.mul!`, all three matrices must use the same representation
 modulus, the inner dimensions of `A` and `B` must match, and all three matrices
 must have initialized plans. The caller must size `C` to `(size(A, 1), size(B, 2))`:
-the stripe preflight checks this before any device write. This multiplication
+Karatsuba multiplication checks this before any device write. This multiplication
 path currently supports `Float64` storage only.
 
 For Karatsuba matrix multiplication, `A` and `B` must share input low radix
