@@ -307,6 +307,27 @@ function _karatsuba_prepare_gemm_views(
     )
 end
 
+function _karatsuba_require_same_device(data)
+    expected_device = CUDA.device(_stripe_storage_root(data.c_low))
+    for plane in (
+        data.c_high,
+        data.c_plan,
+        data.a_low,
+        data.a_high,
+        data.a_plan,
+        data.b_low,
+        data.b_high,
+        data.b_plan,
+    )
+        CUDA.device(_stripe_storage_root(plane)) == expected_device || throw(
+            ArgumentError(
+                "Karatsuba matrix components and plans must reside on the same CUDA device",
+            ),
+        )
+    end
+    return nothing
+end
+
 function _karatsuba_preflight_stripe_product(Cdata, Adata, Bdata, product)
     return _stripe_preflight(
         Cdata,
@@ -389,6 +410,9 @@ function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaAr
         data.b_high,
         products.high,
     )
+    # The stripe preflights validate each product group independently. The
+    # staging and recombination kernels combine all nine storage roots.
+    _karatsuba_require_same_device(data)
 
     rows_a, cols_a = size(low_part(A))
     rows_b, cols_b = size(low_part(B))
