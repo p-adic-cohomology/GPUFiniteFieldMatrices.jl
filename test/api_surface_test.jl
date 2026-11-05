@@ -65,6 +65,7 @@
         :stripe_mul,
         :stripe_mul!,
         :TILE_WIDTH,
+        :ModulusMismatchError,
     )
     @test all(name -> isdefined(mod, name), public_names)
     @test all(name -> Base.ispublic(mod, name), public_names)
@@ -479,7 +480,14 @@
                   BigInt(2)^53 - 1
         end
 
-        @test_throws ArgumentError mod._karatsuba_matmul_product_plan(13, 7, 12, 5, 17, 11)
+        @test_throws mod.ModulusMismatchError mod._karatsuba_matmul_product_plan(
+            13,
+            7,
+            12,
+            5,
+            17,
+            11,
+        )
 
         oracle_radix = 13
         oracle_high_a = 7
@@ -573,7 +581,14 @@
         second_exact *= second_case.b_low + 3 * second_case.b_high
         @test first_products == second_products == (0, 1, 0)
         @test (first_exact, second_exact) == (3, 2)
-        @test_throws ArgumentError mod._karatsuba_matmul_product_plan(3, 5, 5, 7, 2, 11)
+        @test_throws mod.ModulusMismatchError mod._karatsuba_matmul_product_plan(
+            3,
+            5,
+            5,
+            7,
+            2,
+            11,
+        )
 
         # The former unchecked R*p2 boundary exceeds Float64's exact integer
         # range. Double-and-add modular multiplication and recombination stay
@@ -829,16 +844,16 @@
     end
 
     # The explicit mul! checks run before CUDA work and can be checked on CPU.
-    assert_guard_error_message = function (operation, expected_message)
+    assert_guard_error_message = function (operation, expected_type, expected_message)
         err = try
             operation()
             nothing
         catch caught
             caught
         end
-        @test err isa ErrorException
-        if err isa ErrorException
-            @test sprint(showerror, err) == expected_message
+        @test err isa expected_type
+        if err isa expected_type
+            @test occursin(expected_message, sprint(showerror, err))
         end
     end
     mul_left = mod.KaratsubaArray{Float64,2}(
@@ -864,6 +879,7 @@
     )
     assert_guard_error_message(
         () -> LinearAlgebra.mul!(mul_dest, mul_left, mul_right_wrong_modulus),
+        mod.ModulusMismatchError,
         "Matrices must have the same modulus m",
     )
 
@@ -883,6 +899,7 @@
     )
     assert_guard_error_message(
         () -> LinearAlgebra.mul!(mul_dest, mul_left_wrong_shape, mul_right_wrong_shape),
+        DimensionMismatch,
         "Matrix dimensions don't work for multiplication",
     )
 
@@ -895,6 +912,7 @@
     )
     assert_guard_error_message(
         () -> LinearAlgebra.mul!(mul_dest, mul_left, mul_unplanned_right),
+        ArgumentError,
         "Must initialize plans first",
     )
 end
@@ -1220,13 +1238,13 @@ end
         catch err
             err
         end
-        @test unsupported_error isa ErrorException
+        @test unsupported_error isa ArgumentError
         if unsupported_error isa Exception
             @test occursin(string(unsupported), sprint(showerror, unsupported_error))
         end
     end
-    @test_throws ErrorException mod.find_max_ops_karatsuba(BigInt, 2)
-    @test_throws ErrorException mod.find_max_ops(BigFloat, 2)
+    @test_throws ArgumentError mod.find_max_ops_karatsuba(BigInt, 2)
+    @test_throws ArgumentError mod.find_max_ops(BigFloat, 2)
 end
 
 @testset "Strict CPU Karatsuba storage and inference" begin

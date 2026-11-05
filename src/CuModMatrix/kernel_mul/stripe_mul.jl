@@ -47,7 +47,7 @@ end
 elseif isdefined(CUDA, :CUDACore) && isdefined(CUDA.CUDACore, :CuRefValue)
     const _CUDA_CU_REF_VALUE = getfield(CUDA.CUDACore, :CuRefValue)
 else
-    error("the supported CUDA version does not expose its CuRef value type")
+    throw(ArgumentError("the supported CUDA version does not expose its CuRef value type"))
 end
 
 const _CUBLAS_SCALAR_PAIR{T} = Tuple{_CUDA_CU_REF_VALUE{T},_CUDA_CU_REF_VALUE{T}}
@@ -389,16 +389,12 @@ function stripe_mul!(
     max_ops = nothing,
 )
     effective_modulus = _stripe_effective_modulus(modulus(C), modulus_override)
-    modulus(A) == modulus(B) || throw(
-        CuModArrayModulusMismatchException("Input matrices must have the same modulus N"),
-    )
-    size(A, 2) == size(B, 1) || throw(
-        CuModArraySizeMismatchException(
-            "Matrix dimensions do not match for multiplication",
-        ),
-    )
+    modulus(A) == modulus(B) ||
+        throw(ModulusMismatchError("Input matrices must have the same modulus N"))
+    size(A, 2) == size(B, 1) ||
+        throw(DimensionMismatch("Matrix dimensions do not match for multiplication"))
     size(C) == (size(A, 1), size(B, 2)) ||
-        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
+        throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
     eltype(parent(A)) === eltype(parent(B)) === eltype(parent(C)) ||
         throw(ArgumentError("matrix product element types do not match"))
     max_ops === nothing ||
@@ -440,22 +436,19 @@ function stripe_mul!(
     respect_max_ops::Bool = true,
 )
     effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
-    modulus(A) == modulus(x) || throw(
-        CuModArrayModulusMismatchException(
-            "Matrix and vector inputs must have the same modulus N",
-        ),
-    )
+    modulus(A) == modulus(x) ||
+        throw(ModulusMismatchError("Matrix and vector inputs must have the same modulus N"))
     modulus_override === nothing &&
         modulus(z) != modulus(A) &&
         throw(
-            CuModArrayModulusMismatchException(
+            ModulusMismatchError(
                 "Destination must have the input modulus when no override is supplied",
             ),
         )
     size(A, 2) == length(x) ||
-        throw(CuModArraySizeMismatchException("Matrix and vector dimensions do not match"))
+        throw(DimensionMismatch("Matrix and vector dimensions do not match"))
     length(z) == size(A, 1) ||
-        throw(CuModArraySizeMismatchException("Output vector has incorrect length"))
+        throw(DimensionMismatch("Output vector has incorrect length"))
     eltype(parent(A)) === eltype(parent(x)) === eltype(parent(z)) ||
         throw(ArgumentError("matrix-vector product element types do not match"))
 
@@ -491,14 +484,10 @@ function stripe_mul(
     max_ops = nothing,
 )
     effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
-    modulus(A) == modulus(B) || throw(
-        CuModArrayModulusMismatchException("Input matrices must have the same modulus N"),
-    )
-    size(A, 2) == size(B, 1) || throw(
-        CuModArraySizeMismatchException(
-            "Matrix dimensions do not match for multiplication",
-        ),
-    )
+    modulus(A) == modulus(B) ||
+        throw(ModulusMismatchError("Input matrices must have the same modulus N"))
+    size(A, 2) == size(B, 1) ||
+        throw(DimensionMismatch("Matrix dimensions do not match for multiplication"))
     C = zeros(
         CuModMatrix{eltype(parent(A))},
         size(A, 1),
@@ -516,13 +505,10 @@ function stripe_mul(
     max_ops = nothing,
 )
     effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
-    modulus(A) == modulus(x) || throw(
-        CuModArrayModulusMismatchException(
-            "Matrix and vector inputs must have the same modulus N",
-        ),
-    )
+    modulus(A) == modulus(x) ||
+        throw(ModulusMismatchError("Matrix and vector inputs must have the same modulus N"))
     size(A, 2) == length(x) ||
-        throw(CuModArraySizeMismatchException("Matrix and vector dimensions do not match"))
+        throw(DimensionMismatch("Matrix and vector dimensions do not match"))
     z = zeros(CuModVector{eltype(parent(A))}, size(A, 1); modulus = effective_modulus)
     return stripe_mul!(z, A, x; modulus_override = effective_modulus, input_bound, max_ops)
 end

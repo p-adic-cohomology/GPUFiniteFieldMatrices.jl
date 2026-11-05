@@ -23,6 +23,7 @@ using GPUFiniteFieldMatrices
 
 include("api_surface_test.jl")
 include("base_methods_test.jl")
+include("exceptions_test.jl")
 include("KaratsubaMatrix/api_regressions_test.jl")
 
 @testset "Stripe budget input validation" begin

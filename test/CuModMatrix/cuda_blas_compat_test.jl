@@ -286,7 +286,7 @@ function test_cuda_blas_compatibility()
         x_bad_modulus =
             GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data; modulus = N + 1)
         x_bad_modulus_before = Array(x_bad_modulus)
-        @test_throws GPUFiniteFieldMatrices.CuModArrayModulusMismatchException GPUFiniteFieldMatrices.stripe_mul!(
+        @test_throws GPUFiniteFieldMatrices.ModulusMismatchError GPUFiniteFieldMatrices.stripe_mul!(
             z_reject,
             vector_A,
             x_bad_modulus,
@@ -298,7 +298,7 @@ function test_cuda_blas_compatibility()
         x_bad_length =
             GPUFiniteFieldMatrices.CuModVector{T}(vector_x_data[1:(end-1)]; modulus = N)
         x_bad_length_before = Array(x_bad_length)
-        @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException GPUFiniteFieldMatrices.stripe_mul!(
+        @test_throws DimensionMismatch GPUFiniteFieldMatrices.stripe_mul!(
             z_reject,
             vector_A,
             x_bad_length,
@@ -313,7 +313,7 @@ function test_cuda_blas_compatibility()
         )
         parent(z_bad_length)[1:length(z_bad_length)] .= T.([17, 19])
         z_bad_length_before = Array(z_bad_length)
-        @test_throws GPUFiniteFieldMatrices.CuModArraySizeMismatchException GPUFiniteFieldMatrices.stripe_mul!(
+        @test_throws DimensionMismatch GPUFiniteFieldMatrices.stripe_mul!(
             z_bad_length,
             vector_A,
             x,
@@ -329,7 +329,7 @@ function test_cuda_blas_compatibility()
         )
         parent(z_bad_modulus)[1:length(z_bad_modulus)] .= T.([17, 19, 23])
         z_bad_modulus_before = Array(z_bad_modulus)
-        @test_throws GPUFiniteFieldMatrices.CuModArrayModulusMismatchException GPUFiniteFieldMatrices.stripe_mul!(
+        @test_throws GPUFiniteFieldMatrices.ModulusMismatchError GPUFiniteFieldMatrices.stripe_mul!(
             z_bad_modulus,
             vector_A,
             x,
