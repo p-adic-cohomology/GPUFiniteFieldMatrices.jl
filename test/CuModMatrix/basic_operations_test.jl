@@ -254,19 +254,59 @@ function test_modulus_functions()
     # Test that A is unchanged
     @test GPUFiniteFieldMatrices.modulus(A) == modulus1
 
-    # Test change_modulus! (in-place)
+    # Shrink consumes the input wrapper and retains its GPU storage.
     C = CuModMatrix(A_data; modulus = modulus1)
-    Cprime = change_modulus_no_alloc!(C, modulus2)
-
-    println("C after change_modulus_no_alloc!(C, $modulus2) = ")
-    display(C)
-    println("The output of change_modulus_no_alloc!(C, $modulus2) = ")
-    display(Cprime)
-    println()
-
-    # Check properties and values
-    @test GPUFiniteFieldMatrices.modulus(Cprime) == modulus2
+    C_parent = parent(C)
+    C = GPUFiniteFieldMatrices.change_modulus!!(C, modulus2)
+    @test GPUFiniteFieldMatrices.modulus(C) == modulus2
+    @test size(C) == size(A_data)
+    @test parent(C) === C_parent
     @test Array(C) == mod.(A_data, modulus2)
+
+    # Grow reuses the same storage without changing values.
+    D = CuModMatrix(A_data; modulus = modulus2)
+    D_parent = parent(D)
+    D = GPUFiniteFieldMatrices.change_modulus!!(D, 13)
+    @test GPUFiniteFieldMatrices.modulus(D) == 13
+    @test size(D) == size(A_data)
+    @test parent(D) === D_parent
+    @test Array(D) == mod.(A_data, modulus2)
+
+    # Reject nonpositive moduli before changing the input storage.
+    invalid_zero = CuModMatrix(A_data; modulus = modulus1)
+    invalid_zero_parent = parent(invalid_zero)
+    invalid_zero_values = Array(invalid_zero_parent)
+    @test_throws ArgumentError GPUFiniteFieldMatrices.change_modulus!!(invalid_zero, 0)
+    @test parent(invalid_zero) === invalid_zero_parent
+    @test GPUFiniteFieldMatrices.modulus(invalid_zero) == modulus1
+    @test Array(invalid_zero_parent) == invalid_zero_values
+
+    invalid_negative = CuModMatrix(A_data; modulus = modulus1)
+    invalid_negative_parent = parent(invalid_negative)
+    invalid_negative_values = Array(invalid_negative_parent)
+    @test_throws ArgumentError GPUFiniteFieldMatrices.change_modulus!!(invalid_negative, -1)
+    @test parent(invalid_negative) === invalid_negative_parent
+    @test GPUFiniteFieldMatrices.modulus(invalid_negative) == modulus1
+    @test Array(invalid_negative_parent) == invalid_negative_values
+
+    function gpu_allocated_bytes_after_warmup(values, current_modulus, new_modulus)
+        warmup = CuModMatrix(values; modulus = current_modulus)
+        warmup = GPUFiniteFieldMatrices.change_modulus!!(warmup, new_modulus)
+        CUDA.synchronize()
+
+        input = CuModMatrix(values; modulus = current_modulus)
+        bytes = CUDA.@allocated begin
+            GPUFiniteFieldMatrices.change_modulus!!(input, new_modulus)
+            CUDA.synchronize()
+        end
+        return bytes
+    end
+
+    # Warm both branches before checking device-memory allocation.
+    gpu_allocated_bytes_after_warmup(A_data, modulus1, modulus2)
+    gpu_allocated_bytes_after_warmup(A_data, modulus2, 13)
+    @test gpu_allocated_bytes_after_warmup(A_data, modulus1, modulus2) == 0
+    @test gpu_allocated_bytes_after_warmup(A_data, modulus2, 13) == 0
 
     println("All modulus-changing function tests passed!")
 end

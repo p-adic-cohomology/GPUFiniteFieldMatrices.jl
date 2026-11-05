@@ -47,7 +47,7 @@
         :zeros,
         :rand,
         :similar_with_modulus,
-        :change_modulus_no_alloc!,
+        :change_modulus!!,
         :mod_inv,
         :karatsuba_gemv!,
         :inverse_pluq,
