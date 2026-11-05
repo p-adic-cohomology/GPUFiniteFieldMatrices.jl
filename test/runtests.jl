@@ -119,6 +119,7 @@ if CUDA.functional()
             test_upper_triangular_inverse()
             test_upper_wide_triangular_inverse()
             test_lower_triangular_inverse()
+            test_lower_wide_triangular_inverse()
         end
         @testset "De Rham" begin
             test_de_rham()
