@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Allocated GPU padding
+
+Newly allocated `CuModArray` storage now rounds each dimension up to a multiple
+of 32 and starts with zero padding. Later elementwise operations may dirty
+padding, which logical operations ignore. Wrapping existing `CuArray` or
+Karatsuba component storage keeps its original shape, backend, and contents.
+Allocating `copy` and `change_modulus` preserve logical values and metadata
+while using the new padded geometry and zero padding. In-place `copy!` copies
+all logical entries across valid backing layouts and leaves destination padding
+unchanged.
+
 ### Breaking: API renames
 
 This change prepares the 0.4.0 API break. No compatibility aliases are kept.
@@ -28,7 +39,7 @@ distinct caller-provided destinations.
 | pluq_new_batch, inverse_new_batch | pluq_batched, inverse_batched | General batch entry points. |
 | PLUQFactorization{T} | PLUQ{T} | Fields LU, p, q, and rank remain available. |
 | pluq_extract_L(F), pluq_extract_U(F) | F.L, F.U | Properties materialize the same factors; propertynames(F) lists both properties. |
-| CuModcopy(A) | Base.copy(A) | Copy semantics are unchanged. |
+| CuModcopy(A) | Base.copy(A) | Logical values and metadata are unchanged; newly allocated padding is rounded up and zeroed. |
 | CuModArray(A, N; elem_type=T) | CuModArray{T,D}(A, N) | The unparameterized constructor still defaults to Float32. |
 | CuModMatrix(A, N; elem_type=T) | CuModMatrix{T}(A, N) | The unparameterized constructor still defaults to Float32. |
 | CuModVector(A, N; elem_type=T) | CuModVector{T}(A, N) | The unparameterized constructor still defaults to Float32. |
@@ -46,7 +57,7 @@ distinct caller-provided destinations.
 | add!, sub!, zero! | unchanged | These names remain available as qualified public functions. |
 | KMatMul!(C, A, B) | LinearAlgebra.mul!(C, A, B) | Extends LinearAlgebra's multiplication method. |
 | KMatMul_gemv!(C, A, x) | karatsuba_gemv!(C, A, x) | Name only; behavior is unchanged. |
-| Karatsubacopy(A) | Base.copy(A) | The original rename was name-only; the approved 0.4.0 correction preserves representation metadata `M`, deep-copies component storage, and creates a fresh plan for a planned source. |
+| Karatsubacopy(A) | Base.copy(A) | The original rename was name-only; the approved 0.4.0 correction preserves representation metadata `M`, deep-copies component storage with the new padded geometry, and creates a fresh plan for a planned source. |
 | MatToKMat(...) | to_karatsuba(...) | Conversion helper; all overloads are renamed. |
 | KMatToMat(T, K) | from_karatsuba(T, K) | Conversion helper; argument order is unchanged. |
 
