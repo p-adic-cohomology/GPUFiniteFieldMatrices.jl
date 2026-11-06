@@ -165,8 +165,10 @@ modulus, the inner dimensions of `A` and `B` must match, and all three matrices
 must have initialized plans. The caller must size `C` to `(size(A, 1), size(B, 2))`:
 Karatsuba multiplication checks this before any device write. All nine input,
 output, and plan storage roots must reside on one CUDA device; this is checked
-before staging or product kernels. This multiplication path currently supports
-`Float64` storage only.
+before staging or product kernels. Matrix products and matrix-vector products
+support matching `Float32` or `Float64` components. The precision checks use
+24 exact integer bits for `Float32` and 53 for `Float64`, and reject unsafe
+working moduli or accumulators before writing plans.
 
 For Karatsuba matrix multiplication, `A` and `B` must share input low radix
 `R`, while `C` may use an independent low radix `R_C`. The output components
@@ -180,13 +182,22 @@ a runtime scan. Constructors and conversions do not establish those bounds:
 made with `mod=false` retain raw component values. Choose high moduli that
 bound the supplied high components.
 
-The allocating matrix form `A * B` supports GPU-backed `Float64`
-`KaratsubaMatrix` components. It delegates to the same three-argument
+The allocating forms `A * B` and `A * x` support matching GPU-backed
+`Float32` or `Float64` components. They delegate to the corresponding
 `LinearAlgebra.mul!` arithmetic using private plan scratch, so caller plans may
 be uninitialized and existing plans and component storage remain unchanged.
-The result keeps `A`'s split and representation metadata; its component
-capacity is `Q = low_modulus(A) * high_modulus(A)`, independent of the metadata
-modulus `M`.
+`A * x` returns a `KaratsubaVector`. Allocated results keep `A`'s split and
+representation metadata; their component capacity is
+`Q = low_modulus(A) * high_modulus(A)`, independent of metadata modulus `M`.
+
+For `mul!(y, A, x)`, the matrix column count must match the vector length and
+`y` must have `size(A, 1)` entries. `A` and `x` must share low radix `R`, and
+the destination vector must use low radix `R` as well. Initialize all three
+plans before the mutating operation. The legacy GEMV recombination still has a
+known correctness limitation when both operands have interacting nonzero high
+planes; the new precision checks do not resolve that inherited arithmetic
+issue. The matrix-matrix correctness contract does not imply general GEMV
+correctness.
 
 For CPU-only data, `to_karatsuba` returns CPU component arrays and
 `from_karatsuba(T, K)` returns `Array{T}`. GPU-backed components produce a plain
@@ -202,13 +213,12 @@ retains `M` even though `Q = M^2`. Multiplication requires matching stored
 `M` on all operands, so a copied representation can be used with its original
 when their metadata matches.
 
-The specialized matrix-vector path is available through qualified access as
-`GPUFiniteFieldMatrices.karatsuba_gemv!`.
-Its general high-plane arithmetic still has a known correctness limitation;
-the matrix-matrix contract above does not establish general GEMV correctness.
-The legacy Karatsuba matrix-matrix keyword adapters have been removed. Use
-`A * B` for the allocating GPU-backed Float64 form, or call
-`LinearAlgebra.mul!` directly when supplying the destination.
+The specialized matrix-vector implementation is available through
+`LinearAlgebra.mul!`, `A * x`, and qualified access as
+`GPUFiniteFieldMatrices.karatsuba_gemv!`. The legacy Karatsuba matrix-matrix
+keyword adapters have been removed. Use `A * B` or `A * x` for allocating
+GPU-backed products, or call `LinearAlgebra.mul!` when supplying the
+destination.
 
 Per-call reduction moduli use the positive `modulus_override` keyword, for
 example `elementwise_multiply!(C, A, B; modulus_override = 7)`. Mutating

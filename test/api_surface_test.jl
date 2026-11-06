@@ -919,6 +919,221 @@ BitIntegers.@define_integers 24
     )
 end
 
+@testset "CPU Karatsuba Float32 and Float64 product precision plans" begin
+    mod = GPUFiniteFieldMatrices
+
+    for (T, bits) in ((Float32, 24), (Float64, 53))
+        exact_limit = BigInt(2)^bits
+        exact_max = BigInt(2)^bits - 1
+        @test mod._karatsuba_checked_working_modulus(exact_limit, "endpoint", T) ==
+              Int(exact_limit)
+        @test_throws ArgumentError mod._karatsuba_checked_working_modulus(
+            exact_limit + 1,
+            "past endpoint",
+            T,
+        )
+        @test mod._karatsuba_checked_sum_bound(
+            Int(exact_limit - 1),
+            1,
+            "exact sum endpoint",
+            T,
+        ) == Int(exact_limit)
+        @test_throws ArgumentError mod._karatsuba_checked_sum_bound(
+            Int(exact_limit),
+            1,
+            "past exact sum endpoint",
+            T,
+        )
+        near_root = isqrt(exact_max)
+        near_dot_bound = mod._karatsuba_gemv_dot_bound(
+            T,
+            1,
+            Int(near_root),
+            Int(near_root),
+            "near-limit GEMV dot",
+        )
+        @test near_dot_bound < exact_limit
+        @test exact_limit - near_dot_bound < 4 * near_root + 4
+        @test_throws ArgumentError mod._karatsuba_gemv_dot_bound(
+            T,
+            1,
+            Int(near_root + 2),
+            Int(near_root + 2),
+            "past-limit GEMV dot",
+        )
+
+        product_plan = mod._karatsuba_matmul_product_plan(T, 13, 7, 13, 5, 5, 11)
+        @test product_plan.output_capacity == 55
+        @test product_plan.low.max_ops > 0
+        @test product_plan.middle.max_ops > 0
+        @test product_plan.high.max_ops > 0
+        for product in (product_plan.low, product_plan.middle, product_plan.high)
+            @test BigInt(product.modulus - 1) +
+                  BigInt(product.max_ops) * BigInt(product.input_bound - 1)^2 <= exact_max
+        end
+
+        gemv_plan = mod._karatsuba_gemv_precision_plan(T, 2, 13, 7, 13, 5, 13, 11)
+        @test gemv_plan.low_dot_bound == BigInt(2) * 12 * 12
+        @test gemv_plan.middle_dot_bound == BigInt(2) * 25 * 25
+        @test gemv_plan.high_dot_bound == BigInt(2) * 6 * 4
+        @test gemv_plan.output_capacity == 143
+        @test gemv_plan.recombination_bound <= exact_max
+
+        # Evaluate the three-product identity independently with BigInt, then
+        # compare the type-specific device helper's exact residue and split.
+        radix = BigInt(13)
+        out_radix = BigInt(5)
+        capacity = BigInt(55)
+        a_low, a_high, b_low, b_high = BigInt(12), BigInt(4), BigInt(3), BigInt(2)
+        p0 = a_low * b_low
+        p1 = (a_low + a_high) * (b_low + b_high)
+        p2 = a_high * b_high
+        expected = Base.mod((a_low + radix * a_high) * (b_low + radix * b_high), capacity)
+        low, high = mod._karatsuba_recombine(
+            T(Base.mod(p0, capacity)),
+            T(Base.mod(p1, capacity)),
+            T(Base.mod(p2, capacity)),
+            T(Base.mod(radix, capacity)),
+            T(Base.mod(radix^2, capacity)),
+            T(out_radix),
+            T(capacity),
+        )
+        @test typeof((low, high)) === Tuple{T,T}
+        @test BigInt(low) + out_radix * BigInt(high) == expected
+        @test BigInt(low) == Base.mod(expected, out_radix)
+
+        # Exercise recombination at T's exact-integer endpoint with an output
+        # split that forces both a low digit and a high quotient.
+        endpoint_capacity = exact_limit
+        endpoint_radix = BigInt(1) << (bits ÷ 2)
+        endpoint_high = div(endpoint_capacity, endpoint_radix)
+        endpoint_products = (exact_max, exact_max - 1, exact_max - 2)
+        endpoint_expected = Base.mod(
+            endpoint_products[1] +
+            radix * (endpoint_products[2] - endpoint_products[1] - endpoint_products[3]) +
+            radix^2 * endpoint_products[3],
+            endpoint_capacity,
+        )
+        endpoint_low, endpoint_high_digit = mod._karatsuba_recombine(
+            T(endpoint_products[1]),
+            T(endpoint_products[2]),
+            T(endpoint_products[3]),
+            T(Base.mod(radix, endpoint_capacity)),
+            T(Base.mod(radix^2, endpoint_capacity)),
+            T(endpoint_radix),
+            T(endpoint_capacity),
+        )
+        @test BigInt(endpoint_low) + endpoint_radix * BigInt(endpoint_high_digit) ==
+              endpoint_expected
+        @test 0 <= BigInt(endpoint_low) < endpoint_radix
+        @test 0 <= BigInt(endpoint_high_digit) < endpoint_high
+
+        # The GEMV budget rejects a dot product whose worst-case accumulator
+        # reaches the first non-exact integer for the selected precision.
+        if T === Float32
+            @test_throws ArgumentError mod._karatsuba_gemv_precision_plan(
+                T,
+                2,
+                3000,
+                2,
+                3000,
+                2,
+                3000,
+                1,
+            )
+            @test_throws ArgumentError mod._karatsuba_matmul_product_plan(
+                T,
+                1,
+                1,
+                1,
+                1,
+                4097,
+                4097,
+            )
+        end
+    end
+
+    cpu_matrix = mod.KaratsubaMatrix(
+        zeros(Float32, 2, 3),
+        zeros(Float32, 2, 3);
+        low_modulus = 5,
+        high_modulus = 4,
+        modulus = 20,
+    )
+    cpu_vector_shape = mod._karatsuba_output_like(cpu_matrix, (2,))
+    @test cpu_vector_shape isa mod.KaratsubaVector{Float32}
+    @test size(cpu_vector_shape) == (2,)
+    matrix_dispatch_type = mod.KaratsubaArray{Float32,2}
+    vector_dispatch_type = mod.KaratsubaArray{Float32,1}
+    @test which(
+        LinearAlgebra.mul!,
+        Tuple{vector_dispatch_type,matrix_dispatch_type,vector_dispatch_type},
+    ).module === mod
+    @test which(Base.:*, Tuple{matrix_dispatch_type,vector_dispatch_type}).module === mod
+    @test which(Base.:*, Tuple{matrix_dispatch_type,matrix_dispatch_type}).module === mod
+    @test_throws ArgumentError cpu_matrix * mod.KaratsubaVector(
+        zeros(Float32, 3),
+        zeros(Float32, 3);
+        low_modulus = 5,
+        high_modulus = 4,
+        modulus = 20,
+    )
+
+    wrong_shape_a = mod.KaratsubaMatrix(
+        zeros(Float32, 2, 3),
+        zeros(Float32, 2, 3);
+        low_modulus = 5,
+        high_modulus = 4,
+        modulus = 20,
+    )
+    wrong_shape_x = mod.KaratsubaVector(
+        zeros(Float32, 2),
+        zeros(Float32, 2);
+        low_modulus = 5,
+        high_modulus = 4,
+        modulus = 20,
+    )
+    wrong_shape_y = mod.KaratsubaVector(
+        fill(Float32(7), 2),
+        fill(Float32(9), 2);
+        low_modulus = 5,
+        high_modulus = 4,
+        modulus = 20,
+    )
+    @test_throws DimensionMismatch LinearAlgebra.mul!(
+        wrong_shape_y,
+        wrong_shape_a,
+        wrong_shape_x,
+    )
+    @test low_part(wrong_shape_y) == fill(Float32(7), 2)
+    @test high_part(wrong_shape_y) == fill(Float32(9), 2)
+
+    destination = mod.KaratsubaMatrix(
+        zeros(Float64, 1, 1),
+        zeros(Float64, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 6,
+    )
+    left32 = mod.KaratsubaMatrix(
+        zeros(Float32, 1, 1),
+        zeros(Float32, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 6,
+    )
+    right64 = mod.KaratsubaMatrix(
+        zeros(Float64, 1, 1),
+        zeros(Float64, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 6,
+    )
+    @test_throws ArgumentError LinearAlgebra.mul!(destination, left32, right64)
+    @test Array(low_part(destination)) == zeros(Float64, 1, 1)
+    @test Array(high_part(destination)) == zeros(Float64, 1, 1)
+end
+
 @testset "CPU typed scalar Karatsuba negation helper" begin
     mod = GPUFiniteFieldMatrices
 
