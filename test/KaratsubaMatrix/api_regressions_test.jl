@@ -1271,3 +1271,535 @@ function test_karatsuba_api_regressions()
         end
     end
 end
+function test_karatsuba_float32_float64_products()
+    @testset "Float32 and Float64 Karatsuba GEMM and GEMV" begin
+        mod = GPUFiniteFieldMatrices
+        metadata = 101
+        input_radix = 5
+        input_high = 3
+
+        for T in (Float32, Float64)
+            split_matrix =
+                values -> mod.to_karatsuba(
+                    T,
+                    mod.CuModMatrix{T}(values; modulus = metadata);
+                    low_modulus = input_radix,
+                    high_modulus = input_high,
+                    modulus = metadata,
+                )
+            split_vector =
+                values -> mod.to_karatsuba(
+                    T,
+                    mod.CuModVector{T}(values; modulus = metadata);
+                    low_modulus = input_radix,
+                    high_modulus = input_high,
+                    modulus = metadata,
+                )
+
+            # GEMM exercises the typed stripe budget and three-product kernel
+            # with nonzero high components on both matrix operands.
+            a_values = T[6 2; 2 6]
+            b_values = T[6 1; 1 6]
+            a = split_matrix(a_values)
+            b = split_matrix(b_values)
+            a_components_before = (Array(low_part(a)), Array(high_part(a)))
+            b_components_before = (Array(low_part(b)), Array(high_part(b)))
+            expected_matrix = T.(Base.mod.(BigInt.(a_values) * BigInt.(b_values), 15))
+            allocated_matrix = a * b
+            @test allocated_matrix isa mod.KaratsubaMatrix{T}
+            @test size(allocated_matrix) == (2, 2)
+            @test Array(mod.from_karatsuba(T, allocated_matrix)) == expected_matrix
+            @test (Array(low_part(a)), Array(high_part(a))) == a_components_before
+            @test (Array(low_part(b)), Array(high_part(b))) == b_components_before
+            @test a.plan === nothing
+            @test b.plan === nothing
+
+            matrix_output = Base.zeros(
+                mod.KaratsubaMatrix{T},
+                2,
+                2;
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata,
+            )
+            foreach(mod.initialize_plan!, (a, b, matrix_output))
+            @test LinearAlgebra.mul!(matrix_output, a, b) === matrix_output
+            @test Array(mod.from_karatsuba(T, matrix_output)) == expected_matrix
+            a_plan_object = a.plan
+            b_plan_object = b.plan
+            a_plan_storage = parent(a_plan_object)
+            b_plan_storage = parent(b_plan_object)
+            a_plan_before = Array(a_plan_storage)
+            b_plan_before = Array(b_plan_storage)
+            allocated_with_plans = a * b
+            @test Array(mod.from_karatsuba(T, allocated_with_plans)) == expected_matrix
+            @test a.plan === a_plan_object
+            @test b.plan === b_plan_object
+            @test parent(a.plan) === a_plan_storage
+            @test parent(b.plan) === b_plan_storage
+            @test Array(a_plan_storage) == a_plan_before
+            @test Array(b_plan_storage) == b_plan_before
+
+            # Squaring the same wrapper is a meaningful aliasing case for the
+            # read-only operands and shared staging plan.
+            square_output = Base.zeros(
+                mod.KaratsubaMatrix{T},
+                2,
+                2;
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata,
+            )
+            mod.initialize_plan!(square_output)
+            expected_square = T.(Base.mod.(BigInt.(a_values) * BigInt.(a_values), 15))
+            @test LinearAlgebra.mul!(square_output, a, a) === square_output
+            @test Array(mod.from_karatsuba(T, square_output)) == expected_square
+
+            # Rectangular 2x3 by 3x4 products exercise the logical dimensions
+            # and tail handling in both allocating and mutating GEMM.
+            rect_a_values = T[6 2 1; 2 6 1]
+            rect_b_values = T[6 1 2 3; 1 6 1 2; 2 1 6 1]
+            rect_a = split_matrix(rect_a_values)
+            rect_b = split_matrix(rect_b_values)
+            expected_rect =
+                T.(Base.mod.(BigInt.(rect_a_values) * BigInt.(rect_b_values), 15))
+            rect_product = rect_a * rect_b
+            @test size(rect_product) == (2, 4)
+            @test Array(mod.from_karatsuba(T, rect_product)) == expected_rect
+            rect_output = Base.zeros(
+                mod.KaratsubaMatrix{T},
+                2,
+                4;
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata,
+            )
+            foreach(mod.initialize_plan!, (rect_a, rect_b, rect_output))
+            @test LinearAlgebra.mul!(rect_output, rect_a, rect_b) === rect_output
+            @test Array(mod.from_karatsuba(T, rect_output)) == expected_rect
+
+            # Allocating GEMV returns a vector and uses private plans. The
+            # nonzero matrix high plane is paired with a zero vector high plane.
+            x_values = T[1, 1]
+            x = split_vector(x_values)
+            a_components_before = (Array(low_part(a)), Array(high_part(a)))
+            x_components_before = (Array(low_part(x)), Array(high_part(x)))
+            a_plan_object = a.plan
+            a_plan_storage = parent(a_plan_object)
+            a_plan_before = Array(parent(a.plan))
+            x_plan_before = x.plan === nothing ? nothing : Array(parent(x.plan))
+            allocated_vector = a * x
+            expected_vector = T.(Base.mod.(BigInt.(a_values) * BigInt.(x_values), 15))
+            @test allocated_vector isa mod.KaratsubaVector{T}
+            @test size(allocated_vector) == (2,)
+            @test Array(mod.from_karatsuba(T, allocated_vector)) == expected_vector
+            @test (Array(low_part(a)), Array(high_part(a))) == a_components_before
+            @test (Array(low_part(x)), Array(high_part(x))) == x_components_before
+            @test a.plan === a_plan_object
+            @test parent(a.plan) === a_plan_storage
+            @test Array(parent(a.plan)) == a_plan_before
+            @test x.plan === nothing
+            @test x_plan_before === nothing
+
+            # Mutating GEMV allows a distinct high output modulus while keeping
+            # the legacy input radix requirement explicit.
+            y = Base.zeros(
+                mod.KaratsubaVector{T},
+                2;
+                low_modulus = input_radix,
+                high_modulus = 7,
+                modulus = metadata,
+            )
+            foreach(mod.initialize_plan!, (x, y))
+            @test LinearAlgebra.mul!(y, a, x) === y
+            expected_y = T.(Base.mod.(BigInt.(a_values) * BigInt.(x_values), 35))
+            @test Array(mod.from_karatsuba(T, y)) == expected_y
+
+            # Exercise the complementary high-plane case. This avoids treating
+            # an all-zero high plane as the only GEMV numerical fixture.
+            low_only_a_values = T[1 2; 2 1]
+            high_only_x_values = T[6, 7]
+            low_only_a = split_matrix(low_only_a_values)
+            high_only_x = split_vector(high_only_x_values)
+            high_only_result = low_only_a * high_only_x
+            expected_high_only =
+                T.(Base.mod.(BigInt.(low_only_a_values) * BigInt.(high_only_x_values), 15))
+            @test high_only_result isa mod.KaratsubaVector{T}
+            @test Array(mod.from_karatsuba(T, high_only_result)) == expected_high_only
+
+            # Non-whole CuArray views select the individual GEMV fallback. The
+            # logical product is correct and sentinels in padded storage remain
+            # unchanged.
+            function padded_matrix(values, physical_dims, component_modulus)
+                storage = fill(T(777), physical_dims...)
+                storage[1:size(values, 1), 1:size(values, 2)] .= values
+                return mod.CuModMatrix{T}(
+                    CUDA.CuArray(storage);
+                    modulus = component_modulus,
+                    mod = false,
+                    new_size = size(values),
+                )
+            end
+            function padded_vector(values, physical_length, component_modulus)
+                storage = fill(T(778), physical_length)
+                storage[1:length(values)] .= values
+                return mod.CuModVector{T}(
+                    CUDA.CuArray(storage);
+                    modulus = component_modulus,
+                    mod = false,
+                    new_size = size(values),
+                )
+            end
+            padded_a = mod.KaratsubaMatrix(
+                padded_matrix(T[1 2; 2 1], (4, 5), input_radix),
+                padded_matrix(T[1 0; 0 1], (5, 4), input_high);
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata,
+            )
+            padded_x = mod.KaratsubaVector(
+                padded_vector(T[1, 1], 5, input_radix),
+                padded_vector(T[0, 0], 4, input_high);
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata,
+            )
+            padded_y = Base.zeros(
+                mod.KaratsubaVector{T},
+                2;
+                low_modulus = input_radix,
+                high_modulus = 7,
+                modulus = metadata,
+            )
+            foreach(mod.initialize_plan!, (padded_a, padded_x, padded_y))
+            padding_snapshot = function (component)
+                raw = Array(parent(component))
+                mask = trues(size(raw))
+                mask[ntuple(d->1:size(component, d), ndims(component))...] .= false
+                return raw[mask]
+            end
+            padded_before = map(
+                padding_snapshot,
+                (
+                    mod.low_part(padded_a),
+                    mod.high_part(padded_a),
+                    mod.low_part(padded_x),
+                    mod.high_part(padded_x),
+                    mod.low_part(padded_y),
+                    mod.high_part(padded_y),
+                ),
+            )
+            @test LinearAlgebra.mul!(padded_y, padded_a, padded_x) === padded_y
+            @test Array(mod.from_karatsuba(T, padded_y)) == T[8, 8]
+            padded_after = map(
+                padding_snapshot,
+                (
+                    mod.low_part(padded_a),
+                    mod.high_part(padded_a),
+                    mod.low_part(padded_x),
+                    mod.high_part(padded_x),
+                    mod.low_part(padded_y),
+                    mod.high_part(padded_y),
+                ),
+            )
+            @test padded_after == padded_before
+
+            # Whole, contiguous arrays with matching strides take the batched
+            # cuBLAS path. Each row has one nonzero high-plane contribution.
+            n = mod.TILE_WIDTH
+            batch_a_low_values = zeros(T, n, n)
+            batch_a_high_values = zeros(T, n, n)
+            batch_a_low_values[:, 1] .= one(T)
+            batch_a_high_values[:, 1] .= one(T)
+            batch_x_low_values = zeros(T, n)
+            batch_x_low_values[1] = one(T)
+            batch_x_high_values = zeros(T, n)
+            wrap_matrix =
+                (values, component_modulus) -> mod.CuModMatrix{T}(
+                    CUDA.CuArray(values);
+                    modulus = component_modulus,
+                    mod = false,
+                )
+            wrap_vector =
+                (values, component_modulus) -> mod.CuModVector{T}(
+                    CUDA.CuArray(values);
+                    modulus = component_modulus,
+                    mod = false,
+                )
+            batch_a = mod.KaratsubaMatrix(
+                wrap_matrix(batch_a_low_values, input_radix),
+                wrap_matrix(batch_a_high_values, input_high);
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata,
+            )
+            batch_x = mod.KaratsubaVector(
+                wrap_vector(batch_x_low_values, input_radix),
+                wrap_vector(batch_x_high_values, input_high);
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata,
+            )
+            batch_y = Base.zeros(
+                mod.KaratsubaVector{T},
+                n;
+                low_modulus = input_radix,
+                high_modulus = 7,
+                modulus = metadata,
+            )
+            batch_a.plan = wrap_matrix(zeros(T, n, n), input_radix)
+            batch_x.plan = wrap_vector(zeros(T, n), input_radix)
+            batch_y.plan = wrap_vector(zeros(T, n), input_radix)
+            @test all(
+                mod._karatsuba_gemv_whole_cuarray_parent,
+                (
+                    mod.low_part(batch_a),
+                    batch_a.plan,
+                    mod.high_part(batch_a),
+                    mod.low_part(batch_x),
+                    batch_x.plan,
+                    mod.high_part(batch_x),
+                    mod.low_part(batch_y),
+                    mod.high_part(batch_y),
+                    batch_y.plan,
+                ),
+            )
+            batch_mats = collect((
+                parent(low_part(batch_a)),
+                parent(batch_a.plan),
+                parent(high_part(batch_a)),
+            ))
+            batch_vecs = collect((
+                parent(low_part(batch_x)),
+                parent(batch_x.plan),
+                parent(high_part(batch_x)),
+            ))
+            batch_targets = collect((
+                parent(low_part(batch_y)),
+                parent(high_part(batch_y)),
+                parent(batch_y.plan),
+            ))
+            @test mod._karatsuba_gemv_batch_containers_supported(
+                batch_mats,
+                batch_vecs,
+                batch_targets,
+            )
+            @test all(
+                stride(matrix, 2) == stride(batch_mats[1], 2) for matrix in batch_mats
+            )
+            @test all(
+                stride(vector, 1) == stride(batch_vecs[1], 1) for vector in batch_vecs
+            )
+            @test all(
+                target -> stride(target, 1) == stride(batch_targets[1], 1),
+                batch_targets,
+            )
+            @test LinearAlgebra.mul!(batch_y, batch_a, batch_x) === batch_y
+            @test Array(mod.from_karatsuba(T, batch_y)) == fill(T(6), n)
+
+            batch_a_plan_before = Array(parent(batch_a.plan))
+            batch_x_plan_before = Array(parent(batch_x.plan))
+            batch_y_plan_before = Array(parent(batch_y.plan))
+            batch_y_low_before = Array(parent(low_part(batch_y)))
+            batch_y_high_before = Array(parent(high_part(batch_y)))
+            wrong_modulus_x = mod.KaratsubaVector(
+                low_part(batch_x),
+                high_part(batch_x);
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata + 1,
+            )
+            mod.initialize_plan!(wrong_modulus_x)
+            @test_throws mod.ModulusMismatchError LinearAlgebra.mul!(
+                batch_y,
+                batch_a,
+                wrong_modulus_x,
+            )
+            wrong_shape_y = Base.zeros(
+                mod.KaratsubaVector{T},
+                n + 1;
+                low_modulus = input_radix,
+                high_modulus = 7,
+                modulus = metadata,
+            )
+            mod.initialize_plan!(wrong_shape_y)
+            wrong_shape_plan_before = Array(parent(wrong_shape_y.plan))
+            @test_throws DimensionMismatch LinearAlgebra.mul!(
+                wrong_shape_y,
+                batch_a,
+                batch_x,
+            )
+            @test Array(parent(wrong_shape_y.plan)) == wrong_shape_plan_before
+            @test Array(parent(batch_a.plan)) == batch_a_plan_before
+            @test Array(parent(batch_x.plan)) == batch_x_plan_before
+            @test Array(parent(batch_y.plan)) == batch_y_plan_before
+            @test Array(parent(low_part(batch_y))) == batch_y_low_before
+            @test Array(parent(high_part(batch_y))) == batch_y_high_before
+
+            # Aliasing is rejected by the full preflight before either caller
+            # plan or the shared output/input component is written.
+            alias_y = mod.KaratsubaVector(
+                mod.low_part(batch_x),
+                wrap_vector(zeros(T, n), 7);
+                low_modulus = input_radix,
+                high_modulus = 7,
+                modulus = metadata,
+            )
+            mod.initialize_plan!(alias_y)
+            alias_x_low_before = Array(parent(mod.low_part(batch_x)))
+            alias_a_plan_before = Array(parent(batch_a.plan))
+            alias_x_plan_before = Array(parent(batch_x.plan))
+            @test_throws ArgumentError LinearAlgebra.mul!(alias_y, batch_a, batch_x)
+            @test Array(parent(mod.low_part(batch_x))) == alias_x_low_before
+            @test Array(parent(batch_a.plan)) == alias_a_plan_before
+            @test Array(parent(batch_x.plan)) == alias_x_plan_before
+
+            # Empty rows are a no-op; an empty reduction fills a shaped zero
+            # result after the same type and precision preflight.
+            empty_a = mod.KaratsubaMatrix(
+                mod.CuModMatrix{T}(CUDA.zeros(T, 0, 2); modulus = input_radix),
+                mod.CuModMatrix{T}(CUDA.zeros(T, 0, 2); modulus = input_high);
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata,
+            )
+            empty_x = split_vector(T[1, 1])
+            empty_y = Base.zeros(
+                mod.KaratsubaVector{T},
+                0;
+                low_modulus = input_radix,
+                high_modulus = 7,
+                modulus = metadata,
+            )
+            foreach(mod.initialize_plan!, (empty_a, empty_x, empty_y))
+            @test LinearAlgebra.mul!(empty_y, empty_a, empty_x) === empty_y
+            @test size(empty_y) == (0,)
+
+            empty_reduction_a = mod.KaratsubaMatrix(
+                mod.CuModMatrix{T}(CUDA.zeros(T, 2, 0); modulus = input_radix),
+                mod.CuModMatrix{T}(CUDA.zeros(T, 2, 0); modulus = input_high);
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata,
+            )
+            empty_reduction_x = mod.KaratsubaVector(
+                mod.CuModVector{T}(CUDA.zeros(T, 0); modulus = input_radix),
+                mod.CuModVector{T}(CUDA.zeros(T, 0); modulus = input_high);
+                low_modulus = input_radix,
+                high_modulus = input_high,
+                modulus = metadata,
+            )
+            empty_reduction_y = Base.zeros(
+                mod.KaratsubaVector{T},
+                2;
+                low_modulus = input_radix,
+                high_modulus = 7,
+                modulus = metadata,
+            )
+            foreach(
+                mod.initialize_plan!,
+                (empty_reduction_a, empty_reduction_x, empty_reduction_y),
+            )
+            @test LinearAlgebra.mul!(
+                empty_reduction_y,
+                empty_reduction_a,
+                empty_reduction_x,
+            ) === empty_reduction_y
+            @test Array(mod.from_karatsuba(T, empty_reduction_y)) == zeros(T, 2)
+
+            if T === Float32
+                # Unsafe typed budgets are rejected after validation but before
+                # staging mutates any caller plan or destination component.
+                unsafe_matrix_a = mod.KaratsubaMatrix(
+                    mod.CuModMatrix{T}(CUDA.zeros(T, 1, 1); modulus = 4096),
+                    mod.CuModMatrix{T}(CUDA.zeros(T, 1, 1); modulus = 2);
+                    low_modulus = 4096,
+                    high_modulus = 2,
+                    modulus = 100,
+                )
+                unsafe_matrix_b = mod.KaratsubaMatrix(
+                    mod.CuModMatrix{T}(CUDA.zeros(T, 1, 1); modulus = 4096),
+                    mod.CuModMatrix{T}(CUDA.zeros(T, 1, 1); modulus = 2);
+                    low_modulus = 4096,
+                    high_modulus = 2,
+                    modulus = 100,
+                )
+                unsafe_matrix_c = Base.zeros(
+                    mod.KaratsubaMatrix{T},
+                    1,
+                    1;
+                    low_modulus = 4096,
+                    high_modulus = 100,
+                    modulus = 100,
+                )
+                foreach(
+                    mod.initialize_plan!,
+                    (unsafe_matrix_a, unsafe_matrix_b, unsafe_matrix_c),
+                )
+                foreach(
+                    (plan, sentinel) -> fill!(parent(plan), T(sentinel)),
+                    (unsafe_matrix_a.plan, unsafe_matrix_b.plan, unsafe_matrix_c.plan),
+                    (17, 19, 23),
+                )
+                unsafe_matrix_plans_before = map(
+                    plan -> Array(parent(plan)),
+                    (unsafe_matrix_a.plan, unsafe_matrix_b.plan, unsafe_matrix_c.plan),
+                )
+                @test_throws ArgumentError LinearAlgebra.mul!(
+                    unsafe_matrix_c,
+                    unsafe_matrix_a,
+                    unsafe_matrix_b,
+                )
+                @test map(
+                    plan -> Array(parent(plan)),
+                    (unsafe_matrix_a.plan, unsafe_matrix_b.plan, unsafe_matrix_c.plan),
+                ) == unsafe_matrix_plans_before
+                @test Array(low_part(unsafe_matrix_c)) == zeros(T, 1, 1)
+                @test Array(high_part(unsafe_matrix_c)) == zeros(T, 1, 1)
+
+                unsafe_gemv_a = mod.KaratsubaMatrix(
+                    mod.CuModMatrix{T}(CUDA.zeros(T, 1, 2); modulus = 3000),
+                    mod.CuModMatrix{T}(CUDA.zeros(T, 1, 2); modulus = 2);
+                    low_modulus = 3000,
+                    high_modulus = 2,
+                    modulus = 100,
+                )
+                unsafe_gemv_x = mod.KaratsubaVector(
+                    mod.CuModVector{T}(CUDA.zeros(T, 2); modulus = 3000),
+                    mod.CuModVector{T}(CUDA.zeros(T, 2); modulus = 2);
+                    low_modulus = 3000,
+                    high_modulus = 2,
+                    modulus = 100,
+                )
+                unsafe_gemv_y = Base.zeros(
+                    mod.KaratsubaVector{T},
+                    1;
+                    low_modulus = 3000,
+                    high_modulus = 2,
+                    modulus = 100,
+                )
+                foreach(mod.initialize_plan!, (unsafe_gemv_a, unsafe_gemv_x, unsafe_gemv_y))
+                foreach(
+                    (plan, sentinel) -> fill!(parent(plan), T(sentinel)),
+                    (unsafe_gemv_a.plan, unsafe_gemv_x.plan, unsafe_gemv_y.plan),
+                    (29, 31, 37),
+                )
+                unsafe_gemv_plans_before = map(
+                    plan -> Array(parent(plan)),
+                    (unsafe_gemv_a.plan, unsafe_gemv_x.plan, unsafe_gemv_y.plan),
+                )
+                @test_throws ArgumentError LinearAlgebra.mul!(
+                    unsafe_gemv_y,
+                    unsafe_gemv_a,
+                    unsafe_gemv_x,
+                )
+                @test map(
+                    plan -> Array(parent(plan)),
+                    (unsafe_gemv_a.plan, unsafe_gemv_x.plan, unsafe_gemv_y.plan),
+                ) == unsafe_gemv_plans_before
+                @test Array(low_part(unsafe_gemv_y)) == zeros(T, 1)
+                @test Array(high_part(unsafe_gemv_y)) == zeros(T, 1)
+            end
+        end
+    end
+end
