@@ -158,45 +158,65 @@ function find_max_ops_karatsuba(type, N)
     return Int(max(1, min(bound, BigInt(typemax(Int)))))
 end
 
+const _KARATSUBA_FLOAT32_EXACT_BOUND = BigInt(1) << 24
 const _KARATSUBA_FLOAT64_EXACT_BOUND = BigInt(1) << 53
 
-function _karatsuba_checked_working_modulus(value::BigInt, label::AbstractString)
+_karatsuba_exact_integer_bound(::Type{Float32}) = _KARATSUBA_FLOAT32_EXACT_BOUND
+_karatsuba_exact_integer_bound(::Type{Float64}) = _KARATSUBA_FLOAT64_EXACT_BOUND
+
+function _karatsuba_checked_working_modulus(
+    value::BigInt,
+    label::AbstractString,
+    ::Type{T} = Float64,
+) where {T<:Union{Float32,Float64}}
     (0 < value <= typemax(Int)) ||
         throw(ArgumentError("$label does not fit a positive Int modulus"))
-    value <= _KARATSUBA_FLOAT64_EXACT_BOUND ||
-        throw(ArgumentError("$label exceeds the exact-integer Float64 range"))
+    value <= _karatsuba_exact_integer_bound(T) ||
+        throw(ArgumentError("$label exceeds the exact-integer $T range"))
     return Int(value)
 end
 
-function _karatsuba_checked_sum_bound(a::Int, b::Int, label::AbstractString)
+function _karatsuba_checked_sum_bound(
+    a::Int,
+    b::Int,
+    label::AbstractString,
+    ::Type{T} = Float64,
+) where {T<:Union{Float32,Float64}}
     value = BigInt(a) + BigInt(b)
     value <= typemax(Int) || throw(OverflowError("$label overflows Int"))
-    # The operands are strictly below a and b, so a sum bound of 2^53 still
-    # promises actual Float64 integers no larger than 2^53 - 1.
-    value <= _KARATSUBA_FLOAT64_EXACT_BOUND ||
-        throw(ArgumentError("$label exceeds the exact-integer Float64 range"))
+    # The operands are strictly below a and b, so a sum bound of 2^p still
+    # promises actual values no larger than 2^p - 1.
+    value <= _karatsuba_exact_integer_bound(T) ||
+        throw(ArgumentError("$label exceeds the exact-integer $T range"))
     return Int(value)
 end
 
-function _karatsuba_safe_product_parameters(input_bound::Int, reduction_modulus::Int)
+function _karatsuba_safe_product_parameters(
+    input_bound::Int,
+    reduction_modulus::Int,
+    ::Type{T} = Float64,
+) where {T<:Union{Float32,Float64}}
     effective_bound = max(input_bound, 2)
-    max_ops = find_max_stripe_ops(Float64, effective_bound; modulus = reduction_modulus)
+    max_ops = find_max_stripe_ops(T, effective_bound; modulus = reduction_modulus)
     max_ops > 0 || throw(
         ArgumentError(
-            "no exact Float64 stripe contribution fits input bound $effective_bound and reduction modulus $reduction_modulus",
+            "no exact $T stripe contribution fits input bound $effective_bound and reduction modulus $reduction_modulus",
         ),
     )
     return (input_bound = effective_bound, modulus = reduction_modulus, max_ops = max_ops)
 end
 
 function _karatsuba_matmul_product_plan(
+    ::Type{T},
     input_low_a::Int,
     input_high_a::Int,
     input_low_b::Int,
     input_high_b::Int,
     output_low::Int,
     output_high::Int,
-)
+) where {T}
+    (T === Float32 || T === Float64) ||
+        throw(ArgumentError("Karatsuba products support Float32 or Float64 storage"))
     all(
         >(0),
         (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high),
@@ -211,18 +231,19 @@ function _karatsuba_matmul_product_plan(
     output_capacity = _karatsuba_checked_working_modulus(
         BigInt(output_low) * BigInt(output_high),
         "output component capacity",
+        T,
     )
     sum_bound_a =
-        _karatsuba_checked_sum_bound(input_radix, input_high_a, "left sum input bound")
+        _karatsuba_checked_sum_bound(input_radix, input_high_a, "left sum input bound", T)
     sum_bound_b =
-        _karatsuba_checked_sum_bound(input_radix, input_high_b, "right sum input bound")
+        _karatsuba_checked_sum_bound(input_radix, input_high_b, "right sum input bound", T)
     middle_bound = max(sum_bound_a, sum_bound_b)
     high_bound = max(input_high_a, input_high_b)
     radix_mod_capacity = Int(mod(BigInt(input_radix), BigInt(output_capacity)))
     radix_squared_mod_capacity = Int(mod(BigInt(input_radix)^2, BigInt(output_capacity)))
-    low = _karatsuba_safe_product_parameters(input_radix, output_capacity)
-    middle = _karatsuba_safe_product_parameters(middle_bound, output_capacity)
-    high = _karatsuba_safe_product_parameters(high_bound, output_capacity)
+    low = _karatsuba_safe_product_parameters(input_radix, output_capacity, T)
+    middle = _karatsuba_safe_product_parameters(middle_bound, output_capacity, T)
+    high = _karatsuba_safe_product_parameters(high_bound, output_capacity, T)
 
     return (
         input_radix = input_radix,
@@ -237,19 +258,148 @@ function _karatsuba_matmul_product_plan(
     )
 end
 
-function _karatsuba_prepare_gemm_views(
-    A::KaratsubaArray,
-    B::KaratsubaArray,
-    C::KaratsubaArray,
+function _karatsuba_matmul_product_plan(
+    input_low_a::Int,
+    input_high_a::Int,
+    input_low_b::Int,
+    input_high_b::Int,
+    output_low::Int,
+    output_high::Int,
 )
+    return _karatsuba_matmul_product_plan(
+        Float64,
+        input_low_a,
+        input_high_a,
+        input_low_b,
+        input_high_b,
+        output_low,
+        output_high,
+    )
+end
+
+function _karatsuba_gemv_dot_bound(
+    ::Type{T},
+    terms::Int,
+    left_bound::Int,
+    right_bound::Int,
+    label::AbstractString,
+) where {T<:Union{Float32,Float64}}
+    terms >= 0 || throw(ArgumentError("GEMV reduction length must be nonnegative"))
+    left_bound > 0 && right_bound > 0 ||
+        throw(ArgumentError("GEMV component bounds must be positive"))
+    bound = BigInt(terms) * BigInt(left_bound - 1) * BigInt(right_bound - 1)
+    bound < _karatsuba_exact_integer_bound(T) ||
+        throw(ArgumentError("$label exceeds the exact-integer $T accumulation range"))
+    return bound
+end
+
+function _karatsuba_gemv_precision_plan(
+    ::Type{T},
+    terms::Int,
+    input_low_a::Int,
+    input_high_a::Int,
+    input_low_b::Int,
+    input_high_b::Int,
+    output_low::Int,
+    output_high::Int,
+) where {T<:Union{Float32,Float64}}
+    all(
+        >(0),
+        (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high),
+    ) || throw(ArgumentError("Karatsuba split moduli must be positive"))
+    input_low_a == input_low_b || throw(
+        ModulusMismatchError(
+            "three-product Karatsuba GEMV requires a common low modulus for A and x",
+        ),
+    )
+    output_low == input_low_a || throw(
+        ModulusMismatchError(
+            "legacy Karatsuba GEMV requires the output low modulus to match the input radix",
+        ),
+    )
+
+    # The legacy 7/5 GEMV path forms low+high sums modulo 2R, accumulates the
+    # three dot products in cuBLAS, and uses a conservative (4R)^2 recombination
+    # window. Check every integer intermediate before any caller plan is written.
+    sum_bound_a = _karatsuba_checked_sum_bound(
+        input_low_a,
+        input_high_a,
+        "left GEMV sum input bound",
+        T,
+    )
+    sum_bound_b = _karatsuba_checked_sum_bound(
+        input_low_b,
+        input_high_b,
+        "right GEMV sum input bound",
+        T,
+    )
+    middle_radix_a = _karatsuba_checked_working_modulus(
+        BigInt(2) * BigInt(input_low_a),
+        "left GEMV middle-product radix",
+        T,
+    )
+    middle_radix_b = _karatsuba_checked_working_modulus(
+        BigInt(2) * BigInt(input_low_b),
+        "right GEMV middle-product radix",
+        T,
+    )
+    low_bound =
+        _karatsuba_gemv_dot_bound(T, terms, input_low_a, input_low_b, "low GEMV product")
+    middle_bound = _karatsuba_gemv_dot_bound(
+        T,
+        terms,
+        middle_radix_a,
+        middle_radix_b,
+        "middle GEMV product",
+    )
+    high_bound =
+        _karatsuba_gemv_dot_bound(T, terms, input_high_a, input_high_b, "high GEMV product")
+    output_capacity = _karatsuba_checked_working_modulus(
+        BigInt(output_low) * BigInt(output_high),
+        "GEMV output component capacity",
+        T,
+    )
+    recombination_bound = (BigInt(4) * BigInt(output_low))^2 + BigInt(output_low)
+    recombination_bound <= _karatsuba_exact_integer_bound(T) ||
+        throw(ArgumentError("legacy GEMV recombination exceeds the exact-integer $T range"))
+    return (
+        low_dot_bound = low_bound,
+        middle_dot_bound = middle_bound,
+        high_dot_bound = high_bound,
+        sum_input_bounds = (sum_bound_a, sum_bound_b),
+        output_capacity = output_capacity,
+        recombination_bound = recombination_bound,
+    )
+end
+
+@inline function _karatsuba_require_matched_float_type(
+    ::Type{TA},
+    ::Type{TB},
+    ::Type{TC},
+) where {TA,TB,TC}
+    (TA === TB && TA === TC) || throw(
+        ArgumentError(
+            "Karatsuba products require matching Float32 or Float64 element types",
+        ),
+    )
+    (TA === Float32 || TA === Float64) ||
+        throw(ArgumentError("Karatsuba products support Float32 or Float64 storage"))
+    return TA
+end
+
+function _karatsuba_prepare_gemm_views(
+    A::KaratsubaArray{T,2},
+    B::KaratsubaArray{T,2},
+    C::KaratsubaArray{T,2},
+) where {T}
     for (name, K) in (("A", A), ("B", B), ("C", C))
         low = low_part(K)
         high = high_part(K)
         plan = K.plan
         for (plane_name, plane) in (("low", low), ("high", high), ("plan", plan))
-            plane isa CuModMatrix{Float64} || throw(
+            plane isa CuModArray{T,2} || throw(
                 ArgumentError(
-                    "Karatsuba matrix multiplication requires CuModMatrix{Float64} $name.$plane_name storage",
+                    "Karatsuba matrix multiplication requires CuModMatrix{$T} $name.$plane_name storage",
                 ),
             )
             size(parent(plane), 1) >= size(plane, 1) &&
@@ -321,7 +471,28 @@ function _karatsuba_require_same_device(data)
     )
         CUDA.device(_stripe_storage_root(plane)) == expected_device || throw(
             ArgumentError(
-                "Karatsuba matrix components and plans must reside on the same CUDA device",
+                "Karatsuba components and plans must reside on the same CUDA device",
+            ),
+        )
+    end
+    return nothing
+end
+
+function _karatsuba_require_same_device_gemv(data)
+    expected_device = CUDA.device(_stripe_storage_root(data.y_low))
+    for plane in (
+        data.y_high,
+        data.y_plan,
+        data.a_low,
+        data.a_high,
+        data.a_plan,
+        data.x_low,
+        data.x_high,
+        data.x_plan,
+    )
+        CUDA.device(_stripe_storage_root(plane)) == expected_device || throw(
+            ArgumentError(
+                "Karatsuba components and plans must reside on the same CUDA device",
             ),
         )
     end
@@ -369,10 +540,17 @@ moduli; those ranges are the exclusive stripe input bounds. These ranges are
 caller promises and are not scanned at runtime. CuModArray wrappers made with
 mod=false retain raw values, and to_karatsuba preserves an exact high quotient
 without reducing it by high_modulus, so callers must supply a high_modulus
-that bounds those values. This matrix path currently supports Float64 storage
-only.
+that bounds those values. The operation supports matching Float32 or Float64
+GPU-backed components. Each type is bounded by its cuBLAS significand: 24 exact
+integer bits for Float32 and 53 for Float64. Output capacities and stripe
+accumulators are checked against that bound before any plan is written.
 """
-function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
+function LinearAlgebra.mul!(
+    C::KaratsubaArray{TC,2},
+    A::KaratsubaArray{TA,2},
+    B::KaratsubaArray{TB,2},
+) where {TC,TA,TB}
+    T = _karatsuba_require_matched_float_type(TA, TB, TC)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
         throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
@@ -382,13 +560,11 @@ function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaAr
     if (A.plan == nothing) || (B.plan == nothing) || (C.plan == nothing)
         throw(ArgumentError("Must initialize plans first"))
     end
-    if eltype(parent(low_part(A))) != Float64
-        throw(ArgumentError("Not implemented for non-Float64 entries"))
-    end
     size(low_part(C)) == (size(low_part(A), 1), size(low_part(B), 2)) ||
         throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
     data = _karatsuba_prepare_gemm_views(A, B, C)
     products = _karatsuba_matmul_product_plan(
+        T,
         low_modulus(A),
         high_modulus(A),
         low_modulus(B),
@@ -453,10 +629,10 @@ function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaAr
     output_rows, output_cols = size(low_part(C))
     output_count = length(low_part(C))
     output_blocks = max(1, cld(output_count, threads))
-    output_capacity = Float64(products.output_capacity)
-    radix_mod_capacity = Float64(products.radix_mod_capacity)
-    radix_squared_mod_capacity = Float64(products.radix_squared_mod_capacity)
-    output_radix = Float64(products.output_radix)
+    output_capacity = T(products.output_capacity)
+    radix_mod_capacity = T(products.radix_mod_capacity)
+    radix_squared_mod_capacity = T(products.radix_squared_mod_capacity)
+    output_radix = T(products.output_radix)
     @cuda threads=threads blocks=output_blocks karatsuba_matmul_kernel_2!(
         parent(low_part(C)),
         parent(high_part(C)),
@@ -537,35 +713,114 @@ end
            eltype(eltype(mats)) === eltype(eltype(targets))
 end
 
-function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
+function _karatsuba_prepare_gemv_views(
+    A::KaratsubaArray{T,2},
+    x::KaratsubaArray{T,1},
+    y::KaratsubaArray{T,1},
+) where {T}
+    for (name, K) in (("A", A), ("x", x), ("y", y))
+        low = low_part(K)
+        high = high_part(K)
+        plan = K.plan
+        D = ndims(low)
+        for (plane_name, plane) in (("low", low), ("high", high), ("plan", plan))
+            plane isa CuModArray{T,D} || throw(
+                ArgumentError(
+                    "Karatsuba GEMV requires CuModArray{$T,$D} $name.$plane_name storage",
+                ),
+            )
+            all(size(parent(plane), k) >= size(plane, k) for k = 1:D) || throw(
+                DimensionMismatch(
+                    "$name.$plane_name storage is smaller than its logical size",
+                ),
+            )
+        end
+        size(high) == size(low) ||
+            throw(DimensionMismatch("$name low and high components must match logically"))
+        size(plan) == size(low) ||
+            throw(DimensionMismatch("$name plan must match its component logical size"))
+    end
+    size(low_part(y)) == (size(low_part(A), 1),) ||
+        throw(DimensionMismatch("Output vector y has incorrect dimensions"))
+
+    inputs = (low_part(A), high_part(A), low_part(x), high_part(x))
+    outputs = (low_part(y), high_part(y), y.plan)
+    scratch = (A.plan, x.plan)
+    for output in outputs, input in inputs
+        _stripe_mightalias(parent(output), parent(input)) && throw(
+            ArgumentError("Karatsuba GEMV output storage must not alias input components"),
+        )
+    end
+    for i = 1:length(outputs), j = (i+1):length(outputs)
+        _stripe_mightalias(parent(outputs[i]), parent(outputs[j])) && throw(
+            ArgumentError("Karatsuba GEMV output components must not alias each other"),
+        )
+    end
+    for plan in scratch, input in inputs
+        _stripe_mightalias(parent(plan), parent(input)) && throw(
+            ArgumentError("Karatsuba GEMV plan scratch must not alias input components"),
+        )
+    end
+    for plan in scratch, output in outputs
+        _stripe_mightalias(parent(plan), parent(output)) && throw(
+            ArgumentError("Karatsuba GEMV plan scratch must not alias output components"),
+        )
+    end
+    _stripe_mightalias(parent(A.plan), parent(x.plan)) &&
+        throw(ArgumentError("Karatsuba GEMV input plan scratch must not alias each other"))
+
+    return (
+        a_low = _stripe_logical_data(low_part(A)),
+        a_high = _stripe_logical_data(high_part(A)),
+        a_plan = _stripe_logical_data(A.plan),
+        x_low = _stripe_logical_data(low_part(x)),
+        x_high = _stripe_logical_data(high_part(x)),
+        x_plan = _stripe_logical_data(x.plan),
+        y_low = _stripe_logical_data(low_part(y)),
+        y_high = _stripe_logical_data(high_part(y)),
+        y_plan = _stripe_logical_data(y.plan),
+    )
+end
+
+function karatsuba_gemv!(
+    C::KaratsubaArray{TC,1},
+    A::KaratsubaArray{TA,2},
+    B::KaratsubaArray{TB,1},
+) where {TC,TA,TB}
+    T = _karatsuba_require_matched_float_type(TA, TB, TC)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
         throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
-    if size(low_part(A))[2] != size(low_part(B))[1]
+    if size(low_part(A), 2) != length(low_part(B))
         throw(DimensionMismatch("Matrix dimensions don't work for multiplication"))
     end
     if (A.plan == nothing) || (B.plan == nothing) || (C.plan == nothing)
         throw(ArgumentError("Must initialize plans first"))
     end
-    if eltype(parent(low_part(A))) != Float64
-        throw(ArgumentError("Not implemented for non-Float64 entries"))
-    end
-    # TOD0: enable this
-    # maxN = max(low_modulus(A),high_modulus(A))
-    # if find_max_stripe_ops(eltype(parent(low_part(A))), maxN) < size(A,1)
-    #     throw(ArgumentError("Matrix is too big for a single matmul, this is currently not implemented"))
-    # end
-
     tw = TILE_WIDTH
     rows, cols = size(low_part(A))
-    vector_length = length(low_part(B))
     if rows == 0
         return C
-    elseif cols == 0
-        fill!(_logical_view(parent(low_part(C)), size(low_part(C))), 0.0)
-        fill!(_logical_view(parent(high_part(C)), size(high_part(C))), 0.0)
+    end
+
+    data = _karatsuba_prepare_gemv_views(A, B, C)
+    _karatsuba_require_same_device_gemv(data)
+    if cols == 0
+        fill!(_logical_view(parent(low_part(C)), size(low_part(C))), zero(T))
+        fill!(_logical_view(parent(high_part(C)), size(high_part(C))), zero(T))
         return C
     end
+
+    precision = _karatsuba_gemv_precision_plan(
+        T,
+        cols,
+        low_modulus(A),
+        high_modulus(A),
+        low_modulus(B),
+        high_modulus(B),
+        low_modulus(C),
+        high_modulus(C),
+    )
 
     logical_count = max(length(A.plan), length(B.plan))
     if logical_count > 0
@@ -584,7 +839,7 @@ function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray
     # add!(A.plan,low_part(A),high_part(A); modulus_override=2*low_modulus(A))
     # add!(B.plan,low_part(B),high_part(B); modulus_override=2*low_modulus(B))
 
-    (zero_ptr, one_ptr) = cublas_scalars_f64()
+    (zero_ptr, one_ptr) = _stripe_gemv_scalars(T)
 
 
     # C.plan is the independent, output-sized destination for the third
@@ -664,6 +919,26 @@ function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray
 
 
     C
+end
+
+function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
+    throw(
+        ArgumentError(
+            "karatsuba_gemv! requires KaratsubaMatrix, KaratsubaVector, KaratsubaVector",
+        ),
+    )
+end
+
+function LinearAlgebra.mul!(
+    y::KaratsubaArray{TY,1},
+    A::KaratsubaArray{TA,2},
+    x::KaratsubaArray{TX,1},
+) where {TY,TA,TX}
+    return karatsuba_gemv!(y, A, x)
+end
+
+function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
+    throw(ArgumentError("Karatsuba mul! supports matrix-matrix and matrix-vector products"))
 end
 
 Base.size(A::KaratsubaArray) = size(low_part(A))
@@ -1250,8 +1525,8 @@ end
 
 function _karatsuba_output_like(
     source::KaratsubaArray{T,D,S,P},
-    dims::Dims{D},
-) where {T,D,S,P}
+    dims::Dims{DOut},
+) where {T,D,S,P,DOut}
     data1 = _karatsuba_zero_component(low_part(source), dims, low_modulus(source))
     data2 = _karatsuba_zero_component(high_part(source), dims, high_modulus(source))
     return KaratsubaArray(
@@ -1294,10 +1569,13 @@ function _karatsuba_product_workspace_like(K::KaratsubaArray{T,D,S,P}) where {T,
     )
 end
 
-function _karatsuba_validate_allocating_product_storage(K::KaratsubaArray{Float64,2})
-    low_part(K) isa CuModMatrix{Float64} && high_part(K) isa CuModMatrix{Float64} || throw(
+function _karatsuba_validate_allocating_product_storage(K::KaratsubaArray{T,D}) where {T,D}
+    (T === Float32 || T === Float64) || throw(
+        ArgumentError("allocating Karatsuba products support Float32 or Float64 storage"),
+    )
+    (low_part(K) isa CuModArray{T,D} && high_part(K) isa CuModArray{T,D}) || throw(
         ArgumentError(
-            "allocating Karatsuba matrix multiplication currently supports GPU-backed CuModMatrix{Float64} components",
+            "allocating Karatsuba products require GPU-backed CuModArray{$T,$D} components",
         ),
     )
     return nothing
@@ -1306,7 +1584,7 @@ end
 """
     A * B
 
-Allocate the product of GPU-backed `Float64` Karatsuba matrices. `A` and `B`
+Allocate the product of GPU-backed `Float32` or `Float64` Karatsuba matrices. `A` and `B`
 must satisfy the same modulus, dimension, common input low-radix, and
 canonical-component requirements as `LinearAlgebra.mul!(C, A, B)`. The result uses `A`'s component split and
 representation metadata; its output capacity is `low_modulus(A) *
@@ -1317,7 +1595,8 @@ private plan scratch. The input component storage is shared read-only, so the
 caller plans may be uninitialized and any existing caller plan is left
 unchanged.
 """
-function *(A::KaratsubaArray{Float64,2}, B::KaratsubaArray{Float64,2})
+function *(A::KaratsubaArray{TA,2}, B::KaratsubaArray{TB,2}) where {TA,TB}
+    _karatsuba_require_matched_float_type(TA, TB, TA)
     _karatsuba_validate_allocating_product_storage(A)
     _karatsuba_validate_allocating_product_storage(B)
 
@@ -1328,10 +1607,22 @@ function *(A::KaratsubaArray{Float64,2}, B::KaratsubaArray{Float64,2})
     return LinearAlgebra.mul!(C, A_work, B_work)
 end
 
-function *(A::KaratsubaArray{TA,2}, B::KaratsubaArray{TB,2}) where {TA,TB}
+function *(A::KaratsubaArray{TA,2}, x::KaratsubaArray{TB,1}) where {TA,TB}
+    _karatsuba_require_matched_float_type(TA, TB, TA)
+    _karatsuba_validate_allocating_product_storage(A)
+    _karatsuba_validate_allocating_product_storage(x)
+
+    A_work = _karatsuba_product_workspace_like(A)
+    x_work = _karatsuba_product_workspace_like(x)
+    y = _karatsuba_output_like(A, (size(A, 1),))
+    foreach(initialize_plan!, (A_work, x_work, y))
+    return LinearAlgebra.mul!(y, A_work, x_work)
+end
+
+function *(A::KaratsubaArray, B::KaratsubaArray)
     throw(
         ArgumentError(
-            "allocating Karatsuba matrix multiplication currently supports GPU-backed CuModMatrix{Float64} components",
+            "allocating Karatsuba multiplication supports matrix-matrix and matrix-vector products with matching Float32 or Float64 GPU components",
         ),
     )
 end

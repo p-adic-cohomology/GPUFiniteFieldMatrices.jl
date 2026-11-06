@@ -82,8 +82,14 @@ Karatsuba matrix multiplication prepares logical component views and
 preflights all three raw stripe products before any plan writes. Each product
 executes through the existing raw `_stripe_mul!` core. The allocating
 `A * B` form preserves caller components and plans; the mutating form
-requires initialized plans and supports Float64 GPU storage. Results use
-destination split capacity independently of the shared representation modulus.
+requires initialized plans and supports matching Float32 or Float64 GPU
+storage. The same precision-aware support applies to matrix-vector `mul!` and
+allocating `A * x`, which returns a vector-shaped result with private plans.
+The exact-integer budgets are 24 bits for Float32 and 53 bits for Float64.
+Results use destination split capacity independently of the shared
+representation modulus. The inherited general high-plane GEMV arithmetic
+limitation remains unresolved; this extension does not claim general GEMV
+correctness.
 
 ### Empty products, triangular inverses, and tests
 
