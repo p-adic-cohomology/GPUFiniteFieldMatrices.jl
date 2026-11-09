@@ -26,10 +26,14 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
         high_modulus::Union{Nothing,Integer} = nothing,
         modulus::Union{Nothing,Integer} = nothing,
     ) where {T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}}
-        isconcretetype(S) ||
+        component_type = _karatsuba_constructor_component_type(S, typeof(A), T, Val(D))
+        isconcretetype(component_type) ||
             throw(ArgumentError("Karatsuba components require a concrete storage type"))
-        isconcretetype(P) ||
+        plan_type = _karatsuba_resolve_partial_cumod_type(P, T, Val(D))
+        isconcretetype(plan_type) ||
             throw(ArgumentError("Karatsuba plans require a concrete storage type"))
+        typeof(A) === typeof(B) ||
+            throw(ArgumentError("Karatsuba components must have the same storage type"))
         if size(A) != size(B)
             throw(DimensionMismatch("Dimensions of matrices must match"))
         end
@@ -52,7 +56,7 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
             throw(ArgumentError("Modulus too large"))
         end
 
-        return new{T,D,S,P}(A, B, nothing, N1, N2, M)
+        return new{T,D,component_type,plan_type}(A, B, nothing, N1, N2, M)
     end
 end
 
@@ -71,6 +75,41 @@ end
 
 _karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} =
     _default_cumod_storage_type(T, Val(D))
+
+@inline _karatsuba_resolve_partial_cumod_type(
+    ::Type{CuModArray{T,D}},
+    ::Type{T},
+    ::Val{D},
+) where {T,D} = _default_cumod_storage_type(T, Val(D))
+
+@inline _karatsuba_resolve_partial_cumod_type(
+    ::Type{S},
+    ::Type{T},
+    ::Val{D},
+) where {T,D,S<:AbstractArray{T,D}} = S
+
+@inline function _karatsuba_constructor_component_type(
+    ::Type{CuModArray{T,D}},
+    ::Type{A},
+    ::Type{T},
+    ::Val{D},
+) where {T,D,A<:CuModArray{T,D}}
+    return A
+end
+
+@inline function _karatsuba_constructor_component_type(
+    ::Type{S},
+    ::Type{A},
+    ::Type{T},
+    ::Val{D},
+) where {T,D,S<:AbstractArray{T,D},A<:AbstractArray{T,D}}
+    isconcretetype(S) ||
+        throw(ArgumentError("Karatsuba components require a concrete storage type"))
+    A === S || throw(
+        ArgumentError("Karatsuba component does not match the requested storage type"),
+    )
+    return S
+end
 
 function KaratsubaArray{T,D,S}(A::S, B::S; kwargs...) where {T,D,S<:AbstractArray{T,D}}
     P = _karatsuba_plan_type(S)
@@ -1475,7 +1514,8 @@ function Base.zeros(
     cols::Integer;
     kwargs...,
 ) where {T,S<:AbstractArray{T,2}}
-    return _karatsuba_zeros(T, S, (Int(rows), Int(cols)); kwargs...)
+    component_type = _karatsuba_resolve_partial_cumod_type(S, T, Val(2))
+    return _karatsuba_zeros(T, component_type, (Int(rows), Int(cols)); kwargs...)
 end
 
 function Base.zeros(
@@ -1483,7 +1523,8 @@ function Base.zeros(
     length::Integer;
     kwargs...,
 ) where {T,S<:AbstractArray{T,1}}
-    return _karatsuba_zeros(T, S, (Int(length),); kwargs...)
+    component_type = _karatsuba_resolve_partial_cumod_type(S, T, Val(1))
+    return _karatsuba_zeros(T, component_type, (Int(length),); kwargs...)
 end
 
 function Base.zeros(
@@ -1492,7 +1533,9 @@ function Base.zeros(
     cols::Integer;
     kwargs...,
 ) where {T,S<:AbstractArray{T,2},P<:AbstractArray{T,2}}
-    return _karatsuba_zeros(T, S, P, (Int(rows), Int(cols)); kwargs...)
+    component_type = _karatsuba_resolve_partial_cumod_type(S, T, Val(2))
+    plan_type = _karatsuba_resolve_partial_cumod_type(P, T, Val(2))
+    return _karatsuba_zeros(T, component_type, plan_type, (Int(rows), Int(cols)); kwargs...)
 end
 
 function Base.zeros(
@@ -1500,7 +1543,9 @@ function Base.zeros(
     length::Integer;
     kwargs...,
 ) where {T,S<:AbstractArray{T,1},P<:AbstractArray{T,1}}
-    return _karatsuba_zeros(T, S, P, (Int(length),); kwargs...)
+    component_type = _karatsuba_resolve_partial_cumod_type(S, T, Val(1))
+    plan_type = _karatsuba_resolve_partial_cumod_type(P, T, Val(1))
+    return _karatsuba_zeros(T, component_type, plan_type, (Int(length),); kwargs...)
 end
 
 function initialize_plan!(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
