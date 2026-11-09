@@ -56,6 +56,16 @@ function test_cuda_blas_compatibility()
                 @test gemv_one === one_ptr
             end
         end
+
+        # Interleave the two supported product precisions to ensure GEMV keeps
+        # selecting each task-local cuBLAS pointer pair by its actual T.
+        for T in (Float32, Float64, Float32, Float64)
+            zero_ptr, one_ptr = GPUFiniteFieldMatrices._stripe_gemv_scalars(T)
+            @test eltype(zero_ptr) === T
+            @test eltype(one_ptr) === T
+            @test zero_ptr[] === zero(T)
+            @test one_ptr[] === one(T)
+        end
     end
 
     N = 127

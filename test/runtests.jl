@@ -147,6 +147,7 @@ if CUDA.functional()
             test_empty_stripe_products()
         end
         test_karatsuba_api_regressions()
+        test_karatsuba_float32_float64_products()
         @testset "Karatsuba arithmetic" begin
             test_karatsuba_basic_operations()
             test_karatsuba_operations()

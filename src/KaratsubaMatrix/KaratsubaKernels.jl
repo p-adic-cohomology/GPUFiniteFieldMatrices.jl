@@ -206,31 +206,43 @@ function karatsuba_matmul_kernel_1!(Aplan, Adata1, Adata2, Bplan, Bdata1, Bdata2
     nothing
 end
 
-@inline function _karatsuba_mod_add(a::Float64, b::Float64, modulus::Float64)
-    modulus == 1.0 && return 0.0
+@inline function _karatsuba_mod_add(
+    a::T,
+    b::T,
+    modulus::T,
+) where {T<:Union{Float32,Float64}}
+    modulus == one(T) && return zero(T)
     gap = modulus - b
     return a >= gap ? a - gap : a + b
 end
 
-@inline function _karatsuba_mod_sub(a::Float64, b::Float64, modulus::Float64)
-    modulus == 1.0 && return 0.0
+@inline function _karatsuba_mod_sub(
+    a::T,
+    b::T,
+    modulus::T,
+) where {T<:Union{Float32,Float64}}
+    modulus == one(T) && return zero(T)
     return a >= b ? a - b : modulus - (b - a)
 end
 
-@inline function _karatsuba_mod_mul(a::Float64, b::Float64, modulus::Float64)
+@inline function _karatsuba_mod_mul(
+    a::T,
+    b::T,
+    modulus::T,
+) where {T<:Union{Float32,Float64}}
     # Inputs and the loop state are integer residues in [0, modulus). Each
     # step uses bounded modular addition instead of forming a*b.
-    modulus == 1.0 && return 0.0
-    result = 0.0
+    modulus == one(T) && return zero(T)
+    result = zero(T)
     factor = a
     multiplier = b
-    while multiplier > 0.0
-        half = div(multiplier, 2.0)
-        if multiplier != 2.0 * half
+    while multiplier > zero(T)
+        half = div(multiplier, T(2))
+        if multiplier != T(2) * half
             result = _karatsuba_mod_add(result, factor, modulus)
         end
         multiplier = half
-        if multiplier > 0.0
+        if multiplier > zero(T)
             factor = _karatsuba_mod_add(factor, factor, modulus)
         end
     end
@@ -238,14 +250,14 @@ end
 end
 
 @inline function _karatsuba_recombine(
-    p0::Float64,
-    p1::Float64,
-    p2::Float64,
-    radix_mod_capacity::Float64,
-    radix_squared_mod_capacity::Float64,
-    output_radix::Float64,
-    output_capacity::Float64,
-)
+    p0::T,
+    p1::T,
+    p2::T,
+    radix_mod_capacity::T,
+    radix_squared_mod_capacity::T,
+    output_radix::T,
+    output_capacity::T,
+) where {T<:Union{Float32,Float64}}
     # p0, p1, and p2 are the three stripe products reduced modulo Q.
     cross = _karatsuba_mod_sub(p1, p0, output_capacity)
     cross = _karatsuba_mod_sub(cross, p2, output_capacity)
@@ -254,13 +266,12 @@ end
     value = _karatsuba_mod_add(p0, weighted_cross, output_capacity)
     value = _karatsuba_mod_add(value, weighted_high, output_capacity)
 
-    # Q is checked to be at most 2^53, so value and output_radix are exact
-    # Float64 integers that also fit Int64. Integer div/rem avoid a rounded
-    # floating quotient at large, nearly integral ratios.
-    value_integer = Int64(value)
-    radix_integer = Int64(output_radix)
-    low = Float64(rem(value_integer, radix_integer))
-    high = Float64(div(value_integer, radix_integer))
+    # Q is checked against T's exact-integer range and Int modulus bound.
+    # Integer div/rem avoids a rounded floating quotient near the capacity.
+    value_integer = Int(value)
+    radix_integer = Int(output_radix)
+    low = T(rem(value_integer, radix_integer))
+    high = T(div(value_integer, radix_integer))
     return low, high
 end
 
