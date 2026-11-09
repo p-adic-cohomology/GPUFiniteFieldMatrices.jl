@@ -2,6 +2,139 @@ function test_karatsuba_api_regressions()
     @testset "Karatsuba required GPU API regressions" begin
         mod = GPUFiniteFieldMatrices
         q = 100
+
+        @testset "Float32 and Float64 Karatsuba negation integration" begin
+            tile_width = mod.TILE_WIDTH
+
+            function check_gpu_negation(
+                ::Type{T},
+                N1_big::BigInt,
+                N2_big::BigInt,
+                raw_cases,
+            ) where {T<:AbstractFloat}
+                M_big = N1_big * N2_big
+                exact_limit = T === Float32 ? BigInt(2)^24 : BigInt(2)^53
+                @test M_big^2 <= exact_limit
+                @test M_big^2 <= BigInt(typemax(Int))
+
+                N1 = Int(N1_big)
+                N2 = Int(N2_big)
+                M = Int(M_big)
+                storage_length =
+                    max(tile_width, cld(length(raw_cases), tile_width) * tile_width)
+                cases = [raw_cases[mod1(i, length(raw_cases))] for i = 1:storage_length]
+                low_values = T[pair[1] for pair in cases]
+                high_values = T[pair[2] for pair in cases]
+
+                source_low =
+                    mod.CuModVector{T}(CUDA.CuArray(low_values); modulus = N1, mod = false)
+                source_high =
+                    mod.CuModVector{T}(CUDA.CuArray(high_values); modulus = N2, mod = false)
+                destination_low = mod.CuModVector{T}(
+                    CUDA.zeros(T, storage_length);
+                    modulus = N1,
+                    mod = false,
+                )
+                destination_high = mod.CuModVector{T}(
+                    CUDA.zeros(T, storage_length);
+                    modulus = N2,
+                    mod = false,
+                )
+                A = mod.KaratsubaVector{T}(
+                    source_low,
+                    source_high;
+                    low_modulus = N1,
+                    high_modulus = N2,
+                    modulus = M,
+                )
+                K = mod.KaratsubaVector{T}(
+                    destination_low,
+                    destination_high;
+                    low_modulus = N1,
+                    high_modulus = N2,
+                    modulus = M,
+                )
+
+                source_low_parent = parent(mod.low_part(A))
+                source_high_parent = parent(mod.high_part(A))
+                destination_low_parent = parent(mod.low_part(K))
+                destination_high_parent = parent(mod.high_part(K))
+                source_low_before = Array(source_low_parent)
+                source_high_before = Array(source_high_parent)
+                @test mod.initialize_plan!(A) === A
+                @test mod.initialize_plan!(K) === K
+                source_plan = A.plan
+                destination_plan = K.plan
+                fill!(parent(source_plan), T(17))
+                fill!(parent(destination_plan), T(19))
+                source_plan_before = Array(parent(source_plan))
+                destination_plan_before = Array(parent(destination_plan))
+
+                expected_packed = BigInt[
+                    Base.mod(-(BigInt(pair[1]) + N1_big * BigInt(pair[2])), M_big) for
+                    pair in cases
+                ]
+                expected_low = T[Base.mod(value, N1_big) for value in expected_packed]
+                expected_high = T[div(value, N1_big) for value in expected_packed]
+
+                @test mod.negate!(K, A) === K
+                @test parent(mod.low_part(A)) === source_low_parent
+                @test parent(mod.high_part(A)) === source_high_parent
+                @test parent(mod.low_part(K)) === destination_low_parent
+                @test parent(mod.high_part(K)) === destination_high_parent
+                @test parent(mod.low_part(K)) isa CUDA.CuArray{T,1}
+                @test parent(mod.high_part(K)) isa CUDA.CuArray{T,1}
+                @test eltype(mod.low_part(K)) === T
+                @test eltype(mod.high_part(K)) === T
+                @test size(mod.low_part(K)) == (storage_length,)
+                @test size(mod.high_part(K)) == (storage_length,)
+                @test Array(mod.low_part(K)) == expected_low
+                @test Array(mod.high_part(K)) == expected_high
+                reconstructed = mod.from_karatsuba(T, K)
+                @test reconstructed isa CUDA.CuArray{T,1}
+                @test Array(reconstructed) == T.(expected_packed)
+                @test Array(source_low_parent) == source_low_before
+                @test Array(source_high_parent) == source_high_before
+                @test (mod.low_modulus(A), mod.high_modulus(A), mod.modulus(A)) ==
+                      (N1, N2, M)
+                @test (mod.low_modulus(K), mod.high_modulus(K), mod.modulus(K)) ==
+                      (N1, N2, M)
+                @test mod.modulus(mod.low_part(A)) == N1
+                @test mod.modulus(mod.high_part(A)) == N2
+                @test mod.modulus(mod.low_part(K)) == N1
+                @test mod.modulus(mod.high_part(K)) == N2
+                @test A.plan === source_plan
+                @test K.plan === destination_plan
+                @test Array(parent(source_plan)) == source_plan_before
+                @test Array(parent(destination_plan)) == destination_plan_before
+            end
+
+            canonical_cases = [(low, high) for high = 0:9 for low = 0:9]
+            check_gpu_negation(Float32, BigInt(10), BigInt(10), canonical_cases)
+            check_gpu_negation(Float64, BigInt(10), BigInt(10), canonical_cases)
+
+            float32_boundary_cases =
+                ((0, 0), (1, 0), (0, 1), (63, 63), (63, 1), (1, 63), (63, 0), (0, 63))
+            check_gpu_negation(Float32, BigInt(64), BigInt(64), float32_boundary_cases)
+
+            float64_boundary_cases = (
+                (0, 0),
+                (1, 0),
+                (0, 1),
+                (4, 18_981_252),
+                (4, 1),
+                (1, 18_981_252),
+                (4, 0),
+                (0, 18_981_252),
+            )
+            check_gpu_negation(
+                Float64,
+                BigInt(5),
+                BigInt(18_981_253),
+                float64_boundary_cases,
+            )
+        end
+
         a_values = Float64[20 30; 40 50]
         b_values = Float64[2 1; 0 3]
         a = mod.CuModMatrix{Float64}(a_values; modulus = q)
@@ -326,6 +459,185 @@ function test_karatsuba_api_regressions()
         @test Array(parent(mod.low_part(bk))) == inputs_before[3]
         @test Array(parent(mod.high_part(bk))) == inputs_before[4]
         @test all(plane -> all(==(plane[2]), padding_values(plane[1])), padding_sentinels)
+
+        @testset "Karatsuba allocating product owns private scratch" begin
+            input_snapshot =
+                K -> (
+                    low = mod.low_part(K),
+                    high = mod.high_part(K),
+                    low_parent = Array(parent(mod.low_part(K))),
+                    high_parent = Array(parent(mod.high_part(K))),
+                    plan = K.plan,
+                    plan_parent = K.plan === nothing ? nothing : Array(parent(K.plan)),
+                    low_modulus = mod.low_modulus(K),
+                    high_modulus = mod.high_modulus(K),
+                    modulus = mod.modulus(K),
+                )
+            assert_input_unchanged = function (K, before)
+                @test mod.low_part(K) === before.low
+                @test mod.high_part(K) === before.high
+                @test Array(parent(mod.low_part(K))) == before.low_parent
+                @test Array(parent(mod.high_part(K))) == before.high_parent
+                @test K.plan === before.plan
+                @test (K.plan === nothing ? nothing : Array(parent(K.plan))) ==
+                      before.plan_parent
+                @test mod.low_modulus(K) == before.low_modulus
+                @test mod.high_modulus(K) == before.high_modulus
+                @test mod.modulus(K) == before.modulus
+                return nothing
+            end
+            work_wrapper =
+                K -> mod.KaratsubaMatrix(
+                    mod.low_part(K),
+                    mod.high_part(K);
+                    low_modulus = mod.low_modulus(K),
+                    high_modulus = mod.high_modulus(K),
+                    modulus = mod.modulus(K),
+                )
+
+            unplanned_a = mod.KaratsubaMatrix(
+                a_low,
+                a_high;
+                low_modulus = radix,
+                high_modulus = 2,
+                modulus = 211,
+            )
+            unplanned_b = mod.KaratsubaMatrix(
+                b_low,
+                b_high;
+                low_modulus = radix,
+                high_modulus = 3,
+                modulus = 211,
+            )
+            @test unplanned_a.plan === nothing
+            @test unplanned_b.plan === nothing
+            @test mod.high_modulus(unplanned_a) != mod.high_modulus(unplanned_b)
+            @test which(Base.:*, Tuple{typeof(unplanned_a),typeof(unplanned_b)}).module ===
+                  mod
+            @test size(parent(mod.low_part(unplanned_a))) != size(mod.low_part(unplanned_a))
+            unplanned_a_before = input_snapshot(unplanned_a)
+            unplanned_b_before = input_snapshot(unplanned_b)
+
+            allocated = unplanned_a * unplanned_b
+            output_capacity =
+                BigInt(mod.low_modulus(unplanned_a)) * BigInt(mod.high_modulus(unplanned_a))
+            allocating_expected =
+                Base.mod.(a_reconstructed * b_reconstructed, output_capacity)
+            @test allocated !== unplanned_a
+            @test allocated !== unplanned_b
+            @test allocated isa typeof(unplanned_a)
+            @test size(allocated) == (2, 4)
+            @test mod.low_modulus(allocated) == mod.low_modulus(unplanned_a)
+            @test mod.high_modulus(allocated) == mod.high_modulus(unplanned_a)
+            @test mod.modulus(allocated) == mod.modulus(unplanned_a) == 211
+            @test output_capacity != BigInt(mod.modulus(allocated))
+            @test mod.low_part(allocated) !== mod.low_part(unplanned_a)
+            @test mod.high_part(allocated) !== mod.high_part(unplanned_a)
+            @test parent(mod.low_part(allocated)) isa CUDA.CuArray{Float64,2}
+            @test parent(mod.high_part(allocated)) isa CUDA.CuArray{Float64,2}
+            @test allocated.plan isa mod.CuModMatrix{Float64}
+            @test typeof(allocated.plan) === mod.CuModMatrix{Float64}
+            @test Array(allocated) == allocating_expected
+            @test any(value -> !iszero(value), Array(mod.high_part(allocated)))
+            assert_input_unchanged(unplanned_a, unplanned_a_before)
+            assert_input_unchanged(unplanned_b, unplanned_b_before)
+
+            # Compare the allocating operator with the same mutating core on
+            # separately wrapped inputs and an independently initialized C.
+            mutating_a = work_wrapper(unplanned_a)
+            mutating_b = work_wrapper(unplanned_b)
+            mutating_c = mod.zeros(
+                mod.KaratsubaMatrix{Float64},
+                2,
+                4;
+                low_modulus = radix,
+                high_modulus = 2,
+                modulus = 211,
+            )
+            foreach(mod.initialize_plan!, (mutating_a, mutating_b, mutating_c))
+            @test LinearAlgebra.mul!(mutating_c, mutating_a, mutating_b) === mutating_c
+            @test Array(mutating_c) == allocating_expected
+            @test Array(allocated) == Array(mutating_c)
+
+            # Existing caller plans, including all physical padding, remain
+            # byte-for-byte unchanged when the allocating form is used.
+            initialized_a_before = input_snapshot(ak)
+            initialized_b_before = input_snapshot(bk)
+            initialized_allocated = ak * bk
+            @test size(initialized_allocated) == (2, 4)
+            @test Array(initialized_allocated) == allocating_expected
+            @test initialized_allocated.plan isa mod.CuModMatrix{Float64}
+            @test parent(initialized_allocated.plan) !== parent(ak.plan)
+            assert_input_unchanged(ak, initialized_a_before)
+            assert_input_unchanged(bk, initialized_b_before)
+
+            # A === B gets distinct operation-owned plans while retaining the
+            # caller's original plan and components.
+            square_before = input_snapshot(ak_copy)
+            square_allocated = ak_copy * ak_copy
+            square_capacity =
+                BigInt(mod.low_modulus(ak_copy)) * BigInt(mod.high_modulus(ak_copy))
+            square_expected =
+                Base.mod.(BigInt.(a_values) * BigInt.(a_values), square_capacity)
+            @test size(square_allocated) == (2, 2)
+            @test Array(square_allocated) == square_expected
+            @test mod.modulus(square_allocated) == mod.modulus(ak_copy)
+            @test mod.low_modulus(square_allocated) == mod.low_modulus(ak_copy)
+            @test mod.high_modulus(square_allocated) == mod.high_modulus(ak_copy)
+            assert_input_unchanged(ak_copy, square_before)
+
+            square_mutating_a = work_wrapper(ak_copy)
+            square_mutating_b = work_wrapper(ak_copy)
+            square_mutating_c = mod.zeros(
+                mod.KaratsubaMatrix{Float64},
+                2,
+                2;
+                low_modulus = mod.low_modulus(ak_copy),
+                high_modulus = mod.high_modulus(ak_copy),
+                modulus = mod.modulus(ak_copy),
+            )
+            foreach(
+                mod.initialize_plan!,
+                (square_mutating_a, square_mutating_b, square_mutating_c),
+            )
+            @test LinearAlgebra.mul!(
+                square_mutating_c,
+                square_mutating_a,
+                square_mutating_b,
+            ) === square_mutating_c
+            @test Array(square_mutating_c) == square_expected
+
+            # An inner-dimension preflight error must preserve both caller
+            # plans and every logical and padded component/plan cell.
+            bad_b_low_values = Float64[1 0 1 0; 0 1 0 1]
+            bad_b_high_values = Float64[1 0 0 1; 0 1 1 0]
+            bad_b_low = padded_matrix(bad_b_low_values, 4, 8, radix; sentinel = 971.0)
+            bad_b_high = padded_matrix(bad_b_high_values, 5, 7, 3; sentinel = 972.0)
+            bad_b = mod.KaratsubaMatrix(
+                bad_b_low,
+                bad_b_high;
+                low_modulus = radix,
+                high_modulus = 3,
+                modulus = 211,
+            )
+            mod.initialize_plan!(bad_b)
+            bad_b.plan =
+                padded_matrix(fill(4.0, size(bad_b)...), 4, 9, radix; sentinel = 973.0)
+            @test all(==(973.0), padding_values(bad_b.plan))
+            preflight_a_before = input_snapshot(ak)
+            bad_b_before = input_snapshot(bad_b)
+            dimension_error = try
+                ak * bad_b
+                nothing
+            catch error
+                error
+            end
+            @test dimension_error isa ErrorException
+            @test dimension_error isa ErrorException &&
+                  dimension_error.msg == "Matrix dimensions don't work for multiplication"
+            assert_input_unchanged(ak, preflight_a_before)
+            assert_input_unchanged(bad_b, bad_b_before)
+        end
 
         mismatched_radix = mod.KaratsubaMatrix(
             mod.CuModMatrix{Float64}(a_low_values; modulus = 5),
@@ -656,6 +968,204 @@ function test_karatsuba_api_regressions()
                     @test destination_after == destination_before
                 end
             end
+        end
+
+        @testset "Karatsuba addition does not require or use plans" begin
+            addition_low_modulus = 5
+            addition_high_modulus = 7
+            addition_capacity = addition_low_modulus * addition_high_modulus
+            addition_metadata = 211
+            addition_shape = (4, 9)
+
+            addition_a_low_values = Float64[
+                4 4 1 0 4 2 0 3 1
+                3 1 0 0 4 2 1 2 3
+                0 2 3 0 1 2 2 4 1
+                2 3 4 0 0 1 3 1 4
+            ]
+            addition_a_high_values = Float64[
+                6 6 5 0 4 0 1 2 6
+                6 2 1 0 2 0 6 4 1
+                2 0 3 0 5 1 3 3 4
+                1 4 2 0 6 1 2 5 0
+            ]
+            addition_b_low_values = Float64[
+                1 1 4 0 1 3 0 2 4
+                2 4 0 0 1 3 4 3 2
+                0 2 1 0 3 2 3 1 4
+                3 1 1 0 4 3 2 4 1
+            ]
+            addition_b_high_values = Float64[
+                6 0 1 0 3 0 6 4 6
+                0 5 0 0 4 0 1 2 6
+                1 0 2 0 2 1 3 3 1
+                5 3 4 0 4 1 5 5 0
+            ]
+
+            addition_a = mod.KaratsubaMatrix(
+                mod.CuModMatrix{Float64}(
+                    addition_a_low_values;
+                    modulus = addition_low_modulus,
+                ),
+                mod.CuModMatrix{Float64}(
+                    addition_a_high_values;
+                    modulus = addition_high_modulus,
+                );
+                low_modulus = addition_low_modulus,
+                high_modulus = addition_high_modulus,
+                modulus = addition_metadata,
+            )
+            addition_b = mod.KaratsubaMatrix(
+                mod.CuModMatrix{Float64}(
+                    addition_b_low_values;
+                    modulus = addition_low_modulus,
+                ),
+                mod.CuModMatrix{Float64}(
+                    addition_b_high_values;
+                    modulus = addition_high_modulus,
+                );
+                low_modulus = addition_low_modulus,
+                high_modulus = addition_high_modulus,
+                modulus = addition_metadata,
+            )
+            @test size(addition_a) == addition_shape
+            @test size(addition_b) == addition_shape
+            @test addition_a.plan === nothing
+            @test addition_b.plan === nothing
+            for matrix in (addition_a, addition_b)
+                @test parent(mod.low_part(matrix)) isa CUDA.CuArray{Float64,2}
+                @test parent(mod.high_part(matrix)) isa CUDA.CuArray{Float64,2}
+                @test size(parent(mod.low_part(matrix))) ==
+                      size(parent(mod.high_part(matrix)))
+            end
+
+            addition_expected_a =
+                BigInt.(addition_a_low_values) .+
+                BigInt(addition_low_modulus) .* BigInt.(addition_a_high_values)
+            addition_expected_b =
+                BigInt.(addition_b_low_values) .+
+                BigInt(addition_low_modulus) .* BigInt.(addition_b_high_values)
+            addition_expected = Base.mod.(
+                addition_expected_a .+ addition_expected_b,
+                BigInt(addition_capacity),
+            )
+            @test addition_low_modulus * addition_high_modulus != addition_metadata
+            @test addition_a_low_values[1, 1] + addition_b_low_values[1, 1] >=
+                  addition_low_modulus
+            @test addition_a_high_values[1, 1] + addition_b_high_values[1, 1] + 1 >=
+                  addition_high_modulus
+            @test addition_expected[1, 1] == 30
+            @test addition_expected[1, 4] == 0
+            @test addition_expected[end, end] != 0
+
+            addition_snapshot = function (matrix)
+                return (
+                    low = mod.low_part(matrix),
+                    high = mod.high_part(matrix),
+                    low_parent = Array(parent(mod.low_part(matrix))),
+                    high_parent = Array(parent(mod.high_part(matrix))),
+                    plan = matrix.plan,
+                    plan_parent = matrix.plan === nothing ? nothing :
+                                  Array(parent(matrix.plan)),
+                    low_modulus = mod.low_modulus(matrix),
+                    high_modulus = mod.high_modulus(matrix),
+                    modulus = mod.modulus(matrix),
+                )
+            end
+            assert_addition_inputs_unchanged = function (matrix, before)
+                @test mod.low_part(matrix) === before.low
+                @test mod.high_part(matrix) === before.high
+                @test Array(parent(mod.low_part(matrix))) == before.low_parent
+                @test Array(parent(mod.high_part(matrix))) == before.high_parent
+                @test matrix.plan === before.plan
+                @test (matrix.plan === nothing ? nothing : Array(parent(matrix.plan))) == before.plan_parent
+                @test mod.low_modulus(matrix) == before.low_modulus
+                @test mod.high_modulus(matrix) == before.high_modulus
+                @test mod.modulus(matrix) == before.modulus
+                return nothing
+            end
+            assert_addition_result = function (matrix)
+                @test matrix isa mod.KaratsubaMatrix{Float64}
+                @test size(matrix) == addition_shape
+                @test mod.low_part(matrix) isa mod.CuModMatrix{Float64}
+                @test mod.high_part(matrix) isa mod.CuModMatrix{Float64}
+                @test parent(mod.low_part(matrix)) isa CUDA.CuArray{Float64,2}
+                @test parent(mod.high_part(matrix)) isa CUDA.CuArray{Float64,2}
+                @test eltype(mod.low_part(matrix)) === Float64
+                @test eltype(mod.high_part(matrix)) === Float64
+                @test mod.low_modulus(matrix) == addition_low_modulus
+                @test mod.high_modulus(matrix) == addition_high_modulus
+                @test mod.modulus(matrix) == addition_metadata
+                actual =
+                    BigInt.(Array(mod.low_part(matrix))) .+
+                    BigInt(addition_low_modulus) .* BigInt.(Array(mod.high_part(matrix)))
+                @test actual == addition_expected
+                @test Array(matrix) == addition_expected
+                return nothing
+            end
+
+            addition_a_before = addition_snapshot(addition_a)
+            addition_b_before = addition_snapshot(addition_b)
+            allocated_sum = addition_a + addition_b
+            @test allocated_sum.plan === nothing
+            assert_addition_result(allocated_sum)
+            assert_addition_inputs_unchanged(addition_a, addition_a_before)
+            assert_addition_inputs_unchanged(addition_b, addition_b_before)
+
+            addition_destination = mod.KaratsubaMatrix(
+                mod.CuModMatrix{Float64}(
+                    zeros(Float64, addition_shape);
+                    modulus = addition_low_modulus,
+                ),
+                mod.CuModMatrix{Float64}(
+                    zeros(Float64, addition_shape);
+                    modulus = addition_high_modulus,
+                );
+                low_modulus = addition_low_modulus,
+                high_modulus = addition_high_modulus,
+                modulus = addition_metadata,
+            )
+            @test addition_destination.plan === nothing
+            direct_a_before = addition_snapshot(addition_a)
+            direct_b_before = addition_snapshot(addition_b)
+            @test mod.add!(addition_destination, addition_a, addition_b) ===
+                  addition_destination
+            @test addition_destination.plan === nothing
+            assert_addition_result(addition_destination)
+            assert_addition_inputs_unchanged(addition_a, direct_a_before)
+            assert_addition_inputs_unchanged(addition_b, direct_b_before)
+
+            # Existing caller and destination plans remain available to their
+            # owners and untouched; the addition kernel does not consume them.
+            addition_a.plan = mod.CuModMatrix{Float64}(
+                fill(971.0, addition_shape);
+                modulus = addition_low_modulus,
+                mod = false,
+            )
+            addition_b.plan = mod.CuModMatrix{Float64}(
+                fill(972.0, addition_shape);
+                modulus = addition_low_modulus,
+                mod = false,
+            )
+            addition_destination.plan = mod.CuModMatrix{Float64}(
+                fill(973.0, addition_shape);
+                modulus = addition_low_modulus,
+                mod = false,
+            )
+            planned_a_before = addition_snapshot(addition_a)
+            planned_b_before = addition_snapshot(addition_b)
+            planned_destination_before = addition_snapshot(addition_destination)
+            planned_sum = addition_a + addition_b
+            @test planned_sum.plan === nothing
+            assert_addition_result(planned_sum)
+            @test mod.add!(addition_destination, addition_a, addition_b) ===
+                  addition_destination
+            @test addition_destination.plan === planned_destination_before.plan
+            @test Array(parent(addition_destination.plan)) ==
+                  planned_destination_before.plan_parent
+            assert_addition_result(addition_destination)
+            assert_addition_inputs_unchanged(addition_a, planned_a_before)
+            assert_addition_inputs_unchanged(addition_b, planned_b_before)
         end
     end
 end

@@ -148,6 +148,73 @@
           mod
     @test which(LinearAlgebra.mul!, Tuple{karatsuba_type,karatsuba_type,karatsuba_type}).module ===
           mod
+    allocating_karatsuba_type =
+        mod.KaratsubaArray{Float64,2,mod.CuModMatrix{Float64},mod.CuModMatrix{Float64}}
+    allocating_product_method =
+        which(Base.:*, Tuple{allocating_karatsuba_type,allocating_karatsuba_type})
+    @test allocating_product_method.module === mod
+    @test allocating_product_method ===
+          which(Base.:*, Tuple{mod.KaratsubaArray{Float64,2},mod.KaratsubaArray{Float64,2}})
+    cpu_karatsuba_a = mod.KaratsubaMatrix(
+        zeros(Float64, 1, 1),
+        zeros(Float64, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    cpu_karatsuba_b = mod.KaratsubaMatrix(
+        zeros(Float64, 1, 1),
+        zeros(Float64, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    @test_throws ArgumentError cpu_karatsuba_a * cpu_karatsuba_b
+
+    cpu_karatsuba_float32_a = mod.KaratsubaMatrix(
+        reshape(Float32[0], 1, 1),
+        reshape(Float32[2], 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    cpu_karatsuba_float32_b = mod.KaratsubaMatrix(
+        reshape(Float32[0], 1, 1),
+        reshape(Float32[2], 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    cpu_karatsuba_int64_a = mod.KaratsubaMatrix(
+        zeros(Int64, 1, 1),
+        zeros(Int64, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    cpu_karatsuba_int64_b = mod.KaratsubaMatrix(
+        zeros(Int64, 1, 1),
+        zeros(Int64, 1, 1);
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    @test which(
+        Base.:*,
+        Tuple{typeof(cpu_karatsuba_float32_a),typeof(cpu_karatsuba_float32_b)},
+    ).module === mod
+    @test which(
+        Base.:*,
+        Tuple{typeof(cpu_karatsuba_int64_a),typeof(cpu_karatsuba_int64_b)},
+    ).module === mod
+    @test which(Base.:*, Tuple{typeof(cpu_karatsuba_float32_a),typeof(cpu_karatsuba_a)}).module ===
+          mod
+    @test which(Base.:*, Tuple{typeof(cpu_karatsuba_a),typeof(cpu_karatsuba_float32_a)}).module ===
+          mod
+    @test_throws ArgumentError cpu_karatsuba_float32_a * cpu_karatsuba_float32_b
+    @test_throws ArgumentError cpu_karatsuba_int64_a * cpu_karatsuba_int64_b
+    @test_throws ArgumentError cpu_karatsuba_float32_a * cpu_karatsuba_a
+    @test_throws ArgumentError cpu_karatsuba_a * cpu_karatsuba_float32_a
     @test which(Base.copy, Tuple{karatsuba_type}).module === mod
     @test which(
         mod.karatsuba_gemv!,
@@ -789,6 +856,87 @@
         () -> LinearAlgebra.mul!(mul_dest, mul_left, mul_unplanned_right),
         "Must initialize plans first",
     )
+end
+
+@testset "CPU typed scalar Karatsuba negation helper" begin
+    mod = GPUFiniteFieldMatrices
+
+    function assert_negation_matches_oracle(
+        ::Type{T},
+        low::Int,
+        high::Int,
+        N1::Int,
+        N2::Int,
+        M::Int,
+    ) where {T<:AbstractFloat}
+        packed = BigInt(low) + BigInt(N1) * BigInt(high)
+        expected = Base.mod(-packed, BigInt(N1) * BigInt(N2))
+        actual = mod.karatsuba_negate_helper(T(low), T(high), N1, N2, M)
+
+        @test actual[1] isa T
+        @test actual[2] isa T
+        @test BigInt(actual[1]) == Base.mod(expected, BigInt(N1))
+        @test BigInt(actual[2]) == div(expected, BigInt(N1))
+    end
+
+    @test typeof(
+        @inferred(mod.karatsuba_negate_helper(Float32(0), Float32(0), 10, 10, 100)),
+    ) === Tuple{Float32,Float32}
+    @test typeof(
+        @inferred(mod.karatsuba_negate_helper(Float64(0), Float64(0), 10, 10, 100)),
+    ) === Tuple{Float64,Float64}
+
+    for T in (Float32, Float64)
+        N1 = 10
+        N2 = 10
+        M = 100
+
+        # Exhaust the canonical two-digit base-10 representation, including
+        # zero, low-digit borrows, high-digit wrap, and the final value 99.
+        for high = 0:(N2-1), low = 0:(N1-1)
+            assert_negation_matches_oracle(T, low, high, N1, N2, M)
+        end
+
+        # BigInt bounds are checked before converting any boundary fixture to
+        # Int or T. M^2 is the helper's largest modulus: it lands exactly on
+        # Float32's 2^24 integer limit and within 2^27 of Float64's 2^53 limit.
+        if T === Float32
+            N1_big = BigInt(64)
+            N2_big = BigInt(64)
+            exact_limit = BigInt(2)^24
+        else
+            N1_big = BigInt(5)
+            N2_big = BigInt(18_981_253)
+            exact_limit = BigInt(2)^53
+        end
+        M_big = N1_big * N2_big
+        M_squared_big = M_big^2
+        @test M_squared_big <= exact_limit
+        @test M_squared_big <= BigInt(typemax(Int))
+        if T === Float32
+            @test M_squared_big == exact_limit
+        else
+            @test exact_limit - M_squared_big < BigInt(2)^27
+        end
+
+        N1 = Int(N1_big)
+        N2 = Int(N2_big)
+        M = Int(M_big)
+        @test BigInt(M)^2 == M_squared_big
+        boundary_cases = (
+            (0, 0),
+            (1, 0),
+            (0, 1),
+            (N1 - 1, 0),
+            (0, N2 - 1),
+            (N1 - 1, N2 - 1),
+            (N1 - 1, 1),
+            (1, N2 - 1),
+        )
+        for (low, high) in boundary_cases
+            assert_negation_matches_oracle(T, low, high, N1, N2, M)
+        end
+    end
 end
 
 @testset "CPU constructor and exact Karatsuba conversion" begin
