@@ -10,7 +10,7 @@ function k_div_scalar!(out, A, s_inv, m)
     return
 end
 
-function div!(
+Base.@propagate_inbounds @inline function div!(
     C::CuModArray,
     A::CuModArray,
     s::Integer,
@@ -18,19 +18,24 @@ function div!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    @boundscheck _check_elementwise_compatible(C, A)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
     s_inv = mod_inv(s, m)
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s_inv)
-    len = length(parent(A))
-    blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_div_scalar!(parent(C), parent(A), sT, mT)
+    output = _logical_view(parent(C), size(C))
+    input = _logical_view(parent(A), size(A))
+    len = length(input)
+    if len > 0
+        blocks = min(cld(len, threads), 65535)
+        @cuda threads=threads blocks=blocks k_div_scalar!(output, input, sT, mT)
+    end
     return C
 end
 
-function /(A::CuModArray, s::Integer)
+Base.@propagate_inbounds @inline function /(A::CuModArray, s::Integer)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar(A)
     div!(C, A, s)
     return C

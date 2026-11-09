@@ -20,7 +20,7 @@ function k_mul_matrix!(out, A, B, m)
     return
 end
 
-function mul_elementwise!(
+Base.@propagate_inbounds @inline function mul_elementwise!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray,
@@ -29,15 +29,21 @@ function mul_elementwise!(
     threads::Int = DEFAULT_THREADS,
 )
     _validate_positive_modulus_override(modulus_override)
+    @boundscheck _check_elementwise_compatible(C, A, B)
     m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
-    len = length(parent(A))
-    blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_mul_matrix!(parent(C), parent(A), parent(B), mT)
+    output = _logical_view(parent(C), size(C))
+    left = _logical_view(parent(A), size(A))
+    right = _logical_view(parent(B), size(B))
+    len = length(left)
+    if len > 0
+        blocks = min(cld(len, threads), 65535)
+        @cuda threads=threads blocks=blocks k_mul_matrix!(output, left, right, mT)
+    end
     return C
 end
 
-function LinearAlgebra.mul!(
+Base.@propagate_inbounds @inline function LinearAlgebra.mul!(
     C::CuModArray,
     A::CuModArray,
     s::Number,
@@ -46,22 +52,29 @@ function LinearAlgebra.mul!(
     threads::Int = DEFAULT_THREADS,
 )
     _validate_positive_modulus_override(modulus_override)
+    @boundscheck _check_elementwise_compatible(C, A)
     m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s)
-    len = length(parent(A))
-    blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_mul_scalar!(parent(C), parent(A), sT, mT)
+    output = _logical_view(parent(C), size(C))
+    input = _logical_view(parent(A), size(A))
+    len = length(input)
+    if len > 0
+        blocks = min(cld(len, threads), 65535)
+        @cuda threads=threads blocks=blocks k_mul_scalar!(output, input, sT, mT)
+    end
     return C
 end
 
-function *(A::CuModArray, s::Number)
+Base.@propagate_inbounds @inline function *(A::CuModArray, s::Number)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar(A)
     mul!(C, A, s)
     return C
 end
 
-function *(s::Number, A::CuModArray)
+Base.@propagate_inbounds @inline function *(s::Number, A::CuModArray)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar(A)
     mul!(C, A, s)
     return C

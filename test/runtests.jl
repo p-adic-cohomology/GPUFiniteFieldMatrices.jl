@@ -15,6 +15,7 @@ using Test
 using CUDA
 using LinearAlgebra
 using BenchmarkTools
+using BitIntegers
 using Suppressor
 using Unroll
 using Aqua
@@ -22,7 +23,12 @@ using ExplicitImports
 using GPUFiniteFieldMatrices
 
 include("api_surface_test.jl")
+include("base_methods_test.jl")
+include("exceptions_test.jl")
 include("KaratsubaMatrix/api_regressions_test.jl")
+include("KaratsubaMatrix/basic_operations_test.jl")
+include("KaratsubaMatrix/allocations_test.jl")
+include("KaratsubaMatrix/raw_unary_test.jl")
 
 @testset "Stripe budget input validation" begin
     for input_bound in (1, 0, -1)
@@ -55,11 +61,15 @@ include("cuda_kernel_bindings_test.jl")
 include("CuModMatrix/display_test.jl")
 
 include("CuModMatrix/basic_operations_test.jl")
+include("CuModMatrix/modulus_caller_bindings_test.jl")
 include("CuModMatrix/inplace_operations_test.jl")
 include("CuModMatrix/matmul_operations_test.jl")
 include("CuModMatrix/benchmark_test.jl")
 include("CuModMatrix/stripe_mul_test.jl")
+include("CuModMatrix/empty_stripe_test.jl")
 include("CuModMatrix/cuda_blas_compat_test.jl")
+include("CuModMatrix/padding_contract_test.jl")
+include("CuModMatrix/elementwise_preflight_test.jl")
 include("CuModMatrix/allocations_test.jl")
 include("CuModMatrix/timing_test.jl")
 include("CuModMatrix/de_rham_test.jl")
@@ -111,7 +121,9 @@ if CUDA.functional()
         @testset "Triangular Inverse" begin
             test_triangular_destination_helpers()
             test_upper_triangular_inverse()
+            test_upper_wide_triangular_inverse()
             test_lower_triangular_inverse()
+            test_lower_wide_triangular_inverse()
         end
         @testset "De Rham" begin
             test_de_rham()
@@ -132,10 +144,17 @@ if CUDA.functional()
             test_matmul()
             test_cuda_blas_compatibility()
             test_stripe_mul()
+            test_empty_stripe_products()
         end
         test_karatsuba_api_regressions()
+        @testset "Karatsuba arithmetic" begin
+            test_karatsuba_basic_operations()
+            test_karatsuba_operations()
+            test_karatsuba_raw_unary()
+        end
         @testset "Allocations" begin
             test_allocations()
+            test_karatsuba_allocations()
         end
         @testset "Timings" begin
             test_timings()

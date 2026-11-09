@@ -42,43 +42,12 @@ function find_max_stripe_ops(type, input_bound; modulus = input_bound)
     return Int(min(safe_budget, typemax(Int)))
 end
 
-"""
-     unsafe_gemm!(transposeA::Bool,transposeB::Bool,alpha::Integer,A::CuModMatrix,B::CuModMatrix,beta::Integer,C::CuModMatrix)
-
-Light wrapper over the provided interface in CUDA.jl. 
-
-Does not keep track of overflow, so errors could happen if the matrices are too big.
-
-Also does not check to see if the modulus of the varios matrices agree
-
-Since we are working mod N, `alpha` and `beta` must be integers
-"""
-function unsafe_gemm!(
-    transposeA::Bool,
-    transposeB::Bool,
-    alpha::Integer,
-    A::CuModMatrix,
-    B::CuModMatrix,
-    beta::Integer,
-    C::CuModMatrix,
-)
-
-    tAchar = transposeA ? 'Y' : 'N'
-    tBchar = transposeB ? 'Y' : 'N'
-
-    #TODO: convert alpha and beta to floats?
-
-    _CUDA_BLAS.gemm!(tAchar, tBchar, alpha, parent(A), parent(B), beta, parent(C))
-
-    mod!(parent(C), parent(C), modulus(C))
-end
-
 @static if isdefined(CUDA, :CuRefValue)
     const _CUDA_CU_REF_VALUE = getfield(CUDA, :CuRefValue)
 elseif isdefined(CUDA, :CUDACore) && isdefined(CUDA.CUDACore, :CuRefValue)
     const _CUDA_CU_REF_VALUE = getfield(CUDA.CUDACore, :CuRefValue)
 else
-    error("the supported CUDA version does not expose its CuRef value type")
+    throw(ArgumentError("the supported CUDA version does not expose its CuRef value type"))
 end
 
 const _CUBLAS_SCALAR_PAIR{T} = Tuple{_CUDA_CU_REF_VALUE{T},_CUDA_CU_REF_VALUE{T}}
@@ -174,9 +143,18 @@ function _stripe_validate_raw(Cdata, Adata, Bdata, modulus, input_bound, max_ops
     return T
 end
 
-function _stripe_safe_chunk(::Type{T}, modulus, input_bound, max_ops) where {T}
+function _stripe_safe_chunk(
+    ::Type{T},
+    modulus,
+    input_bound,
+    max_ops;
+    empty_inner::Bool = false,
+) where {T}
     bound = input_bound === nothing ? modulus : input_bound
     safe_ops = find_max_stripe_ops(T, bound; modulus = modulus)
+    if empty_inner && max_ops === nothing
+        return max(safe_ops, 1)
+    end
     safe_ops >= 1 || throw(
         ArgumentError(
             "cannot perform one exact product contribution for input bound $bound and modulus $modulus with $T",
@@ -195,6 +173,12 @@ function _stripe_safe_chunk(::Type{T}, modulus, input_bound, max_ops) where {T}
     return chunk
 end
 
+function _stripe_require_same_device(output_device, left_device, right_device)
+    output_device == left_device == right_device ||
+        throw(ArgumentError("empty stripe product arrays must use the same CUDA device"))
+    return nothing
+end
+
 function _stripe_preflight(Cdata, Adata, Bdata, modulus, input_bound, max_ops)
     T = _stripe_validate_raw(Cdata, Adata, Bdata, modulus, input_bound, max_ops)
     _stripe_mightalias(Cdata, Adata) && throw(
@@ -207,7 +191,16 @@ function _stripe_preflight(Cdata, Adata, Bdata, modulus, input_bound, max_ops)
             "matrix product destination must not share storage with its right input",
         ),
     )
-    return _stripe_safe_chunk(T, modulus, input_bound, max_ops)
+    empty_inner = size(Adata, 2) == 0
+    chunk = _stripe_safe_chunk(T, modulus, input_bound, max_ops; empty_inner = empty_inner)
+    if empty_inner
+        _stripe_require_same_device(
+            CUDA.device(_stripe_storage_root(Cdata)),
+            CUDA.device(_stripe_storage_root(Adata)),
+            CUDA.device(_stripe_storage_root(Bdata)),
+        )
+    end
+    return chunk
 end
 
 @inline function _stripe_reduce!(Cdata::CuArray, modulus)
@@ -380,6 +373,12 @@ between reductions. When omitted, `max_ops` is derived from the effective input
 bound and reduction modulus. A supplied safe `max_ops` is used as given, while
 an unsafe value throws `ArgumentError`. An explicit `input_bound` may therefore
 require multiple stripes when the inner dimension exceeds the safe budget.
+
+An empty inner dimension produces a zero result after the usual argument,
+shape, storage, alias, and same-device checks. With the default max_ops, this
+also works when the derived exact-product budget is zero because no products are
+taken. An explicitly supplied max_ops must still fit the budget, including
+for an empty product; input bounds and moduli must remain valid.
 """
 function stripe_mul!(
     C::CuModMatrix,
@@ -390,16 +389,12 @@ function stripe_mul!(
     max_ops = nothing,
 )
     effective_modulus = _stripe_effective_modulus(modulus(C), modulus_override)
-    modulus(A) == modulus(B) || throw(
-        CuModArrayModulusMismatchException("Input matrices must have the same modulus N"),
-    )
-    size(A, 2) == size(B, 1) || throw(
-        CuModArraySizeMismatchException(
-            "Matrix dimensions do not match for multiplication",
-        ),
-    )
+    modulus(A) == modulus(B) ||
+        throw(ModulusMismatchError("Input matrices must have the same modulus N"))
+    size(A, 2) == size(B, 1) ||
+        throw(DimensionMismatch("Matrix dimensions do not match for multiplication"))
     size(C) == (size(A, 1), size(B, 2)) ||
-        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
+        throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
     eltype(parent(A)) === eltype(parent(B)) === eltype(parent(C)) ||
         throw(ArgumentError("matrix product element types do not match"))
     max_ops === nothing ||
@@ -427,7 +422,9 @@ end
 """
 Multiply a matrix and vector into `z`, preserving its stored modulus. A supplied
 `modulus_override` must be positive. `respect_max_ops=false` recomputes the safe
-stripe budget from `input_bound`.
+stripe budget from `input_bound`. An empty inner dimension produces zeros after
+validation, even when the default derived budget is zero. Explicit `max_ops`
+values are still checked against that budget when `respect_max_ops=true`.
 """
 function stripe_mul!(
     z::CuModVector,
@@ -439,22 +436,19 @@ function stripe_mul!(
     respect_max_ops::Bool = true,
 )
     effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
-    modulus(A) == modulus(x) || throw(
-        CuModArrayModulusMismatchException(
-            "Matrix and vector inputs must have the same modulus N",
-        ),
-    )
+    modulus(A) == modulus(x) ||
+        throw(ModulusMismatchError("Matrix and vector inputs must have the same modulus N"))
     modulus_override === nothing &&
         modulus(z) != modulus(A) &&
         throw(
-            CuModArrayModulusMismatchException(
+            ModulusMismatchError(
                 "Destination must have the input modulus when no override is supplied",
             ),
         )
     size(A, 2) == length(x) ||
-        throw(CuModArraySizeMismatchException("Matrix and vector dimensions do not match"))
+        throw(DimensionMismatch("Matrix and vector dimensions do not match"))
     length(z) == size(A, 1) ||
-        throw(CuModArraySizeMismatchException("Output vector has incorrect length"))
+        throw(DimensionMismatch("Output vector has incorrect length"))
     eltype(parent(A)) === eltype(parent(x)) === eltype(parent(z)) ||
         throw(ArgumentError("matrix-vector product element types do not match"))
 
@@ -490,14 +484,10 @@ function stripe_mul(
     max_ops = nothing,
 )
     effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
-    modulus(A) == modulus(B) || throw(
-        CuModArrayModulusMismatchException("Input matrices must have the same modulus N"),
-    )
-    size(A, 2) == size(B, 1) || throw(
-        CuModArraySizeMismatchException(
-            "Matrix dimensions do not match for multiplication",
-        ),
-    )
+    modulus(A) == modulus(B) ||
+        throw(ModulusMismatchError("Input matrices must have the same modulus N"))
+    size(A, 2) == size(B, 1) ||
+        throw(DimensionMismatch("Matrix dimensions do not match for multiplication"))
     C = zeros(
         CuModMatrix{eltype(parent(A))},
         size(A, 1),
@@ -515,13 +505,10 @@ function stripe_mul(
     max_ops = nothing,
 )
     effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
-    modulus(A) == modulus(x) || throw(
-        CuModArrayModulusMismatchException(
-            "Matrix and vector inputs must have the same modulus N",
-        ),
-    )
+    modulus(A) == modulus(x) ||
+        throw(ModulusMismatchError("Matrix and vector inputs must have the same modulus N"))
     size(A, 2) == length(x) ||
-        throw(CuModArraySizeMismatchException("Matrix and vector dimensions do not match"))
+        throw(DimensionMismatch("Matrix and vector dimensions do not match"))
     z = zeros(CuModVector{eltype(parent(A))}, size(A, 1); modulus = effective_modulus)
     return stripe_mul!(z, A, x; modulus_override = effective_modulus, input_bound, max_ops)
 end

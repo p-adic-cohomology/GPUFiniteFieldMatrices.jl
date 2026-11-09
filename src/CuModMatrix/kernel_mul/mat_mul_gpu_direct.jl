@@ -17,7 +17,7 @@ function _stripe_mul(
         throw(ArgumentError("matrix product element types do not match"))
     bound = input_bound === nothing ? modulus : input_bound
     find_max_stripe_ops(eltype(Adata), bound; modulus) >= 1 || throw(
-        InverseOverflowError(
+        OverflowError(
             "modulus $modulus is too large for exact multiplication with $(eltype(Adata))",
         ),
     )

@@ -51,12 +51,12 @@ function test_rectangular_rank_and_failures()
     Awide = CuModMatrix([1 2 3 4; 2 4 6 8]; modulus = p)
     Fwide = pluq(Awide)
     @test Fwide.rank == 1
-    @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException right_inverse(Awide)
+    @test_throws LinearAlgebra.SingularException right_inverse(Awide)
 
     Atall = CuModMatrix([1 2; 2 4; 3 6]; modulus = p)
     Ftall = pluq(Atall)
     @test Ftall.rank == 1
-    @test_throws GPUFiniteFieldMatrices.InverseNotDefinedException left_inverse(Atall)
+    @test_throws LinearAlgebra.SingularException left_inverse(Atall)
 
     # A full-row-rank matrix may have an all-zero leading column.  The blocked
     # device panel stops there and `pluq` must restart from its saved input

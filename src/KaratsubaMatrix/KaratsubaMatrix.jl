@@ -30,11 +30,11 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
         isconcretetype(P) ||
             throw(ArgumentError("Karatsuba plans require a concrete storage type"))
         if size(A) != size(B)
-            error("Dimensions of matrices must match")
+            throw(DimensionMismatch("Dimensions of matrices must match"))
         end
         #=
         if !(all(x->x<N,A) && all(x->x<N,B))
-            error("Cannot have entries larger than modulus in matrices")
+            throw(ArgumentError("Cannot have entries larger than modulus in matrices"))
         end
         =#
         N1, N2, M = _karatsuba_parameters(
@@ -48,7 +48,7 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
             throw(ArgumentError("Karatsuba moduli must be positive"))
         bits = T <: AbstractFloat ? get_bits(T) - 2 : get_bits(T)
         if M >= BigInt(2)^bits
-            error("Modulus too large")
+            throw(ArgumentError("Modulus too large"))
         end
 
         return new{T,D,S,P}(A, B, nothing, N1, N2, M)
@@ -170,7 +170,7 @@ end
 
 function _karatsuba_checked_sum_bound(a::Int, b::Int, label::AbstractString)
     value = BigInt(a) + BigInt(b)
-    value <= typemax(Int) || throw(ArgumentError("$label overflows Int"))
+    value <= typemax(Int) || throw(OverflowError("$label overflows Int"))
     # The operands are strictly below a and b, so a sum bound of 2^53 still
     # promises actual Float64 integers no larger than 2^53 - 1.
     value <= _KARATSUBA_FLOAT64_EXACT_BOUND ||
@@ -202,7 +202,7 @@ function _karatsuba_matmul_product_plan(
         (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high),
     ) || throw(ArgumentError("Karatsuba split moduli must be positive"))
     input_low_a == input_low_b || throw(
-        ArgumentError(
+        ModulusMismatchError(
             "three-product Karatsuba matrix multiplication requires a common low modulus for A and B",
         ),
     )
@@ -307,6 +307,27 @@ function _karatsuba_prepare_gemm_views(
     )
 end
 
+function _karatsuba_require_same_device(data)
+    expected_device = CUDA.device(_stripe_storage_root(data.c_low))
+    for plane in (
+        data.c_high,
+        data.c_plan,
+        data.a_low,
+        data.a_high,
+        data.a_plan,
+        data.b_low,
+        data.b_high,
+        data.b_plan,
+    )
+        CUDA.device(_stripe_storage_root(plane)) == expected_device || throw(
+            ArgumentError(
+                "Karatsuba matrix components and plans must reside on the same CUDA device",
+            ),
+        )
+    end
+    return nothing
+end
+
 function _karatsuba_preflight_stripe_product(Cdata, Adata, Bdata, product)
     return _stripe_preflight(
         Cdata,
@@ -336,6 +357,8 @@ Multiply the Karatsuba matrices A and B, storing the product in C. The
 three matrices must share the same representation modulus M, and A's column
 count must match B's row count. C must have dimensions (size(A, 1), size(B, 2));
 the Karatsuba shape check rejects mismatches before any plan or device writes.
+All nine input, output, and plan storage roots must reside on one CUDA device;
+this is checked before the staging kernel can write either input plan.
 Call initialize_plan! on all
 three matrices before multiplying. A and B must share input low radix R; C
 may use an independent low radix R_C. The result components represent the
@@ -351,19 +374,19 @@ only.
 """
 function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
-        error("Matrices must have the same modulus m")
+        throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
     if size(low_part(A))[2] != size(low_part(B))[1]
-        error("Matrix dimensions don't work for multiplication")
+        throw(DimensionMismatch("Matrix dimensions don't work for multiplication"))
     end
     if (A.plan == nothing) || (B.plan == nothing) || (C.plan == nothing)
-        error("Must initialize plans first")
+        throw(ArgumentError("Must initialize plans first"))
     end
     if eltype(parent(low_part(A))) != Float64
-        error("Not implemented for non-Float64 entries")
+        throw(ArgumentError("Not implemented for non-Float64 entries"))
     end
     size(low_part(C)) == (size(low_part(A), 1), size(low_part(B), 2)) ||
-        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
+        throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
     data = _karatsuba_prepare_gemm_views(A, B, C)
     products = _karatsuba_matmul_product_plan(
         low_modulus(A),
@@ -389,6 +412,9 @@ function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaAr
         data.b_high,
         products.high,
     )
+    # The stripe preflights validate each product group independently. The
+    # staging and recombination kernels combine all nine storage roots.
+    _karatsuba_require_same_device(data)
 
     rows_a, cols_a = size(low_part(A))
     rows_b, cols_b = size(low_part(B))
@@ -485,69 +511,156 @@ const nKMuls = 3
 
 
 # the stuff in this function should apply to the general mul!, but with gemm instead of gemv
+@inline _karatsuba_gemv_whole_cuarray_parent(A::CUDA.CuArray) = true
+
+@inline function _karatsuba_gemv_whole_cuarray_parent(A::CuModArray)
+    storage = parent(A)
+    return storage isa CUDA.CuArray && size(storage) == size(A)
+end
+
+@inline _karatsuba_gemv_whole_cuarray_parent(::AbstractArray) = false
+
+@inline function _karatsuba_gemv_batch_containers_supported(mats, vecs, targets)
+    return length(mats) == 3 &&
+           length(vecs) == 3 &&
+           length(targets) == 3 &&
+           mats isa Vector{<:CUDA.CuArray} &&
+           vecs isa Vector{<:CUDA.CuArray} &&
+           targets isa Vector{<:CUDA.CuArray} &&
+           isconcretetype(eltype(mats)) &&
+           isconcretetype(eltype(vecs)) &&
+           isconcretetype(eltype(targets)) &&
+           ndims(eltype(mats)) == 2 &&
+           ndims(eltype(vecs)) == 1 &&
+           ndims(eltype(targets)) == 1 &&
+           eltype(eltype(mats)) === eltype(eltype(vecs)) &&
+           eltype(eltype(mats)) === eltype(eltype(targets))
+end
+
 function karatsuba_gemv!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(C))
-        error("Matrices must have the same modulus m")
+        throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
     if size(low_part(A))[2] != size(low_part(B))[1]
-        error("Matrix dimensions don't work for multiplication")
+        throw(DimensionMismatch("Matrix dimensions don't work for multiplication"))
     end
     if (A.plan == nothing) || (B.plan == nothing) || (C.plan == nothing)
-        error("Must initialize plans first")
+        throw(ArgumentError("Must initialize plans first"))
     end
     if eltype(parent(low_part(A))) != Float64
-        error("Not implemented for non-Float64 entries")
+        throw(ArgumentError("Not implemented for non-Float64 entries"))
     end
     # TOD0: enable this
     # maxN = max(low_modulus(A),high_modulus(A))
     # if find_max_stripe_ops(eltype(parent(low_part(A))), maxN) < size(A,1)
-    #     error("Matrix is too big for a single matmul, this is currently not implemented")
+    #     throw(ArgumentError("Matrix is too big for a single matmul, this is currently not implemented"))
     # end
 
     tw = TILE_WIDTH
+    rows, cols = size(low_part(A))
+    vector_length = length(low_part(B))
+    if rows == 0
+        return C
+    elseif cols == 0
+        fill!(_logical_view(parent(low_part(C)), size(low_part(C))), 0.0)
+        fill!(_logical_view(parent(high_part(C)), size(high_part(C))), 0.0)
+        return C
+    end
 
-    totalsize = length(parent(low_part(A)))
-
-    threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
-        parent(A.plan),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        parent(B.plan),
-        parent(low_part(B)),
-        parent(high_part(B)),
-        low_modulus(A),
-    )
+    logical_count = max(length(A.plan), length(B.plan))
+    if logical_count > 0
+        threads = tw
+        blocks = cld(logical_count, threads)
+        @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
+            _logical_view(parent(A.plan), size(A.plan)),
+            _logical_view(parent(low_part(A)), size(low_part(A))),
+            _logical_view(parent(high_part(A)), size(high_part(A))),
+            _logical_view(parent(B.plan), size(B.plan)),
+            _logical_view(parent(low_part(B)), size(low_part(B))),
+            _logical_view(parent(high_part(B)), size(high_part(B))),
+            low_modulus(A),
+        )
+    end
     # add!(A.plan,low_part(A),high_part(A); modulus_override=2*low_modulus(A))
     # add!(B.plan,low_part(B),high_part(B); modulus_override=2*low_modulus(B))
 
     (zero_ptr, one_ptr) = cublas_scalars_f64()
 
 
-    targets = [parent(low_part(C)), parent(high_part(C)), parent(B.plan)]
-    mats = [parent(low_part(A)), parent(A.plan), parent(high_part(A))]
-    vecs = [parent(low_part(B)), parent(B.plan), parent(high_part(B))]
-    _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
+    # C.plan is the independent, output-sized destination for the third
+    # product. B.plan remains the second product's input sum.
+    Cplan_output = _logical_view(parent(C.plan), size(C.plan))
+    matrix_parents = (parent(low_part(A)), parent(A.plan), parent(high_part(A)))
+    vector_parents = (parent(low_part(B)), parent(B.plan), parent(high_part(B)))
+    target_parents = (parent(low_part(C)), parent(high_part(C)), parent(C.plan))
+    whole_parent_operands =
+        _karatsuba_gemv_whole_cuarray_parent(low_part(A)) &&
+        _karatsuba_gemv_whole_cuarray_parent(A.plan) &&
+        _karatsuba_gemv_whole_cuarray_parent(high_part(A)) &&
+        _karatsuba_gemv_whole_cuarray_parent(low_part(B)) &&
+        _karatsuba_gemv_whole_cuarray_parent(B.plan) &&
+        _karatsuba_gemv_whole_cuarray_parent(high_part(B)) &&
+        _karatsuba_gemv_whole_cuarray_parent(low_part(C)) &&
+        _karatsuba_gemv_whole_cuarray_parent(high_part(C)) &&
+        _karatsuba_gemv_whole_cuarray_parent(C.plan)
+    if whole_parent_operands
+        mats = collect(matrix_parents)
+        vecs = collect(vector_parents)
+        targets = collect(target_parents)
+        batch_supported = _karatsuba_gemv_batch_containers_supported(mats, vecs, targets)
+        if batch_supported
+            lda = stride(mats[1], 2)
+            incx = stride(vecs[1], 1)
+            incy = stride(targets[1], 1)
+            batch_supported =
+                all(stride(matrix, 2) == lda for matrix in mats) &&
+                all(stride(vector, 1) == incx for vector in vecs) &&
+                all(stride(target, 1) == incy for target in targets)
+        end
+        if batch_supported
+            _CUDA_BLAS.gemv_batched!('N', one_ptr, mats, vecs, zero_ptr, targets)
+        else
+            for i in eachindex(mats)
+                _CUDA_BLAS.gemv!('N', one_ptr, mats[i], vecs[i], zero_ptr, targets[i])
+            end
+        end
+    else
+        mats = [
+            _logical_view(parent(low_part(A)), size(low_part(A))),
+            _logical_view(parent(A.plan), size(A.plan)),
+            _logical_view(parent(high_part(A)), size(high_part(A))),
+        ]
+        vecs = [
+            _logical_view(parent(low_part(B)), size(low_part(B))),
+            _logical_view(parent(B.plan), size(B.plan)),
+            _logical_view(parent(high_part(B)), size(high_part(B))),
+        ]
+        targets = [
+            _logical_view(parent(low_part(C)), size(low_part(C))),
+            _logical_view(parent(high_part(C)), size(high_part(C))),
+            Cplan_output,
+        ]
+        for i in eachindex(mats)
+            _CUDA_BLAS.gemv!('N', one_ptr, mats[i], vecs[i], zero_ptr, targets[i])
+        end
+    end
 
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(low_part(A)),parent(low_part(B)),zero_ptr,parent(low_part(C)))
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(A.plan),parent(B.plan),zero_ptr,parent(high_part(C)))
     # CUDA.CUBLAS.gemv!('N',one_ptr,parent(high_part(A)),parent(high_part(B)),zero_ptr,parent(B.plan))
 
-    tw = TILE_WIDTH
-
-    totalsize = length(parent(low_part(C)))
-
-    threads = tw
-    blocks = totalsize ÷ tw
-    @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_2!(
-        parent(low_part(C)),
-        parent(high_part(C)),
-        parent(B.plan),
-        low_modulus(C),
-        high_modulus(C),
-    )
+    totalsize = rows
+    if totalsize > 0
+        threads = tw
+        blocks = cld(totalsize, threads)
+        @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_2!(
+            _logical_view(parent(low_part(C)), size(low_part(C))),
+            _logical_view(parent(high_part(C)), size(high_part(C))),
+            Cplan_output,
+            low_modulus(C),
+            high_modulus(C),
+        )
+    end
 
 
     C
@@ -626,6 +739,8 @@ _karatsuba_gpu_storage(A::CuModArray) = parent(A)
 _karatsuba_gpu_storage(A::CUDA.CuArray) = A
 _karatsuba_gpu_strides(A::CuModArray) = strides(parent(A))
 _karatsuba_gpu_strides(A::CUDA.CuArray) = strides(A)
+_karatsuba_logical_view(A::CuModArray) = _logical_view(parent(A), size(A))
+_karatsuba_logical_view(A::CUDA.CuArray) = A
 
 function _karatsuba_gpu_float_precision(::Type{Float16})
     11
@@ -1246,30 +1361,31 @@ end
 
 function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
-        error("Matrices must have the same modulus m")
+        throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
     if (size(low_part(A)) != size(low_part(B))) ||
        (size(low_part(A)) != (size(low_part(K))))
-        error("Matrix dimensions must match")
+        throw(DimensionMismatch("Matrix dimensions must match"))
     end
 
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_add_kernel!(
-        parent(low_part(K)),
-        parent(high_part(K)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        parent(low_part(B)),
-        parent(high_part(B)),
-        low_modulus(A),
-        high_modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_add_kernel!(
+            _karatsuba_logical_view(low_part(K)),
+            _karatsuba_logical_view(high_part(K)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
+            _karatsuba_logical_view(low_part(B)),
+            _karatsuba_logical_view(high_part(B)),
+            low_modulus(A),
+            high_modulus(A),
+        )
+    end
 
 
     K
@@ -1283,13 +1399,13 @@ end
 #"""
 #function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
 #    if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
-#        error("Matrices must have the same modulus m")
+#        throw(ModulusMismatchError("Matrices must have the same modulus m"))
 #    end
 #    if (size(low_part(A)) != size(low_part(B))) || (size(low_part(A)) != (size(low_part(K))))
-#        error("Matrix dimensions must match")
+#        throw(DimensionMismatch("Matrix dimensions must match"))
 #    end
 #    if (A.plan == nothing) || (K.plan == nothing)
-#        error("Must initialize plans first before using fallback implementation")
+#        throw(ArgumentError("Must initialize plans first before using fallback implementation"))
 #    end
 #    #=
 #    high_part(K) .= mod.(trunc.((low_part(A)+low_part(B))./modulus(A)),high_modulus(A))
@@ -1322,11 +1438,11 @@ end
 
 function sub!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
-        error("Matrices must have the same modulus m")
+        throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
     if (size(low_part(A)) != size(low_part(B))) ||
        (size(low_part(A)) != (size(low_part(K))))
-        error("Matrix dimensions must match")
+        throw(DimensionMismatch("Matrix dimensions must match"))
     end
 
     #=
@@ -1349,22 +1465,23 @@ function sub!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
     =#
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_sub_kernel!(
-        parent(low_part(K)),
-        parent(high_part(K)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        parent(low_part(B)),
-        parent(high_part(B)),
-        low_modulus(A),
-        high_modulus(A),
-        modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_sub_kernel!(
+            _karatsuba_logical_view(low_part(K)),
+            _karatsuba_logical_view(high_part(K)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
+            _karatsuba_logical_view(low_part(B)),
+            _karatsuba_logical_view(high_part(B)),
+            low_modulus(A),
+            high_modulus(A),
+            modulus(A),
+        )
+    end
 
     # negate!(K,B)
     # add!(K,K,A)
@@ -1373,10 +1490,10 @@ end
 
 function scalar_multiply!(B::KaratsubaArray, A::KaratsubaArray, s::Number)
     if modulus(A) != modulus(B)
-        error("Matrices must have the same modulus m")
+        throw(ModulusMismatchError("Matrices must have the same modulus m"))
     end
     if size(low_part(A)) != size(low_part(B))
-        error("Matrix dimensions must match")
+        throw(DimensionMismatch("Matrix dimensions must match"))
     end
 
     # LinearAlgebra.mul!(high_part(B),low_part(A),s,low_modulus(A)^2)
@@ -1387,20 +1504,21 @@ function scalar_multiply!(B::KaratsubaArray, A::KaratsubaArray, s::Number)
 
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_scalar_multiply_kernel!(
-        parent(low_part(B)),
-        parent(high_part(B)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        s,
-        low_modulus(A),
-        high_modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_scalar_multiply_kernel!(
+            _karatsuba_logical_view(low_part(B)),
+            _karatsuba_logical_view(high_part(B)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
+            s,
+            low_modulus(A),
+            high_modulus(A),
+        )
+    end
 
     #=
     high_part(B) .= mod.(trunc.((s*low_part(A))/modulus(A)),high_modulus(A))
@@ -1436,20 +1554,21 @@ end
 function negate!(K::KaratsubaArray, A::KaratsubaArray)
     tw = TILE_WIDTH
 
-    totalsize = length(parent(low_part(A)))
+    totalsize = length(_karatsuba_logical_view(low_part(A)))
 
     threads = tw
-    blocks = totalsize ÷ tw
-
-    @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(
-        parent(low_part(K)),
-        parent(high_part(K)),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        low_modulus(A),
-        high_modulus(A),
-        modulus(A),
-    )
+    if totalsize > 0
+        blocks = cld(totalsize, tw)
+        @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(
+            _karatsuba_logical_view(low_part(K)),
+            _karatsuba_logical_view(high_part(K)),
+            _karatsuba_logical_view(low_part(A)),
+            _karatsuba_logical_view(high_part(A)),
+            low_modulus(A),
+            high_modulus(A),
+            modulus(A),
+        )
+    end
 
 
 
@@ -1488,7 +1607,7 @@ function Base.copy(A::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
         copy(high_part(A));
         low_modulus = copy(low_modulus(A)),
         high_modulus = copy(high_modulus(A)),
-        modulus = low_modulus(A) * high_modulus(A),
+        modulus = modulus(A),
     )
     if !(A.plan==nothing)
         initialize_plan!(B)

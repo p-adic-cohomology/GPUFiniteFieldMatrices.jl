@@ -66,6 +66,7 @@ const DEBUG = false
     include("CuModMatrix/inverse/validation.jl")
     include("CuModMatrix/inverse/api.jl")
     include("CuModMatrix/inverse/batched_tiny.jl")
+    include("base_methods.jl")
 
 end # @stable default_mode = "disable"
 
@@ -81,7 +82,7 @@ export right_inverse, left_inverse, change_modulus, identity_matrix
 export elementwise_multiply!, scalar_add!, scalar_sub!, mod_elements!
 
 public add!, sub!, neg!, zero!
-public zeros, rand, similar_with_modulus, change_modulus_no_alloc!, mod_inv
+public zeros, rand, similar_with_modulus, change_modulus!!, mod_inv
 public karatsuba_gemv!
 public inverse_pluq
 public pluq_batched_4x4!, pluq_batched_8x8!, pluq_batched_16x16!, pluq_batched_32x32!
@@ -90,5 +91,6 @@ public inverse_batched_4x4!,
 public pluq_batched_NxN!
 public upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
 public stripe_mul, stripe_mul!, TILE_WIDTH
+public ModulusMismatchError
 
 end

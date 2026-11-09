@@ -1,3 +1,5 @@
+BitIntegers.@define_integers 24
+
 @testset "CPU API surface and dispatch" begin
     mod = GPUFiniteFieldMatrices
     matrix_type = mod.CuModMatrix{Float32}
@@ -47,7 +49,7 @@
         :zeros,
         :rand,
         :similar_with_modulus,
-        :change_modulus_no_alloc!,
+        :change_modulus!!,
         :mod_inv,
         :karatsuba_gemv!,
         :inverse_pluq,
@@ -65,6 +67,7 @@
         :stripe_mul,
         :stripe_mul!,
         :TILE_WIDTH,
+        :ModulusMismatchError,
     )
     @test all(name -> isdefined(mod, name), public_names)
     @test all(name -> Base.ispublic(mod, name), public_names)
@@ -479,7 +482,14 @@
                   BigInt(2)^53 - 1
         end
 
-        @test_throws ArgumentError mod._karatsuba_matmul_product_plan(13, 7, 12, 5, 17, 11)
+        @test_throws mod.ModulusMismatchError mod._karatsuba_matmul_product_plan(
+            13,
+            7,
+            12,
+            5,
+            17,
+            11,
+        )
 
         oracle_radix = 13
         oracle_high_a = 7
@@ -573,7 +583,14 @@
         second_exact *= second_case.b_low + 3 * second_case.b_high
         @test first_products == second_products == (0, 1, 0)
         @test (first_exact, second_exact) == (3, 2)
-        @test_throws ArgumentError mod._karatsuba_matmul_product_plan(3, 5, 5, 7, 2, 11)
+        @test_throws mod.ModulusMismatchError mod._karatsuba_matmul_product_plan(
+            3,
+            5,
+            5,
+            7,
+            2,
+            11,
+        )
 
         # The former unchecked R*p2 boundary exceeds Float64's exact integer
         # range. Double-and-add modular multiplication and recombination stay
@@ -758,46 +775,87 @@
     @test high_part(Kcopy) == high_part(K)
     @test low_part(Kcopy) !== low_part(K)
 
-    # Characterize the documented legacy changed-M behavior; this does not
-    # assert metadata preservation or repair Base.copy.
-    legacy_data1 = [1 2; 0 1]
-    legacy_data2 = zeros(Int, 2, 2)
-    expected_legacy_data1 = copy(legacy_data1)
-    expected_legacy_data2 = copy(legacy_data2)
-    legacy_source = karatsuba_type(
-        legacy_data1,
-        legacy_data2;
-        low_modulus = 3,
-        high_modulus = 3,
-        modulus = 3,
-    )
-    legacy_copy = copy(legacy_source)
-    @test GPUFiniteFieldMatrices.modulus(legacy_copy) == 9
-    @test GPUFiniteFieldMatrices.modulus(legacy_copy) !=
-          GPUFiniteFieldMatrices.modulus(legacy_source)
-    @test GPUFiniteFieldMatrices.modulus(legacy_source) == 3
-    @test low_part(legacy_source) == expected_legacy_data1
-    @test high_part(legacy_source) == expected_legacy_data2
-    @test low_part(legacy_copy) == expected_legacy_data1
-    @test high_part(legacy_copy) == expected_legacy_data2
-    @test low_part(legacy_copy) !== low_part(legacy_source)
-    @test high_part(legacy_copy) !== high_part(legacy_source)
-    low_part(legacy_source)[1, 1] = -1
-    high_part(legacy_source)[1, 1] = -1
-    @test low_part(legacy_copy) == expected_legacy_data1
-    @test high_part(legacy_copy) == expected_legacy_data2
+    @testset "Karatsuba Base.copy preserves metadata and CPU component storage" begin
+        function check_cpu_copy(source, expected_moduli, split_capacity)
+            @test source.plan === nothing
+            source_low_before = copy(low_part(source))
+            source_high_before = copy(high_part(source))
+            represented_before = mod.from_karatsuba(eltype(source), source)
+
+            copied = copy(source)
+            @test copied !== source
+            @test typeof(copied) === typeof(source)
+            @test typeof(low_part(copied)) === typeof(low_part(source))
+            @test typeof(high_part(copied)) === typeof(high_part(source))
+            @test low_part(copied) isa Array
+            @test high_part(copied) isa Array
+            @test low_part(copied) !== low_part(source)
+            @test high_part(copied) !== high_part(source)
+            @test size(copied) == size(source)
+            @test eltype(copied) === eltype(source)
+            @test (
+                mod.low_modulus(copied),
+                mod.high_modulus(copied),
+                mod.modulus(copied),
+            ) == expected_moduli
+            @test mod.low_modulus(copied) * mod.high_modulus(copied) == split_capacity
+            @test copied.plan === nothing
+            @test low_part(copied) == source_low_before
+            @test high_part(copied) == source_high_before
+            @test mod.from_karatsuba(eltype(copied), copied) == represented_before
+
+            first = firstindex(source_low_before)
+            low_part(source)[first] += one(eltype(source))
+            high_part(source)[first] += one(eltype(source))
+            @test low_part(copied) == source_low_before
+            @test high_part(copied) == source_high_before
+
+            source_low_after = copy(low_part(source))
+            source_high_after = copy(high_part(source))
+            low_part(copied)[first] += one(eltype(copied))
+            high_part(copied)[first] += one(eltype(copied))
+            @test low_part(source) == source_low_after
+            @test high_part(source) == source_high_after
+        end
+
+        coherent_matrix = mod.KaratsubaArray{Int,2}(
+            Int[1 2; 3 4],
+            Int[0 1; 1 0];
+            low_modulus = 3,
+            high_modulus = 5,
+            modulus = 15,
+        )
+        converted_matrix = mod.to_karatsuba(Int, Int[0 1; 2 3]; modulus = 3)
+        coherent_vector = mod.KaratsubaArray{Float64,1}(
+            Float64[1, 2, 0, 1],
+            Float64[0, 1, 1, 0];
+            low_modulus = 3,
+            high_modulus = 5,
+            modulus = 15,
+        )
+        converted_vector = mod.to_karatsuba(Float64, Float64[0, 1, 2, 3]; modulus = 3)
+
+        check_cpu_copy(coherent_matrix, (3, 5, 15), 15)
+        check_cpu_copy(converted_matrix, (3, 3, 3), 9)
+        check_cpu_copy(coherent_vector, (3, 5, 15), 15)
+        check_cpu_copy(converted_vector, (3, 3, 3), 9)
+        @test mod.modulus(converted_matrix) !=
+              mod.low_modulus(converted_matrix) * mod.high_modulus(converted_matrix)
+        @test mod.modulus(converted_vector) !=
+              mod.low_modulus(converted_vector) * mod.high_modulus(converted_vector)
+    end
 
     # The explicit mul! checks run before CUDA work and can be checked on CPU.
-    assert_guard_error_message = function (operation, expected_message)
+    assert_guard_error_message = function (operation, expected_type, expected_message)
         err = try
             operation()
             nothing
         catch caught
             caught
         end
-        @test err isa ErrorException
-        if err isa ErrorException
-            @test sprint(showerror, err) == expected_message
+        @test err isa expected_type
+        if err isa expected_type
+            @test occursin(expected_message, sprint(showerror, err))
         end
     end
     mul_left = mod.KaratsubaArray{Float64,2}(
@@ -823,6 +881,7 @@
     )
     assert_guard_error_message(
         () -> LinearAlgebra.mul!(mul_dest, mul_left, mul_right_wrong_modulus),
+        mod.ModulusMismatchError,
         "Matrices must have the same modulus m",
     )
 
@@ -842,6 +901,7 @@
     )
     assert_guard_error_message(
         () -> LinearAlgebra.mul!(mul_dest, mul_left_wrong_shape, mul_right_wrong_shape),
+        DimensionMismatch,
         "Matrix dimensions don't work for multiplication",
     )
 
@@ -854,6 +914,7 @@
     )
     assert_guard_error_message(
         () -> LinearAlgebra.mul!(mul_dest, mul_left, mul_unplanned_right),
+        ArgumentError,
         "Must initialize plans first",
     )
 end
@@ -1100,6 +1161,114 @@ end
     @test !isdefined(mod, :KaratsubaZeros)
 end
 
+@testset "Fixed-width precision budgets" begin
+    mod = GPUFiniteFieldMatrices
+    type_budgets = (
+        (Float16, 11, 9),
+        (Float32, 24, 22),
+        (Float64, 53, 51),
+        (Int8, 7, 7),
+        (Int16, 15, 15),
+        (Int32, 31, 31),
+        (Int64, 63, 63),
+        (Int128, 127, 127),
+        (UInt8, 8, 8),
+        (UInt16, 16, 16),
+        (UInt32, 32, 32),
+        (UInt64, 64, 64),
+        (UInt128, 128, 128),
+        (BitIntegers.Int256, 255, 255),
+        (BitIntegers.UInt256, 256, 256),
+        (Int24, 23, 23),
+        (UInt24, 24, 24),
+    )
+
+    expected_karatsuba =
+        (bits, n) -> begin
+            bound = ((BigInt(1) << bits) - 1) ÷ BigInt(n)^2 - 1
+            Int(max(1, min(bound, BigInt(typemax(Int)))))
+        end
+    expected_cumod = (bits, n) -> begin
+        maxterm = BigInt(max(n - 1, 1))^2
+        value = ((BigInt(1) << bits) - 1) ÷ maxterm - 1
+        Int(max(0, min(value, BigInt(typemax(Int)))))
+    end
+
+    for (T, shared_bits, karatsuba_bits) in type_budgets
+        @test mod.get_bits(T) == shared_bits
+        @test mod.find_max_ops_karatsuba(T, 4) == expected_karatsuba(karatsuba_bits, 4)
+        @test mod.find_max_ops(T, 5) == expected_cumod(shared_bits, 5)
+
+        low = fill(zero(T), 1, 1)
+        high = fill(one(T), 1, 1)
+        wrapped =
+            mod.KaratsubaMatrix(low, high; low_modulus = 2, high_modulus = 3, modulus = 5)
+        @test low_part(wrapped) === low
+        @test high_part(wrapped) === high
+        @test wrapped.plan === nothing
+        @test typeof(wrapped).parameters[3] === Matrix{T}
+        @test typeof(wrapped).parameters[4] === mod.CuModArray{T,2}
+    end
+
+    @test mod.get_bits(Int) == 8 * sizeof(Int) - 1
+    @test mod.get_bits(UInt) == 8 * sizeof(UInt)
+    @test mod.find_max_ops_karatsuba(Int64, 2) == expected_karatsuba(63, 2)
+    @test mod.find_max_ops_karatsuba(UInt64, 2) == expected_karatsuba(64, 2)
+    @test mod.find_max_ops(Int64, 2) == expected_cumod(63, 2)
+    @test mod.find_max_ops(UInt64, 2) == expected_cumod(64, 2)
+    @test mod.find_max_ops_karatsuba(Int64, 2) == 2^61 - 2
+    @test mod.find_max_ops_karatsuba(UInt64, 2) == 2^62 - 2
+    @test mod.find_max_ops(Int64, 2) == typemax(Int) - 1
+    @test mod.find_max_ops(UInt64, 2) == typemax(Int)
+    @test mod.find_max_ops_karatsuba(Int128, 1) == typemax(Int)
+    @test mod.find_max_ops_karatsuba(UInt128, 1) == typemax(Int)
+    @test mod.find_max_ops(Int128, 2) == typemax(Int)
+    @test mod.find_max_ops(UInt128, 2) == typemax(Int)
+    @test mod.find_max_ops_karatsuba(BitIntegers.Int256, 1) == typemax(Int)
+    @test mod.find_max_ops_karatsuba(BitIntegers.UInt256, 1) == typemax(Int)
+    @test mod.find_max_ops(BitIntegers.Int256, 2) == typemax(Int)
+    @test mod.find_max_ops(BitIntegers.UInt256, 2) == typemax(Int)
+
+    wide_budget_dimension = BigInt(1) << 100
+    @test mod.find_max_ops_karatsuba(BitIntegers.Int256, wide_budget_dimension) ==
+          expected_karatsuba(255, wide_budget_dimension)
+    @test mod.find_max_ops_karatsuba(BitIntegers.UInt256, wide_budget_dimension) ==
+          expected_karatsuba(256, wide_budget_dimension)
+    @test mod.find_max_ops(BitIntegers.Int256, wide_budget_dimension) ==
+          expected_cumod(255, wide_budget_dimension)
+    @test mod.find_max_ops(BitIntegers.UInt256, wide_budget_dimension) ==
+          expected_cumod(256, wide_budget_dimension)
+
+    factory_zero = Base.zeros(
+        mod.KaratsubaMatrix{UInt64,Matrix{UInt64}},
+        1,
+        1;
+        low_modulus = 2,
+        high_modulus = 3,
+        modulus = 5,
+    )
+    @test typeof(factory_zero) ===
+          mod.KaratsubaMatrix{UInt64,Matrix{UInt64},mod.CuModArray{UInt64,2}}
+    @test factory_zero.plan === nothing
+
+    for unsupported in
+        (BigInt, BigFloat, Bool, ComplexF64, AbstractFloat, Integer, Signed, Unsigned)
+        unsupported_error = try
+            mod.get_bits(unsupported)
+            nothing
+        catch err
+            err
+        end
+        @test unsupported_error isa ArgumentError
+        if unsupported_error isa Exception
+            @test occursin(string(unsupported), sprint(showerror, unsupported_error))
+        end
+    end
+    @test_throws ArgumentError mod.find_max_ops_karatsuba(BigInt, 2)
+    @test_throws ArgumentError mod.find_max_ops(BigFloat, 2)
+    @test_throws ArgumentError mod.get_bits(1)
+end
+
 @testset "Strict CPU Karatsuba storage and inference" begin
     mod = GPUFiniteFieldMatrices
     low_matrix = Int[1 2; 3 4]
@@ -1271,6 +1440,80 @@ end
     )
 end
 
+@testset "CPU Karatsuba GEMV batch dispatch contract" begin
+    mod = GPUFiniteFieldMatrices
+    blas = mod._CUDA_BLAS
+
+    # These are host vectors of types only; no CuArray is constructed or
+    # allocated, and no CUDA BLAS method is called here.
+    matrix_storage = CUDA.CuArray{Float64,2,CUDA.DeviceMemory}
+    vector_storage = CUDA.CuArray{Float64,1,CUDA.DeviceMemory}
+    batch_mats = Vector{matrix_storage}(undef, 3)
+    batch_vecs = Vector{vector_storage}(undef, 3)
+    batch_targets = Vector{vector_storage}(undef, 3)
+
+    matrix_view_storage =
+        Base.typeintersect(SubArray{Float64,2}, getfield(blas, :StridedCuMatrix){Float64})
+    vector_view_storage =
+        Base.typeintersect(SubArray{Float64,1}, getfield(blas, :StridedCuVector){Float64})
+    view_mats = Vector{matrix_view_storage}(undef, 3)
+    view_vecs = Vector{vector_view_storage}(undef, 3)
+    view_targets = Vector{vector_view_storage}(undef, 3)
+
+    abstract_mats = Vector{CUDA.CuArray}(undef, 3)
+    abstract_vecs = Vector{CUDA.CuArray}(undef, 3)
+    abstract_targets = Vector{CUDA.CuArray}(undef, 3)
+    empty_mats = Vector{matrix_storage}()
+    empty_vecs = Vector{vector_storage}()
+    empty_targets = Vector{vector_storage}()
+
+    @test mod._karatsuba_gemv_batch_containers_supported(
+        batch_mats,
+        batch_vecs,
+        batch_targets,
+    )
+    @test !mod._karatsuba_gemv_batch_containers_supported(
+        view_mats,
+        view_vecs,
+        view_targets,
+    )
+    @test !mod._karatsuba_gemv_batch_containers_supported(
+        abstract_mats,
+        abstract_vecs,
+        abstract_targets,
+    )
+    @test !mod._karatsuba_gemv_batch_containers_supported(
+        empty_mats,
+        empty_vecs,
+        empty_targets,
+    )
+
+    batch_signature = Tuple{
+        Char,
+        Ptr{Float64},
+        typeof(batch_mats),
+        typeof(batch_vecs),
+        Ptr{Float64},
+        typeof(batch_targets),
+    }
+    @test hasmethod(getfield(blas, :gemv_batched!), batch_signature)
+
+    unsafe_batch = getfield(blas, :unsafe_batch)
+    @test hasmethod(unsafe_batch, Tuple{typeof(batch_mats)})
+    @test hasmethod(unsafe_batch, Tuple{typeof(batch_vecs)})
+    @test hasmethod(unsafe_batch, Tuple{typeof(batch_targets)})
+
+    view_gemv_signature = Tuple{
+        Char,
+        Ptr{Float64},
+        matrix_view_storage,
+        vector_view_storage,
+        Ptr{Float64},
+        vector_view_storage,
+    }
+    @test hasmethod(getfield(blas, :gemv!), view_gemv_signature)
+end
+
 if CUDA.functional()
     @testset "CUDA-backed Karatsuba plan lifecycle across component storage" begin
         mod = GPUFiniteFieldMatrices
@@ -1279,7 +1522,7 @@ if CUDA.functional()
             plan = K.plan
             @test typeof(plan) === mod.CuModArray{eltype(K),length(dims)}
             @test size(plan) == dims
-            @test size(parent(plan)) == map(d -> d + mod.TILE_WIDTH, dims)
+            @test size(parent(plan)) == map(mod._padded_extent, dims)
             @test modulus(plan) == low_modulus(K)
             @test parent(plan) isa CUDA.CuArray
             @test CUDA.device(parent(plan)) == CUDA.device()

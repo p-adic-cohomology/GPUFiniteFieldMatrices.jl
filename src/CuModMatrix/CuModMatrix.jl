@@ -2,43 +2,38 @@
 const TILE_WIDTH = 32
 const DEFAULT_TYPE = Float32
 
-struct CuModArraySizeMismatchException <: Exception
+@inline _padded_extent(d::Integer) = cld(d, TILE_WIDTH) * TILE_WIDTH
+@inline _padded_size(dims::Dims{D}) where {D} = ntuple(i -> _padded_extent(dims[i]), D)
+
+@inline function _logical_view(data::AbstractArray{T,D}, dims::Dims{D}) where {T,D}
+    return view(data, ntuple(i -> 1:dims[i], D)...)
+end
+
+"""Operand moduli are incompatible for the requested operation."""
+struct ModulusMismatchError <: Exception
     message::String
 end
 
-struct CuModArrayModulusMismatchException <: Exception
-    message::String
-end
-
-struct CuModMatrixTooLargeException <: Exception
-    message::String
-end
-
-struct CuModMatrixNotSquareException <: Exception
-    message::String
-end
-
-struct CuModMatrixModulusNotPrimeException <: Exception
-    message::String
-end
-
-struct InverseOverflowError <: Exception
-    message::String
-end
-
-struct InverseNotDefinedException <: Exception
-    message::String
-end
+Base.showerror(io::IO, err::ModulusMismatchError) = print(io, err.message)
 
 """
     CuModArray{T}
 
-A matrix over a finite field mod N, implemented using CuArray. The internal representation
-pads to multiples of TILE_WIDTH (32) for efficient GPU computation.
+A matrix over a finite field mod N, implemented using CuArray. Newly allocated
+GPU storage rounds each dimension up to a multiple of `TILE_WIDTH` (32) and
+starts with zero padding. Later operations may change padding values; logical
+operations ignore padding contents. Wrapping an existing `CuArray` preserves
+its storage and does not pad or clear it.
 
 Use `modulus(A)` for the modulus, `size(A)` for the logical dimensions, and
 `parent(A)` for the padded GPU storage. The `data`, `size`, and `N` fields are
 internal implementation details.
+
+Elementwise in-place arithmetic checks that all arrays have equal logical
+sizes, stored moduli and backing lengths before launching a kernel. Those
+compatibility checks are bounds checks and may be elided by an `@inbounds`
+caller, who must then ensure the arrays are compatible. A supplied
+`modulus_override` must always be positive, including inside `@inbounds`.
 
 Note matrices over the permitted size for efficient matmul may be created, but matmul 
 will throw an exception if these matrices are multiplied.
@@ -66,16 +61,13 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
 
         if 2^52 < N
             throw(
-                CuModArrayModulusMismatchException(
+                ArgumentError(
                     "Modulus $N is bigger than 2^52 = $(2^52), the largest supported modulus",
                 ),
             )
         end
 
-        # pad(d) = ceil(Int, d / TILE_WIDTH) * TILE_WIDTH
-        pad(d) = d + TILE_WIDTH
-
-        padded_size = pad.(size(A))
+        padded_size = _padded_size(size(A))
 
         # Initialize the padded areas to zero
         data = CUDA.fill(zero(T), padded_size...)
@@ -101,7 +93,7 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
         #dataview = @view data[data_inds]
         copyto!(data, A_inds, converted, A_inds)
 
-        if mod
+        if mod && !isempty(data)
             mod!(data, data, N)
         end
 
@@ -148,8 +140,9 @@ modulus(A::CuModArray) = getfield(A, :N)
 """
     parent(A::CuModArray)
 
-Return the padded GPU storage backing `A`. Its dimensions can exceed `size(A)`;
-`size(A)` continues to report the logical, unpadded dimensions.
+Return the GPU storage backing `A`. Newly allocated storage rounds each logical
+dimension up to a multiple of `TILE_WIDTH`; a wrapped `CuArray` keeps its
+original dimensions. `size(A)` reports logical dimensions in either case.
 """
 Base.parent(A::CuModArray) = getfield(A, :data)
 
@@ -157,7 +150,8 @@ Base.parent(A::CuModArray) = getfield(A, :data)
     CuModArray(A::AbstractArray; modulus)
     CuModArray{T,D}(A::AbstractArray; modulus)
 
-Construct from a CPU array and pad data on the GPU to fit a multiple of 32.
+Construct from a CPU array. Newly allocated storage rounds each logical
+dimension up to a multiple of 32 and starts with zero padding.
 The unparameterized constructor defaults to Float32.
 """
 function CuModArray(
@@ -177,7 +171,8 @@ const CuModVector{T} = CuModArray{T,1}
     CuModMatrix(A::AbstractMatrix; modulus)
     CuModMatrix{T}(A::AbstractMatrix; modulus)
 
-Construct from a CPU matrix and pad data on the GPU to fit a multiple of 32.
+Construct from a CPU matrix. Newly allocated storage rounds each logical
+dimension up to a multiple of 32 and starts with zero padding.
 The unparameterized constructor defaults to Float32.
 """
 function CuModMatrix(
@@ -214,7 +209,8 @@ end
     CuModVector(A::AbstractVector; modulus)
     CuModVector{T}(A::AbstractVector; modulus)
 
-Construct from a CPU vector and pad data on the GPU to fit a multiple of 32.
+Construct from a CPU vector. Newly allocated storage rounds its logical length
+up to a multiple of 32 and starts with zero padding.
 The unparameterized constructor defaults to Float32.
 """
 function CuModVector(
@@ -254,40 +250,48 @@ end
     identity_matrix(CuModMatrix{T}, n; modulus)
 
 Creates an `n × n` identity matrix in the finite field modulo `modulus`.
+Its storage rounds each dimension up to a multiple of `TILE_WIDTH` and starts
+with zero padding.
 """
 function identity_matrix(::Type{CuModArray{T,2}}, n::Integer; modulus::Int) where {T}
     return CuModArray{T,2}(I, n, n; modulus = modulus)
 end
 
 """
+    get_bits(type)
+
+Return the integer precision budget for a supported element type. Floating
+formats use their integer significand width; primitive fixed-width signed
+integers exclude the sign bit, and primitive unsigned integers use their full
+width.
+"""
+function get_bits(type::Type)
+    if type <: AbstractFloat
+        type === Float16 && return 11
+        type === Float32 && return 24
+        type === Float64 && return 53
+    elseif type <: Union{Signed,Unsigned} && isprimitivetype(type)
+        return 8 * sizeof(type) - (type <: Signed ? 1 : 0)
+    end
+
+    throw(
+        ArgumentError(
+            "unsupported type $type; expected Float16, Float32, Float64, or a primitive fixed-width signed or unsigned integer type",
+        ),
+    )
+end
+get_bits(type) = throw(
+    ArgumentError(
+        "unsupported type $type; expected Float16, Float32, Float64, or a primitive fixed-width signed or unsigned integer type",
+    ),
+)
+
+"""
     find_max_ops(type, N)
 
-Returns the maximum number of operations before a N is necessary given a datatype and N N.
+Return the maximum operation count permitted by the precision budget for a
+supported element type and dimension `N`.
 """
-function get_bits(type)
-    if occursin("Float", string(type))
-        # Number of integer-significand bits guaranteed by IEEE arithmetic.
-        # Every integer through 2^p is represented exactly by the format.
-        bits_dict = Dict("64" => 53, "32" => 24, "16" => 11)
-        bits_match = match(r"\d+", string(type))
-        bits = get(bits_dict, bits_match.match, -1)
-    elseif occursin("UInt", string(type))
-        bits_match = match(r"\d+", string(type))
-        bits = parse(Int, bits_match.match) - 1
-    elseif occursin("Int", string(type))
-        bits_match = match(r"\d+", string(type))
-        bits = parse(Int, bits_match.match)
-    else
-        error("The input type is neither Int, UInt, nor Float.")
-    end
-
-    if bits == -1
-        error("Input type is not recognized.")
-    end
-
-    return bits
-end
-
 function find_max_ops(type, N)
     bits = get_bits(type)
     maxterm = BigInt(max(N - 1, 1))^2
@@ -369,7 +373,7 @@ Base.show(io::IO, ::MIME"text/plain", A::CuModMatrix) =
 # Recursive binary exponentiation algorithm
 function Base.:^(A::CuModMatrix, n::Integer)
     if rows(A) != cols(A)
-        throw(CuModMatrixNotSquareException("Matrix must be square for power operation"))
+        throw(DimensionMismatch("Matrix must be square for power operation"))
     end
 
     if n == 0
@@ -476,7 +480,7 @@ function mod_inv(a::Integer, m::Integer)
         r, newr = newr, r - q * newr
     end
     if r != 1
-        throw(DomainError((a, m), "inverse does not exist"))
+        throw(LinearAlgebra.SingularException(0))
     end
     return mod(t, m)
 end
@@ -492,9 +496,10 @@ end
     zeros(CuModVector{T}, length; modulus)
 
 Creates a zero matrix or vector in the finite field modulo `modulus`.
+Each storage dimension is rounded up to a multiple of `TILE_WIDTH`.
 """
 function Base.zeros(::Type{CuModArray{T,1}}, length::Integer; modulus::Int) where {T}
-    padded_entries = length + TILE_WIDTH
+    padded_entries = _padded_extent(length)
     data = CUDA.zeros(T, padded_entries)
     return CuModArray{T,1}(data; modulus = modulus, mod = false, new_size = (length,))
 end
@@ -506,8 +511,8 @@ function Base.zeros(
     modulus::Int,
     new_size::Tuple{Int,Int} = (rows, cols),
 ) where {T}
-    padded_rows = rows + TILE_WIDTH
-    padded_cols = cols + TILE_WIDTH
+    padded_rows = _padded_extent(rows)
+    padded_cols = _padded_extent(cols)
     data = CUDA.zeros(T, padded_rows, padded_cols)
     return CuModArray{T,2}(data; modulus = modulus, mod = false, new_size = new_size)
 end
@@ -517,15 +522,20 @@ end
     rand(CuModMatrix{T}, rows, cols; modulus)
 
 Creates a random vector or matrix in the finite field modulo `modulus`.
+Only logical entries are sampled; the zero-initialized padding is untouched.
 """
 function Base.rand(::Type{CuModArray{T,1}}, length::Integer; modulus::Int) where {T}
-    padded_entries = cld(length, TILE_WIDTH) * TILE_WIDTH
-    data = CUDA.rand(T, padded_entries)
-    if T <: AbstractFloat
-        data .= floor.(data .* modulus)
+    dims = (Int(length),)
+    data = CUDA.zeros(T, _padded_size(dims)...)
+    if !isempty(data)
+        logical_data = CUDA.rand(T, dims...)
+        if T <: AbstractFloat
+            logical_data .= floor.(logical_data .* modulus)
+        end
+        mod!(logical_data, logical_data, modulus)
+        copyto!(_logical_view(data, dims), logical_data)
     end
-    mod!(data, data, modulus)
-    return CuModArray{T,1}(data; modulus = modulus, mod = false, new_size = (length,))
+    return CuModArray{T,1}(data; modulus = modulus, mod = false, new_size = dims)
 end
 
 function Base.rand(
@@ -534,14 +544,17 @@ function Base.rand(
     cols::Integer;
     modulus::Int,
 ) where {T}
-    padded_rows = cld(rows, TILE_WIDTH) * TILE_WIDTH
-    padded_cols = cld(cols, TILE_WIDTH) * TILE_WIDTH
-    data = CUDA.rand(T, padded_rows, padded_cols)
-    if T <: AbstractFloat
-        data .= floor.(data .* modulus)
+    dims = (Int(rows), Int(cols))
+    data = CUDA.zeros(T, _padded_size(dims)...)
+    if !isempty(data)
+        logical_data = CUDA.rand(T, dims...)
+        if T <: AbstractFloat
+            logical_data .= floor.(logical_data .* modulus)
+        end
+        mod!(logical_data, logical_data, modulus)
+        copyto!(_logical_view(data, dims), logical_data)
     end
-    mod!(data, data, modulus)
-    return CuModArray{T,2}(data; modulus = modulus, mod = false, new_size = (rows, cols))
+    return CuModArray{T,2}(data; modulus = modulus, mod = false, new_size = dims)
 end
 
 """
@@ -549,9 +562,12 @@ end
 
 In-place element-wise multiplication: C = A .* B mod N. No allocation is performed.
 Only a positive `modulus_override` replaces `modulus(C)` for the reduction modulus.
-A zero or negative value throws `ArgumentError`. The stored modulus on `C` is unchanged.
+A zero or negative value throws `ArgumentError`. All stored moduli must still
+match, including when an override is supplied. Logical sizes and backing lengths
+must also match. These compatibility checks may be elided by an `@inbounds`
+caller, who is responsible for satisfying them.
 """
-function elementwise_multiply!(
+Base.@propagate_inbounds @inline function elementwise_multiply!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray,
@@ -560,18 +576,6 @@ function elementwise_multiply!(
 )
     _validate_positive_modulus_override(modulus_override)
     N = modulus_override === nothing ? modulus(C) : modulus_override
-
-    if modulus_override === nothing &&
-       (modulus(A) != modulus(B) || modulus(A) != modulus(C))
-        throw(
-            CuModArrayModulusMismatchException(
-                "All matrices must have the same modulus N or provide a modulus_override",
-            ),
-        )
-    end
-    if size(A) != size(B) || size(A) != size(C)
-        throw(CuModArraySizeMismatchException("All matrix dimensions must match"))
-    end
 
     mul_elementwise!(C, A, B; modulus_override = N)
     return C
@@ -582,28 +586,18 @@ end
 
 In-place negation: B = -A mod N. No allocation is performed.
 Only a positive `modulus_override` replaces `modulus(B)` for the reduction modulus.
-Zero or a negative value uses `modulus(B)`. The stored modulus on `B` is unchanged.
+A zero or negative value throws `ArgumentError`. Stored moduli, logical sizes
+and backing lengths must match. Compatibility checks may be elided by an
+`@inbounds` caller, who is responsible for satisfying them.
 """
-function neg!(
+Base.@propagate_inbounds @inline function neg!(
     B::CuModArray,
     A::CuModArray;
     modulus_override::Union{Nothing,Integer} = nothing,
 )
-    N =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(B) :
-        modulus_override
-
-    if (modulus_override === nothing || modulus_override <= 0) && modulus(A) != modulus(B)
-        throw(
-            CuModArrayModulusMismatchException(
-                "Both matrices must have the same modulus N or provide a modulus_override",
-            ),
-        )
-    end
-
-    if size(A) != size(B)
-        throw(CuModArraySizeMismatchException("Matrix dimensions must match"))
-    end
+    _validate_positive_modulus_override(modulus_override)
+    @boundscheck _check_elementwise_compatible(B, A)
+    N = modulus_override === nothing ? modulus(B) : modulus_override
 
     rscalar_sub!(B, A, 0; modulus_override = N)
     return B
@@ -617,7 +611,9 @@ As ZZ/n is commutative, this has the same behavior as lmul!
 
 Extends LinearAlgebra.rmul! and LinearAlgebra.lmul!
 """
-LinearAlgebra.rmul!(A::CuModArray, s::Number) = mul!(A, A, s)
+Base.@propagate_inbounds @inline function LinearAlgebra.rmul!(A::CuModArray, s::Number)
+    return mul!(A, A, s)
+end
 
 """
     lmul!(s,A)
@@ -625,12 +621,16 @@ LinearAlgebra.rmul!(A::CuModArray, s::Number) = mul!(A, A, s)
 Scales the array A by s, overwriting A.
 As ZZ/n is commutative, this has the same behavior as lmul!
 """
-LinearAlgebra.lmul!(s::Number, A::CuModArray) = mul!(A, A, s)
+Base.@propagate_inbounds @inline function LinearAlgebra.lmul!(s::Number, A::CuModArray)
+    return mul!(A, A, s)
+end
 
 function dumb_copy_kernel!(B, A)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
 
-    B[i] = A[i]
+    if i <= length(A) && i <= length(B)
+        B[i] = A[i]
+    end
 
     nothing
 end
@@ -641,19 +641,23 @@ end
 In-place copy: B = A. No allocation is performed.
 B is updated with the contents of A.
 
-This does not test the modulus or normalize the entries.
+This copies all logical entries across valid backing layouts. Padding is outside
+the copy and is left unchanged in the destination. The operation does not test
+the modulus or normalize entries.
 """
 function Base.copy!(B::CuModArray, A::CuModArray)
     if size(A) != size(B)
-        throw(CuModArraySizeMismatchException("Matrix dimensions must match"))
+        throw(DimensionMismatch("Matrix dimensions must match"))
     end
 
+    source = _logical_view(parent(A), size(A))
+    destination = _logical_view(parent(B), size(B))
     threads = TILE_WIDTH
-    blocks = length(parent(A)) ÷ TILE_WIDTH
-
-    @cuda threads=threads blocks=blocks dumb_copy_kernel!(parent(B), parent(A))
-
-    # CUDA.copy!(parent(B), parent(A))
+    count = length(source)
+    if count > 0
+        blocks = cld(count, threads)
+        @cuda threads=threads blocks=blocks dumb_copy_kernel!(destination, source)
+    end
 
     return B
 end
@@ -668,7 +672,7 @@ Does not mod.
 """
 function Base.copyto!(dest::CuModArray{T,D}, src::DenseArray{T,D}) where {T,D}
     if size(dest) != size(src)
-        throw(CuModArraySizeMismatchException("Matrix dimensions must match"))
+        throw(DimensionMismatch("Matrix dimensions must match"))
     end
 
     #rangesize = map(x -> 1:x,size(dest))
@@ -712,12 +716,12 @@ zero!(A::CuModArray) = fill!(parent(A), zero(eltype(parent(A))))
 
 Apply modulus to all elements of A in-place.
 Only a positive `modulus_override` replaces `modulus(A)` for the reduction modulus.
-Zero or a negative value uses `modulus(A)`. The stored modulus on `A` is unchanged.
+A zero or negative value throws `ArgumentError`. The stored modulus on `A`
+is unchanged.
 """
 function mod_elements!(A::CuModArray; modulus_override::Union{Nothing,Integer} = nothing)
-    N =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(A) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    N = modulus_override === nothing ? modulus(A) : modulus_override
     mod!(parent(A), parent(A), N)
     return A
 end
@@ -731,44 +735,54 @@ end
 """
     change_modulus(A, new_N)
 
-Creates a new CuModArray with the same values as A but with a different modulus.
-All elements are reduced modulo new_N.
+Create an independent CuModArray with modulus `new_N`. Logical elements are
+reduced only when `new_N` is smaller than `modulus(A)`; otherwise they are copied.
+The new storage rounds each logical
+dimension up to a multiple of `TILE_WIDTH` and has zero padding.
 """
 function change_modulus(A::CuModArray, new_N::Integer)
-    (dataRows, dataCols) = size(parent(A))
-    result = zeros(
-        CuModMatrix{eltype(parent(A))},
-        dataRows - TILE_WIDTH,
-        dataCols - TILE_WIDTH;
-        modulus = Int(new_N),
-    )
+    T = eltype(parent(A))
+    D = ndims(A)
+    dims = size(A)
+    new_modulus = Int(new_N)
+    data = CUDA.zeros(T, _padded_size(dims)...)
+    result = CuModArray{T,D}(data; modulus = new_modulus, mod = false, new_size = dims)
 
-    if new_N < modulus(A)
-        mod!(parent(result), parent(A), new_N)
-    else
-        copyto!(parent(result), parent(A))
+    if !isempty(A)
+        logical_source = _logical_view(parent(A), dims)
+        logical_result = _logical_view(parent(result), dims)
+        if new_N < modulus(A)
+            logical_result .= mod.(logical_source, new_N)
+        else
+            copyto!(logical_result, logical_source)
+        end
     end
 
-    return CuModArray(parent(result); modulus = Int(new_N), new_size = size(A))
+    return result
 end
 
 """
-    change_modulus!(A, new_N)
+    change_modulus!!(A, new_N)
 
-Changes the modulus of A in-place to new_N.
-All elements are reduced modulo new_N.
+Consumes `A` and returns a new immutable `CuModArray` wrapper over the same GPU
+storage with modulus `new_N`. The wrapper shares its parent storage with `A`.
+Use the returned wrapper, for example `A = change_modulus!!(A, p)`, and do not
+use the consumed wrapper afterward. Aliases to the parent share storage and
+observe the in-place reduction when the modulus shrinks.
+
+`new_N` must be positive. A smaller modulus performs one in-place reduction.
+Equal or larger moduli leave values unchanged and reinterpret them.
+The wrapper may allocate small host metadata; no GPU storage is allocated.
 """
-#TODO: we are not allowed to actually change an immutable struct.
-#This returns a new struct, but modifies the underlying data
-#
-#This will allocate a litte bit the way the constructor is written right now.
-function change_modulus_no_alloc!(A::CuModArray, new_N::Integer)
-    if new_N < modulus(A)
-        parent(A) .= mod.(parent(A), new_N)
-        mod!(parent(A), parent(A), new_N)
+function change_modulus!!(A::CuModArray{T,D}, new_N::Integer) where {T,D}
+    new_N > 0 || throw(ArgumentError("new_N must be positive"))
+    new_modulus = Int(new_N)
+
+    if new_modulus < modulus(A)
+        mod!(parent(A), parent(A), new_modulus)
     end
 
-    return CuModArray(parent(A); modulus = Int(new_N), new_size = size(A))
+    return CuModArray{T,D}(parent(A); modulus = new_modulus, new_size = size(A))
 end
 
 """
@@ -791,19 +805,13 @@ function LinearAlgebra.mul!(
 )
 
     if (modulus(A) != modulus(B) || modulus(A) != modulus(C))
-        throw(
-            CuModArrayModulusMismatchException("All matrices must have the same modulus N"),
-        )
+        throw(ModulusMismatchError("All matrices must have the same modulus N"))
     end
     if cols(A) != rows(B)
-        throw(
-            CuModArraySizeMismatchException(
-                "Matrix dimensions do not match for multiplication",
-            ),
-        )
+        throw(DimensionMismatch("Matrix dimensions do not match for multiplication"))
     end
     if rows(C) != rows(A) || cols(C) != cols(B)
-        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
+        throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
     end
 
     stripe_mul!(C, A, B; max_ops = max_ops, input_bound = input_bound)
@@ -832,19 +840,13 @@ function LinearAlgebra.mul!(
         modulus(A) != modulus(x) ||
         (modulus_override === nothing && modulus(A) != modulus(z))
     )
-        throw(
-            CuModArrayModulusMismatchException("All matrices must have the same modulus N"),
-        )
+        throw(ModulusMismatchError("All matrices must have the same modulus N"))
     end
     if cols(A) != length(x)
-        throw(
-            CuModArraySizeMismatchException(
-                "Matrix dimensions do not match for multiplication",
-            ),
-        )
+        throw(DimensionMismatch("Matrix dimensions do not match for multiplication"))
     end
     if length(z) != rows(A)
-        throw(CuModArraySizeMismatchException("Output matrix C has incorrect dimensions"))
+        throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
     end
 
     stripe_mul!(z, A, x; input_bound = input_bound, modulus_override = modulus_override)
@@ -854,15 +856,17 @@ end
 """
     copy(A::CuModArray)
 
-Copy the data and metadata into a new CuModArray.
+Copy the logical data and metadata into newly allocated storage. The new
+storage rounds each logical dimension up to a multiple of `TILE_WIDTH` and has
+zero padding, regardless of the source padding contents.
 """
 function Base.copy(A::CuModArray{T,D}) where {T,D}
-    B = CuModArray{T,D}(
-        copy(parent(A));
-        modulus = modulus(A),
-        mod = false,
-        new_size = size(A),
-    )
+    dims = size(A)
+    data = CUDA.zeros(T, _padded_size(dims)...)
+    if !isempty(A)
+        copyto!(_logical_view(data, dims), _logical_view(parent(A), dims))
+    end
+    return CuModArray{T,D}(data; modulus = modulus(A), mod = false, new_size = dims)
 end
 
 #TODO: addmul! (add and scalar multiply), gemv!, gemm!

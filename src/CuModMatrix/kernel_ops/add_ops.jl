@@ -20,24 +20,29 @@ function k_add_scalar!(out, A, s, m)
     return
 end
 
-function add!(
+Base.@propagate_inbounds @inline function add!(
     C::CuModArray,
     A::CuModArray,
     B::CuModArray;
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    @boundscheck _check_elementwise_compatible(C, A, B)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
-    len = length(parent(A))
-    blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_add_matrix!(parent(C), parent(A), parent(B), mT)
+    output = _logical_view(parent(C), size(C))
+    left = _logical_view(parent(A), size(A))
+    right = _logical_view(parent(B), size(B))
+    len = length(left)
+    if len > 0
+        blocks = min(cld(len, threads), 65535)
+        @cuda threads=threads blocks=blocks k_add_matrix!(output, left, right, mT)
+    end
     return C
 end
 
-function scalar_add!(
+Base.@propagate_inbounds @inline function scalar_add!(
     C::CuModArray,
     A::CuModArray,
     s::Number,
@@ -45,30 +50,37 @@ function scalar_add!(
     modulus_override::Union{Nothing,Integer} = nothing,
     threads::Int = DEFAULT_THREADS,
 )
-    m =
-        modulus_override === nothing || modulus_override <= 0 ? modulus(C) :
-        modulus_override
+    _validate_positive_modulus_override(modulus_override)
+    @boundscheck _check_elementwise_compatible(C, A)
+    m = modulus_override === nothing ? modulus(C) : modulus_override
     mT = convert(eltype(parent(C)), m)
     sT = convert(eltype(parent(C)), s)
-    len = length(parent(A))
-    blocks = min(cld(len, threads), 65535)
-    @cuda threads=threads blocks=blocks k_add_scalar!(parent(C), parent(A), sT, mT)
+    output = _logical_view(parent(C), size(C))
+    input = _logical_view(parent(A), size(A))
+    len = length(input)
+    if len > 0
+        blocks = min(cld(len, threads), 65535)
+        @cuda threads=threads blocks=blocks k_add_scalar!(output, input, sT, mT)
+    end
     return C
 end
 
-function +(A::CuModArray, B::CuModArray)
+Base.@propagate_inbounds @inline function +(A::CuModArray, B::CuModArray)
+    @boundscheck _check_elementwise_allocating_inputs(A, B)
     C = similar_with_modulus(A, modulus(A))
     add!(C, A, B)
     return C
 end
 
-function +(A::CuModArray, s::Number)
+Base.@propagate_inbounds @inline function +(A::CuModArray, s::Number)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar_with_modulus(A, modulus(A))
     scalar_add!(C, A, s)
     return C
 end
 
-function +(s::Number, A::CuModArray)
+Base.@propagate_inbounds @inline function +(s::Number, A::CuModArray)
+    @boundscheck _check_elementwise_allocating_input(A)
     C = similar_with_modulus(A, modulus(A))
     scalar_add!(C, A, s)
     return C
