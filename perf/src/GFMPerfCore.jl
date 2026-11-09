@@ -16,7 +16,7 @@ export CaseSpec,
     csv_line,
     validate_output_path
 
-const RUN_SCHEMA = 1
+const RUN_SCHEMA = 2
 const COMPARISON_SCHEMA = 1
 
 struct CaseSpec

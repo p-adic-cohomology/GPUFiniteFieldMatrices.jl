@@ -3,6 +3,14 @@ function _load_capture(value)
     return value
 end
 
+function _load_comparison(value)
+    file = isdir(value) ? joinpath(value, "comparison.json") : value
+    return JSON3.read(read(file, String), Dict{String,Any})
+end
+
+"""Read the stable case IDs flagged by a saved comparison directory or JSON file."""
+flagged_case_ids(comparison_path) = String.(_load_comparison(comparison_path)["flagged_case_ids"])
+
 function _comparison_text(report)
     io = IOBuffer()
     println(io, "GFM CUDA performance comparison")
@@ -75,9 +83,7 @@ end
 """Capture only cases flagged by a prior comparison; invoke in a fresh current-package process."""
 function rerun_flagged(comparison_path; label, samples = DEFAULT_SAMPLES,
         seconds = DEFAULT_SECONDS, warmups = DEFAULT_WARMUPS, output_dir = nothing)
-    report_file = isdir(comparison_path) ? joinpath(comparison_path, "comparison.json") : comparison_path
-    report = JSON3.read(read(report_file, String), Dict{String,Any})
-    ids = String.(report["flagged_case_ids"])
+    ids = flagged_case_ids(comparison_path)
     isempty(ids) && throw(ArgumentError("comparison has no flagged cases to rerun"))
     return capture(label; suite = :full, case_ids = ids, role = "current-rerun",
         samples = samples, seconds = seconds, warmups = warmups,

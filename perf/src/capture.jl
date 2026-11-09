@@ -132,9 +132,48 @@ function _metadata(repo, role, suite, measurement_policy)
         "measurement_policy" => measurement_policy)
 end
 
-function _typed_cumod(T, data, modulus)
-    cmtype = Core.apply_type(GPUFiniteFieldMatrices.CuModMatrix, T)
-    return cmtype(data; modulus = Int(modulus))
+function _cumod_type(T, D)
+    constructor = D == 1 ? GPUFiniteFieldMatrices.CuModVector :
+        D == 2 ? GPUFiniteFieldMatrices.CuModMatrix : GPUFiniteFieldMatrices.CuModArray
+    return D in (1, 2) ? Core.apply_type(constructor, T) : Core.apply_type(constructor, T, D)
+end
+
+function _constructor_style(T, D)
+    cmtype = _cumod_type(T, D)
+    cpu_type = Array{T,D}
+    positional = hasmethod(cmtype, Tuple{cpu_type,Int})
+    keyword = hasmethod(cmtype, Tuple{cpu_type})
+    positional && return :positional_modulus
+    keyword && return :keyword_modulus
+    return :unsupported
+end
+
+function _adapter_profile(T, D)
+    cmtype = _cumod_type(T, D)
+    style = _constructor_style(T, D)
+    storage = hasfield(cmtype, :data) ? :data : :parent
+    return (constructor_style = style, storage_field = storage)
+end
+
+function _cumod_constructor(T, D, modulus)
+    cmtype = _cumod_type(T, D)
+    style = _constructor_style(T, D)
+    style == :positional_modulus && return data -> cmtype(data, Int(modulus))
+    style == :keyword_modulus && return data -> cmtype(data; modulus = Int(modulus))
+    throw(ArgumentError("no CuModArray{$T,$D} constructor accepts CPU arrays and this revision's modulus convention"))
+end
+
+_typed_cumod(T, data, modulus) = _cumod_constructor(T, ndims(data), modulus)(data)
+
+function _storage_array(A)
+    if hasfield(typeof(A), :data)
+        data = getfield(A, :data)
+        data isa AbstractArray || throw(ArgumentError("CuModArray storage field is not an array"))
+        return data
+    elseif applicable(parent, A)
+        return parent(A)
+    end
+    throw(ArgumentError("no storage adapter is available for $(typeof(A))"))
 end
 
 function _cpu_matrix(rng, T, m, n, modulus)
@@ -145,11 +184,91 @@ function _cpu_vector(rng, T, n, modulus)
     return T.(rand(rng, 0:(modulus - 1), n))
 end
 
+const BIGINT_ORACLE_PRODUCT_LIMIT = 250_000
+const FLOAT64_EXACT_INTEGER_LIMIT = BigInt(2)^53
+
+function _oracle_bigint_gemm(A, B, modulus)
+    m, k = size(A)
+    k2, n = size(B)
+    k == k2 || throw(DimensionMismatch("oracle input dimensions do not match"))
+    modulus > 0 || throw(ArgumentError("oracle modulus must be positive"))
+    result = Matrix{Int}(undef, m, n)
+    bigmodulus = BigInt(modulus)
+    for j in 1:n, i in 1:m
+        acc = BigInt(0)
+        for q in 1:k
+            acc += BigInt(A[i, q]) * BigInt(B[q, j])
+        end
+        result[i, j] = Int(mod(acc, bigmodulus))
+    end
+    return result
+end
+
+function _nonnegative_integer_max(A, name)
+    eltype(A) in (Float32, Float64) || throw(ArgumentError("exact Float64 oracle requires Float32/Float64 fixture inputs"))
+    all(x -> isfinite(x) && x >= 0 && isinteger(x), A) ||
+        throw(ArgumentError("exact Float64 oracle requires finite nonnegative integer-valued $name"))
+    maximum_value = maximum(A; init = zero(eltype(A)))
+    exact_input_limit = eltype(A) === Float32 ? BigInt(2)^24 : FLOAT64_EXACT_INTEGER_LIMIT
+    maximum_integer = BigInt(maximum_value)
+    maximum_integer <= exact_input_limit ||
+        throw(ArgumentError("exact Float64 oracle unsafe: $name values exceed exact $(eltype(A)) integer range"))
+    return maximum_integer
+end
+
+function _oracle_bigint_dot(A, B, row, column, modulus)
+    acc = BigInt(0)
+    for q in axes(A, 2)
+        acc += BigInt(A[row, q]) * BigInt(B[q, column])
+    end
+    return mod(acc, modulus)
+end
+
+function _oracle_float64_gemm(A, B, modulus)
+    m, k = size(A)
+    k2, n = size(B)
+    k == k2 || throw(DimensionMismatch("oracle input dimensions do not match"))
+    modulus > 0 || throw(ArgumentError("oracle modulus must be positive"))
+    max_a = _nonnegative_integer_max(A, "left matrix")
+    max_b = _nonnegative_integer_max(B, "right matrix")
+    accumulator_bound = BigInt(k) * max_a * max_b
+    accumulator_bound <= FLOAT64_EXACT_INTEGER_LIMIT ||
+        throw(ArgumentError("exact Float64 oracle unsafe: dot-product bound $accumulator_bound exceeds 2^53"))
+
+    a64 = Float64.(A)
+    b64 = Float64.(B)
+    products = Matrix{Float64}(undef, m, n)
+    LinearAlgebra.mul!(products, a64, b64)
+    result = Matrix{Int}(undef, m, n)
+    float_bound = Float64(accumulator_bound)
+    for index in eachindex(products)
+        value = products[index]
+        isfinite(value) && 0 <= value <= float_bound && isinteger(value) ||
+            throw(ArgumentError("exact Float64 oracle returned an out-of-bound or non-integer result"))
+        result[index] = Int(mod(round(Int64, value), Int64(modulus)))
+    end
+
+    bigmodulus = BigInt(modulus)
+    rows = (1, cld(m, 2), m)
+    columns = (1, cld(n, 2), n)
+    checks = Set{Tuple{Int,Int}}((i, j) for i in rows for j in columns)
+    for (i, j) in checks
+        exact = _oracle_bigint_dot(A, B, i, j, bigmodulus)
+        result[i, j] == exact || throw(ArgumentError("exact Float64 oracle failed its BigInt cross-check at ($i, $j)"))
+    end
+    return result
+end
+
 function _oracle_gemm(A, B, modulus)
     m, k = size(A)
     k2, n = size(B)
     k == k2 || throw(DimensionMismatch("oracle input dimensions do not match"))
-    return [mod(sum(BigInt(A[i, q]) * BigInt(B[q, j]) for q in 1:k; init = BigInt(0)), BigInt(modulus)) for i in 1:m, j in 1:n]
+    products = BigInt(m) * BigInt(k) * BigInt(n)
+    if products <= BIGINT_ORACLE_PRODUCT_LIMIT
+        return (values = _oracle_bigint_gemm(A, B, modulus), method = "BigInt modular dot products")
+    end
+    return (values = _oracle_float64_gemm(A, B, modulus),
+        method = "bounded exact Float64 BLAS with BigInt corner and center cross-checks")
 end
 
 function _oracle_gemv(A, x, modulus)
@@ -181,7 +300,7 @@ function _materialize(K, T)
 end
 
 function _geometry(A)
-    parent_array = parent(A)
+    parent_array = _storage_array(A)
     return Dict{String,Any}(
         "logical_shape" => collect(size(A)),
         "physical_shape" => collect(size(parent_array)),
@@ -189,8 +308,8 @@ function _geometry(A)
         "element_type" => string(eltype(A)))
 end
 
-function _unavailable(reason)
-    return (status = "unsupported", reason = String(reason), runner = nothing,
+function _unavailable(reason; status = "unsupported")
+    return (status = String(status), reason = String(reason), runner = nothing,
         reset = () -> nothing, validate = () -> (false, String(reason)),
         geometry = Dict{String,Any}())
 end
@@ -211,11 +330,12 @@ function _make_case(c::CaseSpec, role)
             B = _typed_cumod(T, bh, N)
             ch = zeros(T, m, n)
             C = _typed_cumod(T, ch, N)
-            cparent = copy(parent(C))
+            cparent = copy(_storage_array(C))
             result = Ref{Any}(nothing)
-            expected = _oracle_gemm(ah, bh, N)
+            oracle = _oracle_gemm(ah, bh, N)
+            expected = oracle.values
             runner = op == "mul!" ? (() -> LinearAlgebra.mul!(C, A, B)) : (() -> (result[] = A * B))
-            reset = op == "mul!" ? (() -> copyto!(parent(C), cparent)) : (() -> nothing)
+            reset = op == "mul!" ? (() -> copyto!(_storage_array(C), cparent)) : (() -> nothing)
             output = op == "mul!" ? (() -> C) : (() -> result[])
             validate = () -> begin
                 reset()
@@ -224,7 +344,7 @@ function _make_case(c::CaseSpec, role)
                 got = _host(output())
                 ok = size(got) == size(expected) && all(BigInt(got[i]) == expected[i] for i in eachindex(expected))
                 input_ok = _host(A) == ah && _host(B) == bh
-                return ok && input_ok, ok ? (input_ok ? "BigInt modular oracle passed" : "input preservation failed") : "BigInt modular oracle mismatch"
+                return ok && input_ok, ok ? (input_ok ? "$(oracle.method) passed" : "input preservation failed") : "$(oracle.method) mismatch"
             end
             return (status = "ready", reason = "", runner = runner, reset = reset,
                 validate = validate, geometry = Dict("A" => _geometry(A), "B" => _geometry(B), "C" => _geometry(C)))
@@ -233,14 +353,14 @@ function _make_case(c::CaseSpec, role)
             ah = _cpu_matrix(rng, T, m, n, N)
             xh = _cpu_vector(rng, T, n, N)
             A = _typed_cumod(T, ah, N)
-            x = Core.apply_type(GPUFiniteFieldMatrices.CuModVector, T)(xh; modulus = N)
+            x = _typed_cumod(T, xh, N)
             yh = zeros(T, m)
-            y = Core.apply_type(GPUFiniteFieldMatrices.CuModVector, T)(yh; modulus = N)
-            yparent = copy(parent(y))
+            y = _typed_cumod(T, yh, N)
+            yparent = copy(_storage_array(y))
             result = Ref{Any}(nothing)
             expected = _oracle_gemv(ah, xh, N)
             runner = op == "mul!" ? (() -> LinearAlgebra.mul!(y, A, x)) : (() -> (result[] = A * x))
-            reset = op == "mul!" ? (() -> copyto!(parent(y), yparent)) : (() -> nothing)
+            reset = op == "mul!" ? (() -> copyto!(_storage_array(y), yparent)) : (() -> nothing)
             output = op == "mul!" ? (() -> y) : (() -> result[])
             validate = () -> begin
                 reset()
@@ -261,8 +381,9 @@ function _make_case(c::CaseSpec, role)
             B = _typed_cumod(T, bh, N)
             ch = zeros(T, m, n)
             C = _typed_cumod(T, ch, N)
-            cparent = copy(parent(C))
+            cparent = copy(_storage_array(C))
             result = Ref{Any}(nothing)
+            construct = _cumod_constructor(T, 2, N)
             runner = if op == "+"
                 () -> (result[] = A + B)
             elseif op == "add!"
@@ -276,12 +397,12 @@ function _make_case(c::CaseSpec, role)
             elseif op == "copy"
                 () -> (result[] = copy(A))
             elseif op == "construct"
-                () -> (result[] = _typed_cumod(T, ah, N))
+                () -> (result[] = construct(ah))
             else
                 return _unavailable("unknown elementwise operation $op")
             end
             mutating = op in ("add!", "mul_elementwise!")
-            reset = mutating ? (() -> copyto!(parent(C), cparent)) : (() -> nothing)
+            reset = mutating ? (() -> copyto!(_storage_array(C), cparent)) : (() -> nothing)
             output = mutating ? (() -> C) : (() -> result[])
             expected = if op in ("+", "add!")
                 mod.(BigInt.(ah) .+ BigInt.(bh), BigInt(N))
@@ -337,7 +458,8 @@ function _make_case(c::CaseSpec, role)
         end
         return _unavailable("unknown group $(c.group)")
     catch err
-        return _unavailable("case construction failed: " * sprint(showerror, err))
+        status = err isa MethodError ? "unsupported" : "failed"
+        return _unavailable("case construction failed: " * sprint(showerror, err); status = status)
     end
 end
 
@@ -398,23 +520,24 @@ function _make_karatsuba_case(c::CaseSpec, role, rng)
     result = Ref{Any}(nothing)
     runner = op == "mul!" ? (() -> LinearAlgebra.mul!(C, A, B)) : (() -> (result[] = A * B))
     output = op == "mul!" ? (() -> C) : (() -> result[])
-    expected = _oracle_gemm(ah, bh, N)
+    oracle = _oracle_gemm(ah, bh, N)
+    expected = oracle.values
     validate = () -> begin
         runner()
         CUDA.synchronize()
         got = _materialize(output(), T)
         ok = size(got) == size(expected) && all(BigInt(got[i]) == expected[i] for i in eachindex(expected))
         input_ok = _materialize(A, T) == ah && _materialize(B, T) == bh
-        return ok && input_ok, ok ? (input_ok ? "low-plane-only BigInt modular oracle passed" : "Karatsuba input preservation failed") : "Karatsuba GEMM oracle mismatch"
+        return ok && input_ok, ok ? (input_ok ? "low-plane-only $(oracle.method) passed" : "Karatsuba input preservation failed") : "Karatsuba GEMM oracle mismatch"
     end
     reset = () -> nothing
     # Karatsuba plan and both component buffers are initialized once. Reset only output values before each mutating sample.
     if op == "mul!"
-        low0 = copy(parent(_component(C, :low)))
-        high0 = copy(parent(_component(C, :high)))
+        low0 = copy(_storage_array(_component(C, :low)))
+        high0 = copy(_storage_array(_component(C, :high)))
         reset = () -> begin
-            copyto!(parent(_component(C, :low)), low0)
-            copyto!(parent(_component(C, :high)), high0)
+            copyto!(_storage_array(_component(C, :low)), low0)
+            copyto!(_storage_array(_component(C, :high)), high0)
             CUDA.synchronize()
         end
     end
@@ -425,32 +548,31 @@ function _make_karatsuba_case(c::CaseSpec, role, rng)
             "C_low" => _geometry(_component(C, :low))))
 end
 
+function _cpu_allocation_summary(trial)
+    memory = trial.memory
+    allocs = trial.allocs
+    return (bytes = memory == typemax(Int) ? nothing : Int(memory),
+        count = allocs == typemax(Int) ? nothing : Int(allocs))
+end
+
+function _cuda_allocation_summary(timed)
+    stats = timed.gpu_memstats
+    bytes = Int(timed.gpu_bytes)
+    count = Int(stats.alloc_count)
+    raw = Dict{String,Any}(
+        "elapsed_seconds" => timed.time,
+        "gpu_bytes" => bytes,
+        "gpu_alloc_count" => count,
+        "gpu_memtime" => timed.gpu_memtime)
+    return (count = count, bytes = bytes, raw = raw)
+end
+
 function _cuda_allocations(runner, reset)
     reset()
     CUDA.synchronize()
-    path, io = mktemp()
-    try
-        redirect_stdout(io) do
-            CUDA.@time runner()
-        end
-        flush(io)
-        seekstart(io)
-        output = read(io, String)
-    finally
-        close(io)
-        rm(path; force = true)
-    end
+    timed = CUDA.@timed runner()
     CUDA.synchronize()
-    count_match = match(r"\(([0-9,]+) GPU allocation", output)
-    bytes_match = match(r"GPU allocations?:\s*([0-9.]+)\s*(bytes|B|KiB|MiB|GiB)", output)
-    count = isnothing(count_match) ? nothing : parse(Int, replace(count_match.captures[1], "," => ""))
-    bytes = if isnothing(bytes_match)
-        nothing
-    else
-        scale = Dict("bytes" => 1, "B" => 1, "KiB" => 1024, "MiB" => 1024^2, "GiB" => 1024^3)[bytes_match.captures[2]]
-        round(Int, parse(Float64, bytes_match.captures[1]) * scale)
-    end
-    return (count = count, bytes = bytes, raw = strip(output))
+    return _cuda_allocation_summary(timed)
 end
 
 function _display_name(c)
@@ -465,9 +587,9 @@ function _case_record(c, built, cuda_ok, role, samples, seconds, warmups)
         "target" => c.target), "geometry" => built.geometry,
         "correctness" => nothing, "correctness_detail" => "not run",
         "times_ns" => Int[], "gctimes_ns" => Int[],
-        "cpu_alloc_bytes_by_sample" => Int[], "cpu_alloc_count_by_sample" => Int[],
         "cpu_alloc_bytes" => nothing, "cpu_alloc_count" => nothing,
-        "gpu_alloc_bytes" => nothing, "gpu_alloc_count" => nothing, "gpu_alloc_report" => nothing)
+        "cpu_allocation_method" => "BenchmarkTools.Trial minimum across samples",
+        "gpu_alloc_bytes" => nothing, "gpu_alloc_count" => nothing, "gpu_alloc_accounting" => nothing)
     if !cuda_ok
         merge!(base, Dict("status" => "unavailable", "detail" => "CUDA.functional() is false; no CPU fallback is measured"))
         return base
@@ -492,14 +614,13 @@ function _case_record(c, built, cuda_ok, role, samples, seconds, warmups)
         trial = BenchmarkTools.run(bench; samples = samples, seconds = seconds, evals = 1, gctrial = true)
         base["times_ns"] = copy(trial.times)
         base["gctimes_ns"] = copy(trial.gctimes)
-        base["cpu_alloc_bytes_by_sample"] = copy(trial.memory)
-        base["cpu_alloc_count_by_sample"] = copy(trial.allocs)
-        base["cpu_alloc_bytes"] = isempty(trial.memory) ? nothing : median(trial.memory)
-        base["cpu_alloc_count"] = isempty(trial.allocs) ? nothing : median(trial.allocs)
+        cpu = _cpu_allocation_summary(trial)
+        base["cpu_alloc_bytes"] = cpu.bytes
+        base["cpu_alloc_count"] = cpu.count
         gpu = _cuda_allocations(built.runner, built.reset)
         base["gpu_alloc_bytes"] = gpu.bytes
         base["gpu_alloc_count"] = gpu.count
-        base["gpu_alloc_report"] = gpu.raw
+        base["gpu_alloc_accounting"] = gpu.raw
         base["actual_samples"] = length(trial.times)
         base["status"] = "ok"
         base["detail"] = "correctness oracle passed; public operation timed with CUDA synchronization"

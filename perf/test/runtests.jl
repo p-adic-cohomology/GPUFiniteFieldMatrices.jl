@@ -20,9 +20,33 @@ function synthetic_run(label; package_version = "0.3.2", package_path = "/varian
         "correctness" => correctness, "times_ns" => collect(samples),
         "cpu_alloc_bytes" => 40, "cpu_alloc_count" => 2,
         "gpu_alloc_bytes" => 0, "gpu_alloc_count" => 0)
-    return Dict{String,Any}("schema_version" => 1, "run_label" => label,
+    return Dict{String,Any}("schema_version" => GFMPerf.GFMPerfCore.RUN_SCHEMA, "run_label" => label,
         "run_dir" => "/results/$label", "metadata" => metadata,
         "measurement_policy" => policy, "cases" => [case])
+end
+
+@testset "real CPU BenchmarkTools Trial allocation extraction" begin
+    trialable = GFMPerf.BenchmarkTools.@benchmarkable Vector{Int}(undef, 16) evals=1
+    trial = GFMPerf.BenchmarkTools.run(trialable; samples = 7, seconds = 0.25, evals = 1, gctrial = true)
+    allocation = GFMPerf._cpu_allocation_summary(trial)
+    @test trial.memory isa Int
+    @test trial.allocs isa Int
+    @test !isempty(trial.times)
+    @test allocation.bytes == trial.memory
+    @test allocation.count == trial.allocs
+    @test allocation.bytes > 0
+    @test allocation.count > 0
+end
+
+@testset "structured CUDA allocation result mapping" begin
+    timed = (time = 0.01, gpu_bytes = 4096, gpu_memtime = 3.0,
+        gpu_memstats = (alloc_count = 2,))
+    allocation = GFMPerf._cuda_allocation_summary(timed)
+    @test allocation.bytes == 4096
+    @test allocation.count == 2
+    @test allocation.raw["gpu_bytes"] == 4096
+    @test allocation.raw["gpu_alloc_count"] == 2
+    @test allocation.raw["gpu_memtime"] == 3.0
 end
 
 @testset "stable case catalogue" begin
@@ -37,6 +61,41 @@ end
     @test any(c -> c.group == "gemm-padding" && c.dims == [65, 65, 65], full)
     @test any(c -> c.group == "gemm-scale" && c.dims == [5000, 5000, 5000], full)
     @test any(c -> c.target == "current-only" && c.dtype == "Float32", quick)
+end
+
+@testset "constructor and storage adapters for the loaded package" begin
+    for (T, D) in ((Float32, 1), (Float32, 2), (Float64, 1), (Float64, 2))
+        profile = GFMPerf._adapter_profile(T, D)
+        cmtype = GFMPerf._cumod_type(T, D)
+        @test profile.constructor_style in (:positional_modulus, :keyword_modulus)
+        @test profile.storage_field == :data
+        @test hasfield(cmtype, :data)
+        sample = Array{T,D}(undef, ntuple(_ -> 2, D)...)
+        if profile.constructor_style == :positional_modulus
+            @test applicable(cmtype, sample, 101)
+        else
+            @test applicable(cmtype, sample; modulus = 101)
+        end
+    end
+end
+
+@testset "bounded exact large GEMM oracle" begin
+    small_a = Float64[1 2 3; 4 5 6]
+    small_b = Float64[2 1; 3 4; 5 6]
+    exact_small = GFMPerf._oracle_bigint_gemm(small_a, small_b, 101)
+    bounded_small = GFMPerf._oracle_float64_gemm(small_a, small_b, 101)
+    @test bounded_small == exact_small
+    @test GFMPerf._oracle_gemm(small_a, small_b, 101).values == exact_small
+
+    large_a = fill(2.0, 501, 501)
+    large_b = fill(3.0, 501, 1)
+    large = GFMPerf._oracle_gemm(large_a, large_b, 1000)
+    @test occursin("bounded exact Float64 BLAS", large.method)
+    @test all(==(6), large.values)
+
+    unsafe_a = fill(Float64(2^27), 501, 501)
+    unsafe_b = fill(Float64(2^27), 501, 1)
+    @test_throws ArgumentError GFMPerf._oracle_gemm(unsafe_a, unsafe_b, 101)
 end
 
 @testset "sample summaries and comparison policy" begin
@@ -94,6 +153,13 @@ end
         mkdir(out)
         @test_throws ArgumentError validate_output_path(out)
         @test validate_output_path(out; overwrite = true) == out
+        comparison = joinpath(dir, "comparison.json")
+        write_json(comparison, Dict("flagged_case_ids" => ["gemm-fixture"]))
+        @test GFMPerf.flagged_case_ids(comparison) == ["gemm-fixture"]
+        comparison_dir = joinpath(dir, "saved-comparison")
+        mkpath(comparison_dir)
+        write_json(joinpath(comparison_dir, "comparison.json"), Dict("flagged_case_ids" => ["gemm-fixture"]))
+        @test GFMPerf.flagged_case_ids(comparison_dir) == ["gemm-fixture"]
     end
 end
 

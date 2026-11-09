@@ -19,6 +19,6 @@ using .GFMPerfCore
 include("capture.jl")
 include("compare.jl")
 
-export capture, compare, confirm, rerun_flagged, quick_cases, full_cases
+export capture, compare, confirm, rerun_flagged, flagged_case_ids, quick_cases, full_cases
 
 end # module

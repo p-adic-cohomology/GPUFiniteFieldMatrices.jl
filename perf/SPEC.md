@@ -22,7 +22,10 @@ loaded source path. It is not identified by `Project.toml` version alone. The
 setup pins CUDA.jl 5.11.3 by default; each result still records the actual
 resolved versions and compatibility checks reject mismatches. BenchmarkTools,
 CUDA, Revise, JSON3, CSV, and compatibility dependencies live only in the
-manual harness environment, not the production project.
+manual harness environment, not the production project. Each variant's
+environment exposes Revise, BenchmarkTools, JSON3, and CUDA as direct
+dependencies for documented top-level REPL imports. Setup checks that their
+versions match and repairs missing direct entries in an owned-ready environment.
 
 ## Workload and stable case identity
 
@@ -64,18 +67,30 @@ not exercise the known inherited interacting-high-plane GEMV arithmetic
 limitation. No known-wrong historical case is assigned a speed ratio. Float32
 Karatsuba is current-only and is marked unsupported in historical captures.
 
+GEMM correctness uses scalar BigInt dot products up to 250,000 scalar
+products. Larger cases use an independent Float64 BLAS computation only after
+checking that fixtures are finite, nonnegative, integer-valued, and exactly
+representable in Float64, and that `k * max(A) * max(B) <= 2^53`. Since all
+terms and partial sums are nonnegative and bounded by that limit, each product
+and accumulation is exactly representable in Float64. Nine deterministic
+corner/center cells are cross-checked with BigInt. If any precondition or bound
+fails, oracle construction throws and the case is recorded as failed; it never
+falls back to an approximate answer.
+
 ## Timing and allocation records
 
 The default policy is 3 warmups, 20 samples, 1 evaluation per sample, and a
 2-second BenchmarkTools budget per case. The policy is stored in each capture
 and must match for a comparison. Mutating setup and its synchronization run
-outside the timed sample. BenchmarkTools reports CPU allocation bytes/counts
-per sample. A separate warmed CUDA.jl `CUDA.@time` pass reports GPU allocation
-bytes/counts when supported. CUDA pool-reserved bytes are not operation
-allocations. If CUDA accounting output cannot be parsed or supported, the GPU
-fields are `null` and the raw report is retained.
+outside the timed sample. BenchmarkTools `Trial.memory` and `Trial.allocs` are
+scalar minimum allocation byte/count values across the trial samples; the run
+stores those scalars alongside the raw time and GC sample arrays. A separate
+warmed CUDA.jl `CUDA.@timed` pass reports GPU bytes through `gpu_bytes` and the
+count through `gpu_memstats.alloc_count`. CUDA pool-reserved bytes are not
+operation allocations. Structured accounting values are retained in the run;
+if CUDA accounting is unsupported or fails, the GPU fields are `null`.
 
-Every run stores raw sample nanoseconds, GC times, CPU allocation samples,
+Every run stores raw sample nanoseconds, GC times, CPU allocation minima,
 actual sample count, correctness result, and one row for every requested case.
 It also stores run label/time, role, target commit/source hash/path/version,
 harness hash, active project, a copy of the resolved Project and Manifest,

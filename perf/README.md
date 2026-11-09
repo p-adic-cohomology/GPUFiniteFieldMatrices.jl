@@ -26,6 +26,11 @@ modified or wrongly pinned baseline worktrees. It leaves existing results
 untouched; use unique capture labels. Use a new checkout or run root after
 moving the clone to another path.
 
+Each variant environment lists `Revise`, `BenchmarkTools`, `JSON3`, and `CUDA`
+as direct dependencies so the documented `Main` imports work. Setup verifies
+that these versions match across variants and repairs missing direct entries in
+an already-owned ready environment without replacing its worktrees or results.
+
 Before capturing, check the driver and selected device in Julia:
 
 ```julia
@@ -76,13 +81,16 @@ baseline031 = GFMPerf.capture("baseline-031-001";
     suite=:quick, role="baseline-v0.3.1", samples=20, seconds=2, warmups=3)
 ```
 
-Each label is a new result directory under `perf/results/`. A label cannot be
+Each label is a new result directory under `perf/results/`. The returned value
+and printed output are the saved path. Record the label or path before exiting
+Julia; REPL variables do not survive between processes. A label cannot be
 reused unless `overwrite=true` is passed explicitly. Keep these baseline
 directories for later comparisons.
 
 ## 3. Capture and revise the development checkout
 
-Start a fresh process using the current editable checkout environment:
+Start a fresh process using the current editable checkout environment. Launch
+it from the repository root so the saved paths below resolve consistently:
 
 ```sh
 julia --startup-file=no --project=.perf-regressions/envs/current
@@ -95,7 +103,10 @@ using GPUFiniteFieldMatrices
 using GFMPerf
 @assert CUDA.functional()
 pathof(GPUFiniteFieldMatrices)  # should be this checkout's src/GPUFiniteFieldMatrices.jl
-dev_before = GFMPerf.capture("dev-before-edit-001";
+repo_root = pwd()
+baseline032_path = joinpath(repo_root, "perf", "results", "baseline-032-001")
+baseline031_path = joinpath(repo_root, "perf", "results", "baseline-031-001")
+dev_before_path = GFMPerf.capture("dev-before-edit-001";
     suite=:quick, role="current", samples=20, seconds=2, warmups=3)
 ```
 
@@ -104,11 +115,29 @@ the edits (or call `Revise.revise()`), then take a new capture:
 
 ```julia
 Revise.revise()
-dev_after = GFMPerf.capture("dev-after-edit-001";
+dev_after_path = GFMPerf.capture("dev-after-edit-001";
     suite=:quick, role="current", samples=20, seconds=2, warmups=3)
-cmp032 = GFMPerf.compare(dev_after, baseline032; threshold=0.10, min_samples=5)
-cmp031 = GFMPerf.compare(dev_after, baseline031; threshold=0.10, min_samples=5)
+cmp032_path = GFMPerf.compare(dev_after_path, baseline032_path; threshold=0.10, min_samples=5)
+cmp031_path = GFMPerf.compare(dev_after_path, baseline031_path; threshold=0.10, min_samples=5)
 ```
+
+If Julia exits before comparison or a rerun, rehydrate the paths in the new
+REPL from their saved labels; do not expect `baseline032_path` or
+`cmp032_path` variables to persist. For the labels above, for example:
+
+```julia
+repo_root = pwd()
+baseline032_path = joinpath(repo_root, "perf", "results", "baseline-032-001")
+baseline031_path = joinpath(repo_root, "perf", "results", "baseline-031-001")
+dev_after_path = joinpath(repo_root, "perf", "results", "dev-after-edit-001")
+cmp032_path = joinpath(repo_root, "perf", "results", "comparisons",
+    "dev-after-edit-001-vs-baseline-032-001")
+cmp031_path = joinpath(repo_root, "perf", "results", "comparisons",
+    "dev-after-edit-001-vs-baseline-031-001")
+```
+
+Use the exact labels you captured if they differ. Capture and comparison calls
+return their artifact paths; keep those paths with the run labels.
 
 The capture rebuilds deterministic fixtures and benchmark closures from the
 current Julia world on every call; it does not rely on top-level `includet`
@@ -126,39 +155,57 @@ including 1024 and 5000 square products, pass `suite=:full`. You can change
 `GFMPerf.compare` returns and prints the comparison directory. A slowdown above
 10% that clears the within-run noise estimate is marked
 `flagged-unconfirmed`; it is not called a confirmed regression. In a fresh
-development REPL, rerun only those cases:
+development REPL, first rehydrate the comparison path if this is a new
+process, then rerun only those cases:
 
 ```julia
-rerun_dev = GFMPerf.rerun_flagged(cmp032; label="dev-rerun-001",
+repo_root = pwd()
+cmp032_path = joinpath(repo_root, "perf", "results", "comparisons",
+    "dev-after-edit-001-vs-baseline-032-001")
+rerun_dev_path = GFMPerf.rerun_flagged(cmp032_path; label="dev-rerun-001",
     samples=40, seconds=4, warmups=3)
 ```
 
 Capture the same case IDs from the v0.3.2 environment in its own fresh process.
-For example, load the flagged IDs from the comparison artifact:
+Rehydrate the comparison path in that process and read the IDs through the
+harness helper:
 
 ```julia
-using JSON3
-ids = JSON3.read(read(joinpath(cmp032, "comparison.json"), String),
-    Dict{String,Any})["flagged_case_ids"]
-baseline032_rerun = GFMPerf.capture("baseline-032-rerun-001";
+repo_root = pwd()
+cmp032_path = joinpath(repo_root, "perf", "results", "comparisons",
+    "dev-after-edit-001-vs-baseline-032-001")
+ids = GFMPerf.flagged_case_ids(cmp032_path)
+baseline032_rerun_path = GFMPerf.capture("baseline-032-rerun-001";
     suite=:full, case_ids=ids, role="baseline-v0.3.2",
     samples=40, seconds=4, warmups=3)
 ```
 
 For confirmation, use at least three fresh-process baseline → candidate →
-baseline cycles. Compare each candidate run to the baseline captured
-immediately before it, and also compare it to the following baseline to spot
-drift. Then pass three distinct candidate/baseline comparison reports to
-`GFMPerf.confirm([cmp1, cmp2, cmp3])`. Confirmation requires all independent
-pair medians to cross the configured threshold and the repeated change to clear
-the measured noise rule. Use the same flagged case IDs and settings throughout.
+baseline cycles. In each process, rehydrate the saved baseline and candidate
+capture paths by label before comparing. After the cycles, rehydrate the three
+comparison paths in any harness-loaded REPL from the labels used for those
+comparisons:
+
+```julia
+repo_root = pwd()
+cmp1_path = joinpath(repo_root, "perf", "results", "comparisons", "candidate-1-vs-baseline-before-1")
+cmp2_path = joinpath(repo_root, "perf", "results", "comparisons", "candidate-2-vs-baseline-before-2")
+cmp3_path = joinpath(repo_root, "perf", "results", "comparisons", "candidate-3-vs-baseline-before-3")
+confirmation = GFMPerf.confirm([cmp1_path, cmp2_path, cmp3_path])
+```
+
+Replace the example labels with the exact capture labels in your runs.
+Confirmation requires all independent pair medians to cross the configured
+threshold and the repeated change to clear the measured noise rule. Use the
+same flagged case IDs and settings throughout.
 
 ## 5. Read the artifacts
 
 Each `perf/results/<label>/` directory contains:
 
-- `run.json`: case outcomes, raw synchronized sample times, per-sample CPU
-  allocations, GPU allocation results, and run metadata.
+- `run.json`: case outcomes, raw synchronized time and GC samples, scalar
+  BenchmarkTools CPU allocation minima, structured GPU allocation results, and
+  run metadata.
 - `summary.csv`: one row for every requested case, including unavailable,
   unsupported, incorrect, or failed cases.
 - `metadata.json`, `Project.toml`, and `Manifest.toml`: target and harness
@@ -168,10 +215,13 @@ Each `perf/results/<label>/` directory contains:
 Comparison directories contain `comparison.json`, `comparison.csv`, and a
 readable `comparison.txt`. Timing ratios are current divided by baseline;
 positive percentages are slowdowns. CPU allocation counts/bytes come from
-BenchmarkTools. GPU counts/bytes are collected in a separate warmed
-`CUDA.@time` pass; the raw CUDA report is kept in `run.json`. Missing GPU
-accounting is `null`, not zero. Pool-reserved memory is not reported as an
-operation allocation.
+BenchmarkTools. `Trial.memory` and `Trial.allocs` are scalar minimum byte/count
+values across the measured samples; BenchmarkTools does not expose these as
+per-sample arrays. GPU counts/bytes are collected in a separate warmed
+`CUDA.@timed` pass from `gpu_bytes` and `gpu_memstats.alloc_count`, and the
+structured accounting values are kept in `run.json`. Missing GPU accounting is
+`null`, not zero. Pool-reserved memory is not reported as an operation
+allocation.
 
 `unsupported` means the operation or adapter is unavailable in that package
 revision. `incorrect` means the correctness oracle rejected its output. Neither
@@ -186,6 +236,12 @@ comparisons. Historical Float32 Karatsuba cases are explicitly unsupported;
 the current-only Float32 cases are recorded separately. The known
 interacting-high-plane GEMV limitation is not used to produce a favorable
 comparison.
+
+Large GEMM correctness checks switch from scalar BigInt products to Float64
+BLAS only when a rigorous exactness guard proves every nonnegative integer
+product and partial sum is at most `2^53`; nine deterministic corner/center
+outputs are also checked with BigInt. If the input or bound is unsafe, the case
+is reported failed rather than compared with an approximate oracle.
 
 See [SPEC.md](SPEC.md) for the workload, correctness, compatibility, and
 reporting contract. References: [CUDA.jl profiling](https://cuda.juliagpu.org/stable/development/profiling/),
