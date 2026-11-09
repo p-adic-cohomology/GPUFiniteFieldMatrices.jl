@@ -38,8 +38,8 @@ caller, who must then ensure the arrays are compatible. A supplied
 Note matrices over the permitted size for efficient matmul may be created, but matmul 
 will throw an exception if these matrices are multiplied.
 """
-struct CuModArray{T,D} <: AbstractArray{T,D}
-    data::CuArray{T,D}  # Padded CuArray data
+struct CuModArray{T,D,S<:CuArray{T,D}} <: AbstractArray{T,D}
+    data::S              # Padded CuArray data, including its concrete memory type
     size::Dims{D}        # True dimensions
     N::Int               # The modulus N
 
@@ -98,9 +98,9 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
         end
 
         if new_size != nothing
-            new{T,D}(data, new_size, N)
+            new{T,D,typeof(data)}(data, new_size, N)
         else
-            new{T,D}(data, size(A), N)
+            new{T,D,typeof(data)}(data, size(A), N)
         end
     end
 
@@ -127,11 +127,32 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
         N = modulus
 
         if new_size != nothing
-            new{T,D}(data, new_size, N)
+            new{T,D,typeof(data)}(data, new_size, N)
         else
-            new{T,D}(data, size(data), N)
+            new{T,D,typeof(data)}(data, size(data), N)
         end
     end
+end
+
+# Infer the concrete storage selected by CUDA's public zero allocator without
+# allocating storage, so CPU-backed Karatsuba values can keep lazy plans.
+@inline function _default_cumod_storage_type(::Type{T}, ::Val{D}) where {T,D}
+    data_type = getfield(getfield(Core, :Compiler), :return_type)(
+        CUDA.zeros,
+        Tuple{Type{T},Vararg{Int,D}},
+    )
+    isconcretetype(data_type) && data_type <: CUDA.CuArray{T,D} || throw(
+        ArgumentError("CUDA.zeros does not infer a concrete CuArray{$T,$D} storage type"),
+    )
+    return CuModArray{T,D,data_type}
+end
+
+@inline function _cuarray_zeros(
+    ::Type{S},
+    dims::Dims{D},
+) where {T,D,M,S<:CUDA.CuArray{T,D,M}}
+    data = CUDA.CuArray{T,D,M}(undef, dims)
+    return fill!(data, zero(T))
 end
 
 """Return the modulus associated with `A`."""
@@ -505,6 +526,16 @@ function Base.zeros(::Type{CuModArray{T,1}}, length::Integer; modulus::Int) wher
 end
 
 function Base.zeros(
+    ::Type{CuModArray{T,1,S}},
+    length::Integer;
+    modulus::Int,
+) where {T,S<:CuArray{T,1}}
+    padded_entries = _padded_extent(length)
+    data = _cuarray_zeros(S, (padded_entries,))
+    return CuModArray{T,1}(data; modulus = modulus, mod = false, new_size = (length,))
+end
+
+function Base.zeros(
     ::Type{CuModArray{T,2}},
     rows::Integer,
     cols::Integer;
@@ -514,6 +545,18 @@ function Base.zeros(
     padded_rows = _padded_extent(rows)
     padded_cols = _padded_extent(cols)
     data = CUDA.zeros(T, padded_rows, padded_cols)
+    return CuModArray{T,2}(data; modulus = modulus, mod = false, new_size = new_size)
+end
+
+function Base.zeros(
+    ::Type{CuModArray{T,2,S}},
+    rows::Integer,
+    cols::Integer;
+    modulus::Int,
+    new_size::Tuple{Int,Int} = (rows, cols),
+) where {T,S<:CuArray{T,2}}
+    dims = (_padded_extent(rows), _padded_extent(cols))
+    data = _cuarray_zeros(S, dims)
     return CuModArray{T,2}(data; modulus = modulus, mod = false, new_size = new_size)
 end
 
@@ -740,12 +783,10 @@ reduced only when `new_N` is smaller than `modulus(A)`; otherwise they are copie
 The new storage rounds each logical
 dimension up to a multiple of `TILE_WIDTH` and has zero padding.
 """
-function change_modulus(A::CuModArray, new_N::Integer)
-    T = eltype(parent(A))
-    D = ndims(A)
+function change_modulus(A::CuModArray{T,D,S}, new_N::Integer) where {T,D,S}
     dims = size(A)
     new_modulus = Int(new_N)
-    data = CUDA.zeros(T, _padded_size(dims)...)
+    data = _cuarray_zeros(S, _padded_size(dims))
     result = CuModArray{T,D}(data; modulus = new_modulus, mod = false, new_size = dims)
 
     if !isempty(A)
@@ -860,9 +901,9 @@ Copy the logical data and metadata into newly allocated storage. The new
 storage rounds each logical dimension up to a multiple of `TILE_WIDTH` and has
 zero padding, regardless of the source padding contents.
 """
-function Base.copy(A::CuModArray{T,D}) where {T,D}
+function Base.copy(A::CuModArray{T,D,S}) where {T,D,S}
     dims = size(A)
-    data = CUDA.zeros(T, _padded_size(dims)...)
+    data = _cuarray_zeros(S, _padded_size(dims))
     if !isempty(A)
         copyto!(_logical_view(data, dims), _logical_view(parent(A), dims))
     end

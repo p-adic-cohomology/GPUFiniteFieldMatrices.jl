@@ -151,8 +151,9 @@ BitIntegers.@define_integers 24
           mod
     @test which(LinearAlgebra.mul!, Tuple{karatsuba_type,karatsuba_type,karatsuba_type}).module ===
           mod
+    allocating_cumod_storage = mod._default_cumod_storage_type(Float64, Val(2))
     allocating_karatsuba_type =
-        mod.KaratsubaArray{Float64,2,mod.CuModMatrix{Float64},mod.CuModMatrix{Float64}}
+        mod.KaratsubaArray{Float64,2,allocating_cumod_storage,allocating_cumod_storage}
     allocating_product_method =
         which(Base.:*, Tuple{allocating_karatsuba_type,allocating_karatsuba_type})
     @test allocating_product_method.module === mod
@@ -1235,6 +1236,7 @@ end
     high = [3 4; 5 6]
     wrapped =
         mod.KaratsubaMatrix(low, high; low_modulus = 2, high_modulus = 7, modulus = 19)
+    wrapped_plan_type = mod._karatsuba_plan_type(typeof(low))
     @test low_part(wrapped) === low
     @test high_part(wrapped) === high
     @test (
@@ -1244,10 +1246,10 @@ end
     ) == (2, 7, 19)
     @test isconcretetype(typeof(wrapped))
     @test typeof(wrapped).parameters[3] === typeof(low)
-    @test typeof(wrapped).parameters[4] === mod.CuModArray{Int,2}
+    @test typeof(wrapped).parameters[4] === wrapped_plan_type
     @test fieldtype(typeof(wrapped), :data1) === Matrix{Int}
     @test fieldtype(typeof(wrapped), :data2) === Matrix{Int}
-    @test fieldtype(typeof(wrapped), :plan) === Union{Nothing,mod.CuModArray{Int,2}}
+    @test fieldtype(typeof(wrapped), :plan) === Union{Nothing,wrapped_plan_type}
     @test fieldtype(typeof(wrapped), :N1) === Int
     @test fieldtype(typeof(wrapped), :N2) === Int
     @test fieldtype(typeof(wrapped), :M) === Int
@@ -1319,10 +1321,12 @@ end
         high_modulus = 5,
         modulus = 19,
     )
+    cpu_matrix_plan_type = mod._karatsuba_plan_type(Matrix{Float32})
+    cpu_vector_plan_type = mod._karatsuba_plan_type(Vector{Float32})
     @test typeof(zero_matrix) ===
-          mod.KaratsubaMatrix{Float32,Matrix{Float32},mod.CuModMatrix{Float32}}
+          mod.KaratsubaMatrix{Float32,Matrix{Float32},cpu_matrix_plan_type}
     @test typeof(zero_vector) ===
-          mod.KaratsubaVector{Float32,Vector{Float32},mod.CuModVector{Float32}}
+          mod.KaratsubaVector{Float32,Vector{Float32},cpu_vector_plan_type}
     @test zero_matrix.plan === nothing
     @test zero_vector.plan === nothing
     @test low_part(zero_matrix) isa Matrix{Float32}
@@ -1349,13 +1353,13 @@ end
         low_modulus = 3,
     )
     explicit_plan_zero = @inferred Base.zeros(
-        mod.KaratsubaMatrix{Float32,Matrix{Float32},mod.CuModMatrix{Float32}},
+        mod.KaratsubaMatrix{Float32,Matrix{Float32},cpu_matrix_plan_type},
         2,
         2;
         modulus = 19,
     )
     @test typeof(explicit_plan_zero) ===
-          mod.KaratsubaMatrix{Float32,Matrix{Float32},mod.CuModMatrix{Float32}}
+          mod.KaratsubaMatrix{Float32,Matrix{Float32},cpu_matrix_plan_type}
     @test explicit_plan_zero.plan === nothing
     @test_throws ArgumentError Base.zeros(
         mod.KaratsubaMatrix{Float32,Matrix{Float32},Matrix{Float32}},
@@ -1422,7 +1426,7 @@ end
         @test high_part(wrapped) === high
         @test wrapped.plan === nothing
         @test typeof(wrapped).parameters[3] === Matrix{T}
-        @test typeof(wrapped).parameters[4] === mod.CuModArray{T,2}
+        @test typeof(wrapped).parameters[4] === mod._karatsuba_plan_type(Matrix{T})
     end
 
     @test mod.get_bits(Int) == 8 * sizeof(Int) - 1
@@ -1462,8 +1466,9 @@ end
         high_modulus = 3,
         modulus = 5,
     )
+    factory_zero_plan_type = mod._karatsuba_plan_type(Matrix{UInt64})
     @test typeof(factory_zero) ===
-          mod.KaratsubaMatrix{UInt64,Matrix{UInt64},mod.CuModArray{UInt64,2}}
+          mod.KaratsubaMatrix{UInt64,Matrix{UInt64},factory_zero_plan_type}
     @test factory_zero.plan === nothing
 
     for unsupported in
@@ -1488,6 +1493,7 @@ end
     mod = GPUFiniteFieldMatrices
     low_matrix = Int[1 2; 3 4]
     high_matrix = Int[5 6; 7 8]
+    default_int_matrix_plan = mod._karatsuba_plan_type(Matrix{Int})
     matrix = @inferred mod.KaratsubaArray{Int,2}(
         low_matrix,
         high_matrix;
@@ -1495,13 +1501,14 @@ end
         high_modulus = 3,
         modulus = 11,
     )
-    concrete_matrix = @inferred mod.KaratsubaMatrix{Int,Matrix{Int},mod.CuModMatrix{Int}}(
-        low_matrix,
-        high_matrix;
-        low_modulus = 2,
-        high_modulus = 3,
-        modulus = 11,
-    )
+    concrete_matrix =
+        @inferred mod.KaratsubaMatrix{Int,Matrix{Int},default_int_matrix_plan}(
+            low_matrix,
+            high_matrix;
+            low_modulus = 2,
+            high_modulus = 3,
+            modulus = 11,
+        )
     @test typeof(concrete_matrix) === typeof(matrix)
     @test_throws ArgumentError mod.KaratsubaMatrix{Int,AbstractArray{Int,2}}(
         low_matrix,
@@ -1510,15 +1517,16 @@ end
         high_modulus = 3,
         modulus = 11,
     )
-    plan_typed_matrix = @inferred mod.KaratsubaMatrix{Int,Matrix{Int},mod.CuModMatrix{Int}}(
-        low_matrix,
-        high_matrix;
-        low_modulus = 2,
-        high_modulus = 3,
-        modulus = 11,
-    )
+    plan_typed_matrix =
+        @inferred mod.KaratsubaMatrix{Int,Matrix{Int},default_int_matrix_plan}(
+            low_matrix,
+            high_matrix;
+            low_modulus = 2,
+            high_modulus = 3,
+            modulus = 11,
+        )
     @test typeof(plan_typed_matrix) ===
-          mod.KaratsubaMatrix{Int,Matrix{Int},mod.CuModMatrix{Int}}
+          mod.KaratsubaMatrix{Int,Matrix{Int},default_int_matrix_plan}
     @test plan_typed_matrix.plan === nothing
     unsupported_plan_matrix = mod.KaratsubaMatrix{Int,Matrix{Int},Matrix{Int}}(
         low_matrix,
@@ -1560,16 +1568,22 @@ end
         high_modulus = 5,
         modulus = 19,
     )
+    default_float_matrix_plan = mod._karatsuba_plan_type(Matrix{Float32})
+    default_float_vector_plan = mod._karatsuba_plan_type(Vector{Float32})
     @test typeof(cpu_zero_matrix) ===
-          mod.KaratsubaMatrix{Float32,Matrix{Float32},mod.CuModMatrix{Float32}}
+          mod.KaratsubaMatrix{Float32,Matrix{Float32},default_float_matrix_plan}
     @test typeof(cpu_zero_vector) ===
-          mod.KaratsubaVector{Float32,Vector{Float32},mod.CuModVector{Float32}}
+          mod.KaratsubaVector{Float32,Vector{Float32},default_float_vector_plan}
     @test cpu_zero_matrix.plan === nothing
     @test cpu_zero_vector.plan === nothing
 
     gpu_kwargs_type = NamedTuple{(:modulus,),Tuple{Int}}
-    gpu_matrix_type = mod.KaratsubaMatrix{Float32,mod.CuModMatrix{Float32}}
-    gpu_vector_type = mod.KaratsubaVector{Float32,mod.CuModVector{Float32}}
+    gpu_matrix_storage = mod._default_cumod_storage_type(Float32, Val(2))
+    gpu_vector_storage = mod._default_cumod_storage_type(Float32, Val(1))
+    gpu_matrix_plan = mod._karatsuba_plan_type(gpu_matrix_storage)
+    gpu_vector_plan = mod._karatsuba_plan_type(gpu_vector_storage)
+    gpu_matrix_type = mod.KaratsubaMatrix{Float32,gpu_matrix_storage}
+    gpu_vector_type = mod.KaratsubaVector{Float32,gpu_vector_storage}
     gpu_matrix_return = Core.Compiler.return_type(
         Core.kwcall,
         Tuple{gpu_kwargs_type,typeof(Base.zeros),Type{gpu_matrix_type},Int,Int},
@@ -1589,15 +1603,17 @@ end
         },
     )
     @test gpu_matrix_return ===
-          mod.KaratsubaMatrix{Float32,mod.CuModMatrix{Float32},mod.CuModMatrix{Float32}}
+          mod.KaratsubaMatrix{Float32,gpu_matrix_storage,gpu_matrix_plan}
     @test gpu_vector_return ===
-          mod.KaratsubaVector{Float32,mod.CuModVector{Float32},mod.CuModVector{Float32}}
+          mod.KaratsubaVector{Float32,gpu_vector_storage,gpu_vector_plan}
     @test gpu_default_return === gpu_matrix_return
 
     raw_matrix_storage = CUDA.CuArray{Float32,2,CUDA.DeviceMemory}
     raw_vector_storage = CUDA.CuArray{Float32,1,CUDA.DeviceMemory}
     raw_matrix_type = mod.KaratsubaMatrix{Float32,raw_matrix_storage}
     raw_vector_type = mod.KaratsubaVector{Float32,raw_vector_storage}
+    raw_matrix_plan = mod._karatsuba_plan_type(raw_matrix_storage)
+    raw_vector_plan = mod._karatsuba_plan_type(raw_vector_storage)
     raw_matrix_return = Core.Compiler.return_type(
         Core.kwcall,
         Tuple{gpu_kwargs_type,typeof(Base.zeros),Type{raw_matrix_type},Int,Int},
@@ -1607,9 +1623,9 @@ end
         Tuple{gpu_kwargs_type,typeof(Base.zeros),Type{raw_vector_type},Int},
     )
     @test raw_matrix_return ===
-          mod.KaratsubaMatrix{Float32,raw_matrix_storage,mod.CuModMatrix{Float32}}
+          mod.KaratsubaMatrix{Float32,raw_matrix_storage,raw_matrix_plan}
     @test raw_vector_return ===
-          mod.KaratsubaVector{Float32,raw_vector_storage,mod.CuModVector{Float32}}
+          mod.KaratsubaVector{Float32,raw_vector_storage,raw_vector_plan}
 
     too_large_for_int = BigInt(typemax(Int)) + 1
     @test_throws InexactError mod.KaratsubaMatrix(
@@ -1735,7 +1751,7 @@ if CUDA.functional()
 
         function check_plan(K, dims)
             plan = K.plan
-            @test typeof(plan) === mod.CuModArray{eltype(K),length(dims)}
+            @test typeof(plan) === mod._karatsuba_plan_type(typeof(low_part(K)))
             @test size(plan) == dims
             @test size(parent(plan)) == map(mod._padded_extent, dims)
             @test modulus(plan) == low_modulus(K)

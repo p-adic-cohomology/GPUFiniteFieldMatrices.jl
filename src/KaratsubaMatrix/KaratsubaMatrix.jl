@@ -3,8 +3,9 @@
 
 An array represented by low and high components of storage type `S`. The
 component arrays must have the same concrete storage type. `P` is independent
-of `S`: the factory-created plan type is `CuModArray{T,D}` for every component
-backend, matching the original padded GPU workspace behavior. Use `low_part`,
+of `S`: the factory-created plan type is a concrete `CuModArray` using CUDA's
+default memory policy for every component backend, matching the original padded
+GPU workspace behavior. Use `low_part`,
 `high_part`, `low_modulus`, `high_modulus`, and `modulus` to inspect a value;
 the fields are internal implementation details.
 """
@@ -68,7 +69,8 @@ function KaratsubaArray{T,D}(
     return KaratsubaArray{T,D,typeof(A)}(A, B; kwargs...)
 end
 
-_karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} = CuModArray{T,D}
+_karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} =
+    _default_cumod_storage_type(T, Val(D))
 
 function KaratsubaArray{T,D,S}(A::S, B::S; kwargs...) where {T,D,S<:AbstractArray{T,D}}
     P = _karatsuba_plan_type(S)
@@ -1418,11 +1420,11 @@ function _karatsuba_zero_component(::Type{Array{T,D}}, dims::Dims{D}, ::Int) whe
 end
 
 function _karatsuba_zero_component(
-    ::Type{CuModArray{T,D}},
+    ::Type{CuModArray{T,D,S}},
     dims::Dims{D},
     component_modulus::Int,
-) where {T,D}
-    return zeros(CuModArray{T,D}, dims...; modulus = component_modulus)
+) where {T,D,S<:CuArray{T,D}}
+    return zeros(CuModArray{T,D,S}, dims...; modulus = component_modulus)
 end
 
 function _karatsuba_zero_component(
@@ -1433,7 +1435,7 @@ function _karatsuba_zero_component(
     isconcretetype(S) || throw(
         ArgumentError("CuArray zero factories require a concrete component storage type"),
     )
-    component = CUDA.zeros(T, dims...)
+    component = _cuarray_zeros(S, dims)
     typeof(component) === S || throw(
         ArgumentError(
             "CUDA.zeros returned $(typeof(component)) for requested component type $S",
@@ -1458,11 +1460,13 @@ function Base.zeros(
     cols::Integer;
     kwargs...,
 ) where {T}
-    return _karatsuba_zeros(T, CuModArray{T,2}, (Int(rows), Int(cols)); kwargs...)
+    S = _default_cumod_storage_type(T, Val(2))
+    return _karatsuba_zeros(T, S, (Int(rows), Int(cols)); kwargs...)
 end
 
 function Base.zeros(::Type{KaratsubaArray{T,1}}, length::Integer; kwargs...) where {T}
-    return _karatsuba_zeros(T, CuModArray{T,1}, (Int(length),); kwargs...)
+    S = _default_cumod_storage_type(T, Val(1))
+    return _karatsuba_zeros(T, S, (Int(length),); kwargs...)
 end
 
 function Base.zeros(
@@ -1516,9 +1520,9 @@ function _karatsuba_zero_component(source, dims::Dims, component_modulus)
     T = eltype(source)
     D = length(dims)
     if source isa CuModArray
-        return zeros(CuModArray{T,D}, dims...; modulus = Int(component_modulus))
+        return zeros(typeof(source), dims...; modulus = Int(component_modulus))
     elseif source isa CuArray
-        return CUDA.zeros(T, dims...)
+        return _cuarray_zeros(typeof(source), dims)
     end
     return Base.zeros(T, dims)
 end
