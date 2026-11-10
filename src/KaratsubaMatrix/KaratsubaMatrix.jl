@@ -1584,7 +1584,7 @@ function initialize_plan!(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
             "initialize_plan! requires plan storage type $expected_plan_type, got $P",
         ),
     )
-    K.plan = zeros(expected_plan_type, size(low_part(K))...; modulus = Int(low_modulus(K)))
+    K.plan = zeros(CuModArray{T,D}, size(low_part(K))...; modulus = Int(low_modulus(K)))
     return K
 end
 
