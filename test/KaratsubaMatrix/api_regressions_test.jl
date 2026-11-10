@@ -626,7 +626,8 @@ function test_karatsuba_api_regressions()
             @test parent(mod.low_part(allocated)) isa CUDA.CuArray{Float64,2}
             @test parent(mod.high_part(allocated)) isa CUDA.CuArray{Float64,2}
             @test allocated.plan isa mod.CuModMatrix{Float64}
-            @test typeof(allocated.plan) === mod.CuModMatrix{Float64}
+            @test typeof(allocated.plan) ===
+                  mod._karatsuba_plan_type(typeof(mod.low_part(allocated)))
             @test Array(allocated) == allocating_expected
             @test any(value -> !iszero(value), Array(mod.high_part(allocated)))
             assert_input_unchanged(unplanned_a, unplanned_a_before)

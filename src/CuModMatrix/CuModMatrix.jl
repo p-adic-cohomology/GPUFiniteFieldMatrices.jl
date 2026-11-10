@@ -38,8 +38,8 @@ caller, who must then ensure the arrays are compatible. A supplied
 Note matrices over the permitted size for efficient matmul may be created, but matmul 
 will throw an exception if these matrices are multiplied.
 """
-struct CuModArray{T,D} <: AbstractArray{T,D}
-    data::CuArray{T,D}  # Padded CuArray data
+struct CuModArray{T,D,M} <: AbstractArray{T,D}
+    data::CuArray{T,D,M}  # Padded CuArray data with its CUDA memory type
     size::Dims{D}        # True dimensions
     N::Int               # The modulus N
 
@@ -97,10 +97,11 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
             mod!(data, data, N)
         end
 
+        memory_type = typeof(data).parameters[3]
         if new_size != nothing
-            new{T,D}(data, new_size, N)
+            new{T,D,memory_type}(data, new_size, N)
         else
-            new{T,D}(data, size(A), N)
+            new{T,D,memory_type}(data, size(A), N)
         end
     end
 
@@ -117,19 +118,19 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
     keeping the same data as a previous CuModarray.
     """
     function CuModArray{T,D}(
-        A::CuArray{T,D},
+        A::CuArray{T,D,M},
         ;
         modulus::Int,
         mod = false,
         new_size = nothing,
-    ) where {T,D}
+    ) where {T,D,M}
         data = A
         N = modulus
 
         if new_size != nothing
-            new{T,D}(data, new_size, N)
+            new{T,D,M}(data, new_size, N)
         else
-            new{T,D}(data, size(data), N)
+            new{T,D,M}(data, size(data), N)
         end
     end
 end
