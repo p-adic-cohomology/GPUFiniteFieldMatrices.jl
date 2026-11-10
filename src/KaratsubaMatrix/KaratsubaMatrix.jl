@@ -3,8 +3,9 @@
 
 An array represented by low and high components of storage type `S`. The
 component arrays must have the same concrete storage type. `P` is independent
-of `S`: the factory-created plan type is `CuModArray{T,D}` for every component
-backend, matching the original padded GPU workspace behavior. Use `low_part`,
+of `S`: the factory-created plan type is the concrete default-memory
+`CuModArray{T,D,M}` for every component backend, matching the original padded
+GPU workspace behavior. Use `low_part`,
 `high_part`, `low_modulus`, `high_modulus`, and `modulus` to inspect a value;
 the fields are internal implementation details.
 """
@@ -25,9 +26,13 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
         high_modulus::Union{Nothing,Integer} = nothing,
         modulus::Union{Nothing,Integer} = nothing,
     ) where {T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}}
-        isconcretetype(S) ||
+        typeof(A) === typeof(B) ||
+            throw(ArgumentError("Karatsuba components must have the same storage type"))
+        component_type = _karatsuba_resolve_component_type(S, typeof(A), T, Val(D))
+        plan_type = _karatsuba_resolve_plan_type(P, T, Val(D))
+        isconcretetype(component_type) ||
             throw(ArgumentError("Karatsuba components require a concrete storage type"))
-        isconcretetype(P) ||
+        isconcretetype(plan_type) ||
             throw(ArgumentError("Karatsuba plans require a concrete storage type"))
         if size(A) != size(B)
             throw(DimensionMismatch("Dimensions of matrices must match"))
@@ -51,7 +56,7 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
             throw(ArgumentError("Modulus too large"))
         end
 
-        return new{T,D,S,P}(A, B, nothing, N1, N2, M)
+        return new{T,D,component_type,plan_type}(A, B, nothing, N1, N2, M)
     end
 end
 
@@ -68,11 +73,81 @@ function KaratsubaArray{T,D}(
     return KaratsubaArray{T,D,typeof(A)}(A, B; kwargs...)
 end
 
-_karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} = CuModArray{T,D}
+function _default_cumod_storage_type(::Type{T}, ::Val{D}) where {T,D}
+    # A lazy Karatsuba value needs a concrete plan field type before its first
+    # plan allocation. Infer the type returned by CUDA's public zero allocator
+    # without allocating GPU storage or reading CUDA's private default-memory
+    # preference. Ordinary CuModArray allocations still use CUDA.zeros directly.
+    compiler_return_type = getfield(getfield(Core, :Compiler), :return_type)
+    data_type = compiler_return_type(CUDA.zeros, Tuple{Type{T},Vararg{Int,D}})
+    isconcretetype(data_type) && data_type <: CUDA.CuArray{T,D} || throw(
+        ArgumentError("CUDA.zeros does not infer a concrete CuArray{$T,$D} storage type"),
+    )
+    memory_type = data_type.parameters[3]
+    isconcretetype(memory_type) || throw(
+        ArgumentError("CUDA.zeros does not infer a concrete CuArray memory type for $T,$D"),
+    )
+    return CuModArray{T,D,memory_type}
+end
+
+_karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} =
+    _default_cumod_storage_type(T, Val(D))
+
+@inline function _karatsuba_resolve_component_type(
+    ::Type{CuModArray{T,D}},
+    ::Type{A},
+    ::Type{T},
+    ::Val{D},
+) where {T,D,A}
+    isconcretetype(A) && A <: CuModArray{T,D} || throw(
+        ArgumentError(
+            "partial CuModArray component requests need concrete CuModArray inputs",
+        ),
+    )
+    return A
+end
+
+@inline function _karatsuba_resolve_component_type(
+    ::Type{S},
+    ::Type{A},
+    ::Type{T},
+    ::Val{D},
+) where {S,A,T,D}
+    isconcretetype(S) ||
+        throw(ArgumentError("Karatsuba components require a concrete storage type"))
+    S === A ||
+        throw(ArgumentError("Karatsuba component input does not match requested type $S"))
+    return S
+end
+
+@inline function _karatsuba_resolve_requested_component_type(
+    ::Type{S},
+    ::Type{T},
+    ::Val{D},
+) where {S,T,D}
+    if S === CuModArray{T,D}
+        return _default_cumod_storage_type(T, Val(D))
+    end
+    isconcretetype(S) ||
+        throw(ArgumentError("Karatsuba components require a concrete storage type"))
+    return S
+end
+
+@inline function _karatsuba_resolve_plan_type(::Type{P}, ::Type{T}, ::Val{D}) where {P,T,D}
+    if P === CuModArray{T,D}
+        return _default_cumod_storage_type(T, Val(D))
+    end
+    isconcretetype(P) ||
+        throw(ArgumentError("Karatsuba plans require a concrete storage type"))
+    return P
+end
 
 function KaratsubaArray{T,D,S}(A::S, B::S; kwargs...) where {T,D,S<:AbstractArray{T,D}}
-    P = _karatsuba_plan_type(S)
-    return KaratsubaArray{T,D,S,P}(A, B; kwargs...)
+    typeof(A) === typeof(B) ||
+        throw(ArgumentError("Karatsuba components must have the same storage type"))
+    component_type = _karatsuba_resolve_component_type(S, typeof(A), T, Val(D))
+    plan_type = _karatsuba_plan_type(component_type)
+    return KaratsubaArray{T,D,component_type,plan_type}(A, B; kwargs...)
 end
 
 """Return the low component array stored by `K`, preserving object identity."""
@@ -1360,16 +1435,18 @@ function _karatsuba_zeros(
     (explicit || shorthand) || throw(
         ArgumentError("Karatsuba zeros require either modulus or all three split moduli"),
     )
-    isconcretetype(S) || throw(
+    component_type = _karatsuba_resolve_requested_component_type(S, T, Val(D))
+    plan_type = _karatsuba_resolve_plan_type(P, T, Val(D))
+    isconcretetype(component_type) || throw(
         ArgumentError("Karatsuba zero factories require a concrete component storage type"),
     )
-    isconcretetype(P) || throw(
+    isconcretetype(plan_type) || throw(
         ArgumentError("Karatsuba zero factories require a concrete plan storage type"),
     )
-    expected_plan_type = _karatsuba_plan_type(S)
-    P === expected_plan_type || throw(
+    expected_plan_type = _karatsuba_plan_type(component_type)
+    plan_type === expected_plan_type || throw(
         ArgumentError(
-            "Requested plan storage type $P does not match the plan type $expected_plan_type for component storage $S",
+            "Requested plan storage type $plan_type does not match the plan type $expected_plan_type for component storage $component_type",
         ),
     )
 
@@ -1381,20 +1458,20 @@ function _karatsuba_zeros(
     )
     (N1 > 0 && N2 > 0 && M > 0) || throw(ArgumentError("Karatsuba moduli must be positive"))
 
-    first = _karatsuba_zero_component(S, dims, N1)
-    second = _karatsuba_zero_component(S, dims, N2)
-    typeof(first) === S || throw(
+    first = _karatsuba_zero_component(component_type, dims, N1)
+    second = _karatsuba_zero_component(component_type, dims, N2)
+    typeof(first) === component_type || throw(
         ArgumentError(
-            "Storage factory returned $(typeof(first)) for requested component type $S",
+            "Storage factory returned $(typeof(first)) for requested component type $component_type",
         ),
     )
-    typeof(second) === S || throw(
+    typeof(second) === component_type || throw(
         ArgumentError(
-            "Storage factory returned $(typeof(second)) for requested component type $S",
+            "Storage factory returned $(typeof(second)) for requested component type $component_type",
         ),
     )
 
-    return KaratsubaArray{T,D,S,P}(
+    return KaratsubaArray{T,D,component_type,plan_type}(
         first,
         second;
         low_modulus = N1,
@@ -1409,8 +1486,9 @@ function _karatsuba_zeros(
     dims::Dims{D};
     kwargs...,
 ) where {T,D,S<:AbstractArray{T,D}}
-    P = _karatsuba_plan_type(S)
-    return _karatsuba_zeros(T, S, P, dims; kwargs...)
+    component_type = _karatsuba_resolve_requested_component_type(S, T, Val(D))
+    plan_type = _karatsuba_plan_type(component_type)
+    return _karatsuba_zeros(T, component_type, plan_type, dims; kwargs...)
 end
 
 function _karatsuba_zero_component(::Type{Array{T,D}}, dims::Dims{D}, ::Int) where {T,D}
@@ -1418,10 +1496,10 @@ function _karatsuba_zero_component(::Type{Array{T,D}}, dims::Dims{D}, ::Int) whe
 end
 
 function _karatsuba_zero_component(
-    ::Type{CuModArray{T,D}},
+    ::Type{S},
     dims::Dims{D},
     component_modulus::Int,
-) where {T,D}
+) where {T,D,S<:CuModArray{T,D}}
     return zeros(CuModArray{T,D}, dims...; modulus = component_modulus)
 end
 
