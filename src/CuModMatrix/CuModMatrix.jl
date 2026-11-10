@@ -5,8 +5,12 @@ const DEFAULT_TYPE = Float32
 @inline _padded_extent(d::Integer) = cld(d, TILE_WIDTH) * TILE_WIDTH
 @inline _padded_size(dims::Dims{D}) where {D} = ntuple(i -> _padded_extent(dims[i]), D)
 
-@inline function _logical_view(data::AbstractArray{T,D}, dims::Dims{D}) where {T,D}
-    return view(data, ntuple(i -> 1:dims[i], D)...)
+# GPUArrays.view returns a contiguous CuArray or strided SubArray based on runtime
+# indices; both concrete representations fit this local union bound.
+@stable default_mode = "disable" default_union_limit = 2 begin
+    @inline function _logical_view(data::AbstractArray{T,D}, dims::Dims{D}) where {T,D}
+        return view(data, ntuple(i -> 1:dims[i], D)...)
+    end
 end
 
 """Operand moduli are incompatible for the requested operation."""

@@ -1089,7 +1089,9 @@ _karatsuba_gpu_storage(A::CuModArray) = parent(A)
 _karatsuba_gpu_storage(A::CUDA.CuArray) = A
 _karatsuba_gpu_strides(A::CuModArray) = strides(parent(A))
 _karatsuba_gpu_strides(A::CUDA.CuArray) = strides(A)
-_karatsuba_logical_view(A::CuModArray) = _logical_view(parent(A), size(A))
+@stable default_mode = "disable" default_union_limit = 2 begin
+    _karatsuba_logical_view(A::CuModArray) = _logical_view(parent(A), size(A))
+end
 _karatsuba_logical_view(A::CUDA.CuArray) = A
 
 function _karatsuba_gpu_float_precision(::Type{Float16})
