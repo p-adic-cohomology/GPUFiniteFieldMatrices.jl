@@ -332,11 +332,16 @@ function _stripe_mul!(
     return _stripe_run!(zdata, Adata, xdata, modulus, chunk, _stripe_gemv_scalars(T))
 end
 
-function _stripe_logical_data(A::CuModMatrix)
-    m, n = size(A)
-    size(parent(A), 1) >= m && size(parent(A), 2) >= n ||
-        throw(DimensionMismatch("matrix storage is smaller than its logical dimensions"))
-    return @view parent(A)[1:m, 1:n]
+# The logical matrix view has two concrete GPU representations; scope that
+# allowance to this overload so the vector helper stays under the default.
+@stable default_mode = "disable" default_union_limit = 2 begin
+    function _stripe_logical_data(A::CuModMatrix)
+        m, n = size(A)
+        size(parent(A), 1) >= m && size(parent(A), 2) >= n || throw(
+            DimensionMismatch("matrix storage is smaller than its logical dimensions"),
+        )
+        return @view parent(A)[1:m, 1:n]
+    end
 end
 
 function _stripe_logical_data(x::CuModVector)
