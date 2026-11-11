@@ -6,40 +6,16 @@ using SHA
 using TOML
 using UUIDs
 
-const EXPECTED_JULIA_VERSION = v"1.12.4"
-const PACKAGE_UUID = UUID("465031f1-b347-4f72-85f6-baf667cdf853")
-const PACKAGE_NAME = "GPUFiniteFieldMatrices"
+include(joinpath(@__DIR__, "provenance.jl"))
+using .OscarSysimageProvenance
+
+const EXPECTED_JULIA_VERSION = OscarSysimageProvenance.EXPECTED_JULIA_VERSION
+const PACKAGE_UUID = OscarSysimageProvenance.PACKAGE_UUID
+const PACKAGE_NAME = OscarSysimageProvenance.PACKAGE_NAME
 
 function git_output(repo::String, args...)
     command = Cmd(["git", "-C", repo, String.(args)...])
     return strip(read(command, String))
-end
-
-function source_files(repo::String)
-    files = String[]
-    for name in ("Project.toml", "Manifest.toml", "LocalPreferences.toml")
-        path = joinpath(repo, name)
-        isfile(path) && push!(files, path)
-    end
-    src = joinpath(repo, "src")
-    for (dir, dirs, names) in walkdir(src)
-        sort!(dirs)
-        for name in sort(names)
-            path = joinpath(dir, name)
-            isfile(path) && push!(files, path)
-        end
-    end
-    sort!(files)
-    return files
-end
-
-function source_fingerprint(repo::String)
-    entries = String[]
-    for path in source_files(repo)
-        relative = relpath(path, repo)
-        push!(entries, string(relative, "\0", bytes2hex(sha256(read(path)))))
-    end
-    return bytes2hex(sha256(join(entries, "\n")))
 end
 
 function optional_manifest_package(manifest::Dict, name::String, uuid::UUID)
@@ -49,7 +25,7 @@ function optional_manifest_package(manifest::Dict, name::String, uuid::UUID)
     for entry in candidates
         get(entry, "uuid", "") == string(uuid) && return entry
     end
-    error("Manifest.toml contains $name, but not with the checked-out package UUID $uuid")
+    error("selected manifest contains $name, but not with the checked-out package UUID $uuid")
 end
 
 repo = realpath(ENV["OSCAR_GFM_REPO"])
@@ -58,14 +34,15 @@ final_dir = abspath(get(ENV, "OSCAR_SYSIMAGE_FINAL_DIR", stage))
 tool_project = realpath(joinpath(@__DIR__, "Project.toml"))
 tool_manifest = joinpath(@__DIR__, "Manifest.toml")
 project_file = joinpath(repo, "Project.toml")
-manifest_file = joinpath(repo, "Manifest.toml")
+manifest_file = OscarSysimageProvenance.selected_manifest(repo)
+manifest_file == realpath(ENV["OSCAR_SYSIMAGE_MANIFEST_PATH"]) || error("shell and Julia selected different application manifests")
 image_file = joinpath(stage, "GPUFiniteFieldMatrices.so")
 
 VERSION == EXPECTED_JULIA_VERSION || error("build driver requires Julia $EXPECTED_JULIA_VERSION, found $VERSION")
 pkgversion(PackageCompiler) == v"2.4.0" || error("expected PackageCompiler 2.4.0, found $(pkgversion(PackageCompiler))")
 isfile(tool_manifest) || error("missing pinned PackageCompiler Manifest.toml in $(@__DIR__)")
 isfile(project_file) || error("missing package project: $project_file")
-isfile(manifest_file) || error("missing package Manifest.toml: $manifest_file")
+isfile(manifest_file) || error("missing Julia-selected package manifest: $manifest_file")
 
 project = TOML.parsefile(project_file)
 get(project, "name", nothing) == PACKAGE_NAME || error("$project_file is not the $PACKAGE_NAME project")
@@ -84,9 +61,10 @@ else
     resolved_source == repo || error("Manifest resolves $PACKAGE_NAME from $resolved_source, expected this checkout $repo")
 end
 
-source_status = git_output(repo, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--", "src", "Project.toml", "Manifest.toml", "LocalPreferences.toml")
+source_status = git_output(repo, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--", "src", "Project.toml")
+environment_status = get(ENV, "OSCAR_SYSIMAGE_ENVIRONMENT_STATUS", "")
 allow_dirty = get(ENV, "OSCAR_SYSIMAGE_ALLOW_DIRTY", "0") == "1"
-isempty(source_status) || allow_dirty || error("package source/environment is dirty; inspect it and explicitly set OSCAR_SYSIMAGE_ALLOW_DIRTY=1 to continue")
+isempty(source_status) || allow_dirty || error("package source/project is dirty; inspect it and explicitly set OSCAR_SYSIMAGE_ALLOW_DIRTY=1 to continue")
 
 default_image = realpath(joinpath(Sys.BINDIR, "..", "lib", "julia", "sys." * Libdl.dlext))
 loaded_image = realpath(unsafe_string(Base.JLOptions().image_file))
@@ -98,52 +76,51 @@ provenance = joinpath(stage, "provenance")
 mkpath(provenance)
 
 cp(project_file, joinpath(provenance, "Project.toml"))
-cp(manifest_file, joinpath(provenance, "Manifest.toml"))
-preferences_file = joinpath(repo, "LocalPreferences.toml")
-if isfile(preferences_file)
-    cp(preferences_file, joinpath(provenance, "LocalPreferences.toml"))
+cp(manifest_file, joinpath(provenance, basename(manifest_file)))
+preferences = OscarSysimageProvenance.preference_files(repo)
+for preferences_file in preferences
+    cp(preferences_file, joinpath(provenance, basename(preferences_file)))
 end
 cp(tool_project, joinpath(provenance, "PackageCompiler-Project.toml"))
 cp(tool_manifest, joinpath(provenance, "PackageCompiler-Manifest.toml"))
 
-source_patch = read(Cmd(["git", "-C", repo, "diff", "--binary", "HEAD", "--", "src", "Project.toml", "Manifest.toml", "LocalPreferences.toml"]))
+source_patch = read(Cmd(["git", "-C", repo, "diff", "--binary", "HEAD", "--", "src", "Project.toml"]))
 write(joinpath(provenance, "source.patch"), source_patch)
 write(joinpath(provenance, "source-status.txt"), source_status * "\n")
-manifest_tracked = !isempty(git_output(repo, "ls-files", "--", "Manifest.toml"))
-manifest_git_status = git_output(repo, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--", "Manifest.toml")
-write(joinpath(provenance, "manifest-status.txt"), manifest_git_status * "\n")
+write(joinpath(provenance, "environment-status.txt"), environment_status * "\n")
+manifest_relative = startswith(manifest_file, repo * "/") ? relpath(manifest_file, repo) : nothing
+manifest_tracked = manifest_relative !== nothing && !isempty(git_output(repo, "ls-files", "--", manifest_relative))
 write(joinpath(provenance, "module-list.txt"), get(ENV, "OSCAR_SYSIMAGE_MODULE_LIST", "module list unavailable or not captured") * "\n")
 
 Pkg.activate(repo; io=devnull)
 active_project = realpath(Base.active_project())
 active_project == realpath(project_file) || error("active application project is $active_project, expected $project_file")
-resolved = Pkg.dependencies()
+realpath(Base.project_file_manifest_path(active_project)) == manifest_file || error("active Julia process is not using the selected application manifest $manifest_file")
+Pkg.dependencies()
 
 open(joinpath(provenance, "dependencies.txt"), "w") do io
     Pkg.status(; io)
 end
 
-effective_preferences = Dict{String,Any}()
-for (uuid, info) in resolved
-    prefs = Base.get_preferences(uuid)
-    isempty(prefs) || (effective_preferences[string(uuid)] = prefs)
-end
-package_preferences = Base.get_preferences(PACKAGE_UUID)
-isempty(package_preferences) || (effective_preferences[string(PACKAGE_UUID)] = package_preferences)
+effective_preferences = OscarSysimageProvenance.effective_preferences(repo)
 open(joinpath(provenance, "effective-preferences.toml"), "w") do io
     TOML.print(io, effective_preferences)
 end
 
 archive_paths = ["src", "Project.toml"]
-manifest_tracked && push!(archive_paths, "Manifest.toml")
-preferences_tracked = !isempty(git_output(repo, "ls-files", "--", "LocalPreferences.toml"))
-preferences_tracked && push!(archive_paths, "LocalPreferences.toml")
+manifest_tracked && push!(archive_paths, manifest_relative)
+for preferences_file in preferences
+    preference_relative = startswith(preferences_file, repo * "/") ? relpath(preferences_file, repo) : nothing
+    preference_relative === nothing && continue
+    !isempty(git_output(repo, "ls-files", "--", preference_relative)) && push!(archive_paths, preference_relative)
+end
 tracked_archive = read(Cmd(["git", "-C", repo, "archive", "--format=tar", "HEAD", "--", archive_paths...]))
 archive_hash = bytes2hex(sha256(tracked_archive))
 tracked_patch_hash = bytes2hex(sha256(source_patch))
-package_source_hash = source_fingerprint(repo)
+package_source_hash = OscarSysimageProvenance.source_fingerprint(repo)
+package_environment_hash = OscarSysimageProvenance.environment_fingerprint(repo)
 manifest_hash = bytes2hex(sha256(read(manifest_file)))
-preferences_hash = isfile(preferences_file) ? bytes2hex(sha256(read(preferences_file))) : "absent"
+preferences_hashes = Dict(basename(path) => bytes2hex(sha256(read(path))) for path in preferences)
 target_version = get(project, "version", "unknown")
 build_time = Dates.format(now(UTC), "yyyy-mm-ddTHH:MM:SS")
 branch = get(ENV, "OSCAR_SYSIMAGE_BRANCH", "DETACHED")
@@ -163,11 +140,14 @@ receipt = Dict{String,Any}(
     "tracked_archive_sha256" => archive_hash,
     "tracked_patch_sha256" => tracked_patch_hash,
     "package_source_sha256" => package_source_hash,
+    "package_environment_sha256" => package_environment_hash,
     "package_manifest_julia" => manifest_julia,
+    "package_manifest_path" => manifest_file,
+    "package_manifest_filename" => basename(manifest_file),
     "package_manifest_sha256" => manifest_hash,
     "package_manifest_tracked" => manifest_tracked,
-    "package_manifest_git_status" => manifest_git_status,
-    "local_preferences_sha256" => preferences_hash,
+    "application_environment_status" => environment_status,
+    "local_preferences_sha256" => preferences_hashes,
     "source_dirty" => !isempty(source_status),
     "source_dirty_allowed" => allow_dirty,
     "source_status" => source_status,
@@ -190,7 +170,8 @@ end
 println("PackageCompiler $(pkgversion(PackageCompiler)); Julia $VERSION")
 println("Target source: $repo @ $commit (tree $tree)")
 println("Manifest resolves $PACKAGE_NAME from the checked-out path: $resolved_source")
-println("CPU target: $cpu_target; source fingerprint: $package_source_hash")
+println("Selected application manifest: $manifest_file (Julia $VERSION selector)")
+println("CPU target: $cpu_target; source fingerprint: $package_source_hash; environment fingerprint: $package_environment_hash")
 println("Effective package preferences recorded at $(joinpath(provenance, "effective-preferences.toml"))")
 println("Precompile workload is host-only; no CUDA context or GPU allocation is created.")
 
@@ -206,5 +187,6 @@ PackageCompiler.create_sysimage(
 )
 
 isfile(image_file) && filesize(image_file) > 0 || error("PackageCompiler returned without creating a nonempty image")
-source_fingerprint(repo) == package_source_hash || error("package source/environment changed during image creation; refusing to publish a mixed-source image")
+OscarSysimageProvenance.source_fingerprint(repo) == package_source_hash || error("package source/project changed during image creation; refusing to publish a mixed-source image")
+OscarSysimageProvenance.environment_fingerprint(repo) == package_environment_hash || error("package manifest/preferences changed during image creation; refusing to publish a mixed-environment image")
 println("Created sysimage: $image_file ($(filesize(image_file)) bytes)")

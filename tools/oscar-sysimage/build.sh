@@ -17,11 +17,12 @@ Configuration:
   OSCAR_GFM_REPO               Package checkout (default: this repository)
   OSCAR_SYSIMAGE_OUTPUT_DIR    Artifact root (default: tools/oscar-sysimage/output)
   OSCAR_SYSIMAGE_CPU_TARGET    Julia CPU target (default: generic)
-  OSCAR_SYSIMAGE_ALLOW_DIRTY   Set to 1 to build reviewed changed/ignored package files
+  OSCAR_SYSIMAGE_ALLOW_DIRTY   Set to 1 to build reviewed changed package source/project files
 
-The build requires an explicitly prepared Julia 1.12 package Manifest and the
-normal Julia distribution sysimage. It does not resolve or edit the package
-project. Build output is staged and validated before it is atomically published.
+The build requires an explicitly prepared Julia 1.12 package Manifest selected
+by Julia 1.12.4 and the normal Julia distribution sysimage. It does not resolve
+or edit the package project. Build output is staged and validated before it is
+atomically published.
 EOF
 }
 
@@ -46,18 +47,17 @@ repo_root="${OSCAR_GFM_REPO:-$(cd -- "$SCRIPT_DIR/../.." && pwd -P)}"
 [[ -d "$repo_root" ]] || fail "repository directory does not exist: $repo_root"
 repo_root="$(cd -- "$repo_root" && pwd -P)"
 [[ -f "$repo_root/Project.toml" ]] || fail "missing package Project.toml in $repo_root"
-[[ -f "$repo_root/Manifest.toml" ]] || fail "missing Manifest.toml in $repo_root; resolve and preserve a Julia 1.12 environment explicitly before building"
 [[ -f "$SCRIPT_DIR/Project.toml" ]] || fail "missing pinned PackageCompiler project: $SCRIPT_DIR/Project.toml"
-[[ -f "$SCRIPT_DIR/build.jl" && -f "$SCRIPT_DIR/precompile-workload.jl" && -f "$SCRIPT_DIR/validate-load.jl" ]] || fail "sysimage tooling files are incomplete under $SCRIPT_DIR"
+[[ -f "$SCRIPT_DIR/build.jl" && -f "$SCRIPT_DIR/precompile-workload.jl" && -f "$SCRIPT_DIR/validate-load.jl" && -f "$SCRIPT_DIR/provenance.jl" ]] || fail "sysimage tooling files are incomplete under $SCRIPT_DIR"
 
 git_root="$(git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null)" || fail "package path is not inside a Git checkout: $repo_root"
 git_root="$(cd -- "$git_root" && pwd -P)"
 [[ "$git_root" == "$repo_root" ]] || fail "OSCAR_GFM_REPO must name the checkout root ($git_root), got $repo_root"
 
-source_status="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all --ignored=matching -- src Project.toml Manifest.toml LocalPreferences.toml)"
+source_status="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all --ignored=matching -- src Project.toml)"
 if [[ "$mode" == "build" && -n "$source_status" && "${OSCAR_SYSIMAGE_ALLOW_DIRTY:-0}" != "1" ]]; then
-    printf 'Package source/environment has uncommitted changes:\n%s\n' "$source_status" >&2
-    fail "review the changes, then set OSCAR_SYSIMAGE_ALLOW_DIRTY=1 to preserve them in the build receipt"
+    printf 'Package source/project has uncommitted changes:\n%s\n' "$source_status" >&2
+    fail "review the changes, then set OSCAR_SYSIMAGE_ALLOW_DIRTY=1 to preserve the source status in the build receipt"
 fi
 
 commit="$(git -C "$repo_root" rev-parse HEAD)"
@@ -68,10 +68,11 @@ julia_requested="${JULIA_BIN:-julia}"
 if [[ "$mode" == "dry-run" ]]; then
     printf 'Dry run only; no Julia process, dependency resolution, or files will be created.\n'
     printf 'Repository: %s\nBranch: %s\nCommit: %s\nTree: %s\n' "$repo_root" "${branch:-DETACHED}" "$commit" "$tree"
-    printf 'Package source/environment status: %s\n' "${source_status:-clean}"
+    printf 'Package source/project status: %s\n' "${source_status:-clean}"
     printf 'Required Julia: %s\nConfigured JULIA_BIN: %s\n' "$REQUIRED_JULIA_VERSION" "$julia_requested"
     printf 'CPU target: %s\n' "${OSCAR_SYSIMAGE_CPU_TARGET:-$DEFAULT_CPU_TARGET}"
     printf 'Planned artifact root: %s\n' "${OSCAR_SYSIMAGE_OUTPUT_DIR:-$SCRIPT_DIR/output}"
+    printf 'Manifest: selected at build time by Julia 1.12.4 from the target Project.toml; prepared manifests/preferences are recorded separately from source edits.\n'
     printf 'Planned commands: instantiate %s/Project.toml, extend the verified default Julia image with %s, fresh-process validate, then publish a unique artifact directory.\n' "$SCRIPT_DIR" "$repo_root"
     exit 0
 fi
@@ -91,6 +92,14 @@ actual_version="$("$julia_bin" --startup-file=no --history-file=no -e 'print(VER
 runtime_bin="$("$julia_bin" --startup-file=no --history-file=no -e 'print(realpath(joinpath(Sys.BINDIR, Base.julia_exename())))' 2>&1)" || fail "could not determine the Julia executable selected by $julia_bin: $runtime_bin"
 [[ -x "$runtime_bin" ]] || fail "Julia reports a non-executable runtime binary: $runtime_bin"
 julia_bin="$runtime_bin"
+
+manifest_path="$(OSCAR_GFM_REPO="$repo_root" "$julia_bin" --startup-file=no --history-file=no -e 'project = realpath(joinpath(ENV["OSCAR_GFM_REPO"], "Project.toml")); manifest = Base.project_file_manifest_path(project); manifest === nothing || print(realpath(manifest))' 2>&1)" || fail "could not ask Julia to select the target manifest: $manifest_path"
+[[ -n "$manifest_path" && -f "$manifest_path" ]] || fail "Julia $REQUIRED_JULIA_VERSION selected no existing application manifest for $repo_root/Project.toml; prepare the environment explicitly before building"
+environment_paths=("JuliaManifest-v1.12.toml" "Manifest-v1.12.toml" "JuliaManifest.toml" "Manifest.toml" "JuliaLocalPreferences.toml" "LocalPreferences.toml")
+case "$manifest_path" in
+    "$repo_root"/*) environment_paths+=("${manifest_path#"$repo_root"/}") ;;
+esac
+environment_status="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all --ignored=matching -- "${environment_paths[@]}")"
 
 image_probe="$("$julia_bin" --startup-file=no --history-file=no -e 'using Libdl; println("loaded=", realpath(unsafe_string(Base.JLOptions().image_file))); println("default=", realpath(joinpath(Sys.BINDIR, "..", "lib", "julia", "sys." * Libdl.dlext)))' 2>&1)" || fail "could not inspect Julia's loaded sysimage: $image_probe"
 loaded_image="$(printf '%s\n' "$image_probe" | sed -n 's/^loaded=//p')"
@@ -129,11 +138,16 @@ export OSCAR_SYSIMAGE_BRANCH="${branch:-DETACHED}"
 export OSCAR_SYSIMAGE_COMMIT="$commit"
 export OSCAR_SYSIMAGE_TREE="$tree"
 export OSCAR_SYSIMAGE_ALLOW_DIRTY="${OSCAR_SYSIMAGE_ALLOW_DIRTY:-0}"
+export OSCAR_SYSIMAGE_MANIFEST_PATH="$manifest_path"
+export OSCAR_SYSIMAGE_ENVIRONMENT_STATUS="$environment_status"
 
 printf 'Target checkout: %s\nBranch: %s\nCommit: %s\nTree: %s\n' "$repo_root" "${branch:-DETACHED}" "$commit" "$tree"
+printf 'Selected application manifest: %s\n' "$manifest_path"
 printf 'Julia executable: %s\nJulia version: %s\nBase sysimage: %s\n' "$julia_bin" "$actual_version" "$loaded_image"
 printf 'Build host: %s %s\nCPU target: %s\n' "$(uname -s)" "$(uname -m)" "$cpu_target"
 printf 'Staging: %s\nFinal artifact: %s\n' "$stage_dir" "$final_dir"
+printf 'Package source/project status: %s\n' "${source_status:-clean}"
+printf 'Application environment status: %s\n' "${environment_status:-clean}"
 if type module >/dev/null 2>&1; then
     module list > "$stage_dir/module-list.txt" 2>&1 || true
     cat "$stage_dir/module-list.txt"

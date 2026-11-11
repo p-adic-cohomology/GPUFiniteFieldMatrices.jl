@@ -1,24 +1,19 @@
-using CUDA
-using GPUFiniteFieldMatrices
-using UUIDs
+include(joinpath(@__DIR__, "provenance.jl"))
 
-const EXPECTED_JULIA_VERSION = v"1.12.4"
-const PACKAGE_UUID = UUID("465031f1-b347-4f72-85f6-baf667cdf853")
-
-VERSION == EXPECTED_JULIA_VERSION || error("GPU smoke requires Julia $EXPECTED_JULIA_VERSION, found $VERSION")
 repo = realpath(ENV["OSCAR_GFM_REPO"])
 image = realpath(ENV["OSCAR_SYSIMAGE_FILE"])
-realpath(Base.active_project()) == realpath(joinpath(repo, "Project.toml")) ||
-    error("active project is not the requested package checkout: $(Base.active_project())")
-realpath(unsafe_string(Base.JLOptions().image_file)) == image ||
-    error("Julia did not load the requested sysimage $image")
-realpath(pathof(GPUFiniteFieldMatrices)) == realpath(joinpath(repo, "src", "GPUFiniteFieldMatrices.jl")) ||
-    error("GPUFiniteFieldMatrices did not load from $repo/src")
+identity = OscarSysimageProvenance.verify_receipt(repo, image)
+
+using CUDA
+using GPUFiniteFieldMatrices
 
 println("Julia version: $VERSION")
 println("Active project: $(realpath(Base.active_project()))")
+println("Selected application manifest: $(identity.manifest)")
 println("Loaded sysimage: $image")
 println("Package source: $(realpath(pathof(GPUFiniteFieldMatrices)))")
+println("Target source fingerprint: $(identity.source_sha256)")
+println("Target environment fingerprint: $(identity.environment_sha256)")
 CUDA.versioninfo()
 CUDA.functional() || error("CUDA reports no functional NVIDIA GPU; GPU smoke validation cannot pass")
 device = CUDA.device()

@@ -47,55 +47,65 @@ export JULIA_BIN=/absolute/path/to/julia-1.12.4/bin/julia
 export OSCAR_GFM_REPO="$PWD"
 ```
 
-The root `Manifest.toml` may not be tracked by the repository. Check whether
-one is present and whether its `julia_version` is compatible with Julia 1.12.
-When a compatible manifest is already supplied, instantiate those exact
-versions before submitting the build:
+The build asks Julia 1.12.4 itself which manifest the checkout uses. A
+`Manifest-v1.12.toml` takes precedence over `Manifest.toml`; Julia-specific
+`JuliaManifest-v1.12.toml` and generic `JuliaManifest.toml` names are also
+recognized. The selected path and hash are recorded with the image, so
+versioned-only, generic-only, and both-present checkouts are handled
+consistently by the builder and validators.
+
+You can inspect the active path and its recorded Julia version without running
+Pkg or changing files:
 
 ```sh
-"$JULIA_BIN" --startup-file=no --project="$OSCAR_GFM_REPO" \
-  -e 'using Pkg; Pkg.instantiate()'
+"$JULIA_BIN" --startup-file=no -e 'p = realpath(joinpath(ENV["OSCAR_GFM_REPO"], "Project.toml")); m = Base.project_file_manifest_path(p); println(m === nothing ? "no manifest selected" : m)'
 ```
 
-This instantiates the existing locked environment without requesting a
-dependency upgrade.
-
-If no manifest is present or the existing one was resolved with another Julia
-minor version, explicitly prepare a Julia 1.12 environment using the exact
-Julia executable, review the resolved dependency set, and retain that manifest
-with the build artifact. For example:
+Prepare the application environment on an allocated compute node. Pkg actions
+can trigger automatic precompilation, so disable that for this setup step and
+leave the actual compilation to the sysimage build job:
 
 ```sh
-"$JULIA_BIN" --startup-file=no --project="$OSCAR_GFM_REPO" \
-  -e 'using Pkg; Pkg.resolve(); Pkg.instantiate()'
+salloc -N1 --cpus-per-task=4 --mem=32G --time=02:00:00
+export JULIA_PKG_PRECOMPILE_AUTO=0
+srun --ntasks=1 "$JULIA_BIN" --startup-file=no \
+  --project="$OSCAR_GFM_REPO" -e 'using Pkg; Pkg.instantiate(; verbose=true)'
 ```
 
-That command creates or updates the checkout's `Manifest.toml`; inspect the
-resolved dependencies and preferences. Then acknowledge the reviewed
-application environment and run the builder with
-`OSCAR_SYSIMAGE_ALLOW_DIRTY=1`. The builder records tracked, untracked, or
-ignored status and a SHA-256 hash for the exact manifest it uses, and copies it
-beside the image. It does not resolve dependencies during the build. The local
-package itself is selected by the checkout's `Project.toml` and source path; a
-self-entry in the manifest is optional, but if present it must point to this
+If Julia reports no selected manifest, resolve and instantiate the project on
+the allocated node, then inspect the resulting dependency set before building:
+
+```sh
+srun --ntasks=1 "$JULIA_BIN" --startup-file=no \
+  --project="$OSCAR_GFM_REPO" -e 'using Pkg; Pkg.resolve(); Pkg.instantiate(; verbose=true)'
+```
+
+If Julia selects a generic manifest resolved for another Julia minor version,
+preserve that file and prepare a compatible `Manifest-v1.12.toml` explicitly
+with Julia 1.12.4. Confirm the selector reports the versioned path before
+building. The builder rejects an incompatible lock instead of resolving or
+updating the application environment itself.
+
+Prepared manifests and local preference files are routine environment inputs;
+they do not require `OSCAR_SYSIMAGE_ALLOW_DIRTY=1`. The builder records their
+status separately from package source/project edits, hashes and copies the
+manifest Julia selected plus local preferences, and does not resolve or update
+the application environment. Set `OSCAR_SYSIMAGE_ALLOW_DIRTY=1` only when you
+have reviewed intentional edits under `src/` or to the package `Project.toml`.
+The local package itself is selected by the checkout's project and source path;
+a self-entry in the manifest is optional, but if present it must point to this
 checkout rather than a registered version.
 
-For example, after reviewing the manifest:
-
-```sh
-export OSCAR_SYSIMAGE_ALLOW_DIRTY=1
-```
-
-PackageCompiler is isolated from the application environment. The application
-Manifest and any root `LocalPreferences.toml` are copied to the artifact
-receipt. Effective package preferences are recorded without overriding them.
-The builder uses the normal Julia distribution sysimage and refuses a custom
-base image, a different Julia patch, a non-Linux host, or a non-x86_64 host.
-An explicit `JULIA_CC=/path/to/cc` can select a C compiler; otherwise
-PackageCompiler uses normal compiler discovery. Keep the caller's loaded
-modules and CUDA-related environment. CUDA.jl normally manages its toolkit from
-artifacts and needs a working NVIDIA driver at runtime; this workflow does not
-load a CUDA module or force a CUDA runtime version.
+PackageCompiler is isolated from the application environment. The selected
+application manifest and any root Julia/LocalPreferences files are copied into
+the artifact provenance. Effective package preferences are recorded without
+overriding them. The builder uses the normal Julia distribution sysimage and
+refuses a custom base image, a different Julia patch, a non-Linux host, or a
+non-x86_64 host. An explicit `JULIA_CC=/path/to/cc` can select a C compiler;
+otherwise PackageCompiler uses normal compiler discovery. Keep the caller's
+loaded modules and CUDA-related environment. CUDA.jl normally manages its
+toolkit from artifacts and needs a working NVIDIA driver at runtime; this
+workflow does not load a CUDA module or force a CUDA runtime version.
 
 ## Submit a CPU build
 
@@ -152,8 +162,9 @@ srun --ntasks=1 "$JULIA_BIN" --startup-file=no --history-file=no \
   "$OSCAR_GFM_REPO/tools/oscar-sysimage/validate-load.jl"
 ```
 
-This checks Julia 1.12.4, the active project, the loaded image path, package
-source path, included direct dependencies, and a small CPU helper result.
+This checks Julia 1.12.4, the active project and Julia-selected manifest, the
+loaded image path, current source and manifest/preferences fingerprints,
+included direct dependencies, and a small CPU helper result.
 
 ## Submit the separate GPU smoke check
 
@@ -164,11 +175,13 @@ export OSCAR_SYSIMAGE_FILE=/absolute/path/to/artifact/GPUFiniteFieldMatrices.so
 sbatch tools/oscar-sysimage/gpu-smoke.slurm
 ```
 
-The script requests `-p gpu --gres=gpu:1`. It reports `CUDA.versioninfo()` and
-the selected device, then runs deterministic `CuModMatrix` addition and a
-small GPU-backed Karatsuba matrix product. Both are synchronized and compared
-with host-computed expected values. A missing or nonfunctional CUDA device is a
-failed smoke check; it is not skipped or reported as success.
+The script requests `-p gpu --gres=gpu:1`. Before touching CUDA, it runs the
+same receipt verifier as the fresh-process load check, including current source
+and environment fingerprints. It reports `CUDA.versioninfo()` and the selected
+device, then runs deterministic `CuModMatrix` addition and a small GPU-backed
+Karatsuba matrix product. Both are synchronized and compared with host-computed
+expected values. A missing or nonfunctional CUDA device is a failed smoke
+check; it is not skipped or reported as success.
 
 ## Artifact lifetime and rebuilds
 
