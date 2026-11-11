@@ -52,7 +52,7 @@ function Base.:(==)(A::CuModArray, B::CuModArray)
 
     logical_A = _logical_view(parent(A), size(A))
     logical_B = _logical_view(parent(B), size(B))
-    return all(logical_A .== logical_B)
+    return mapreduce(==, &, logical_A, logical_B; init = true)
 end
 
 """Return the rank recorded in a `PLUQ` factorization."""
