@@ -412,28 +412,32 @@ function _is_invertible(F)
     return m == n && F.rank == m
 end
 
-"""
-    is_invertible_with_inverse(A::CuModMatrix)
+# The documented singular and inverse results are two intentional concrete
+# tuple alternatives; keep their union allowance local to this API method.
+@stable default_mode = "disable" default_union_limit = 2 begin
+    """
+        is_invertible_with_inverse(A::CuModMatrix)
 
-Checks if a matrix is invertible. If not, returns
-false and nothing. If it is, returns true and the
-inverse matrix.
-"""
-function is_invertible_with_inverse(A::CuModMatrix; debug::Bool = false)
-    F = _setup_PLUQ(A)
-    if !_is_invertible(F)
-        return false, nothing
+    Checks if a matrix is invertible. If not, returns
+    false and nothing. If it is, returns true and the
+    inverse matrix.
+    """
+    function is_invertible_with_inverse(A::CuModMatrix; debug::Bool = false)
+        F = _setup_PLUQ(A)
+        if !_is_invertible(F)
+            return false, nothing
+        end
+        A_inv = inv(A)
+        if debug
+            println("A")
+            display(A)
+            println("A_inv")
+            display(A_inv)
+            println("A * A_inv")
+            display(A * A_inv)
+        end
+        return true, A_inv
     end
-    A_inv = inv(A)
-    if debug
-        println("A")
-        display(A)
-        println("A_inv")
-        display(A_inv)
-        println("A * A_inv")
-        display(A * A_inv)
-    end
-    return true, A_inv
 end
 
 function inverse_permutation(P::Vector{Int})
