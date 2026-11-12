@@ -287,7 +287,9 @@ function test_cuda_blas_compatibility()
             size(vector_A_data, 1);
             modulus = N,
         )
-        parent(z_reject)[1:length(z_reject)] .= T.([17, 19, 23])
+        z_reject_values = T.([17, 19, 23])
+        z_reject_inds = CartesianIndices(z_reject_values)
+        copyto!(parent(z_reject), z_reject_inds, z_reject_values, z_reject_inds)
         z_before_reject = Array(z_reject)
         matrix_before_reject = Array(C)
         vector_matrix_before_reject = Array(vector_A)
@@ -321,7 +323,14 @@ function test_cuda_blas_compatibility()
             size(vector_A_data, 1) - 1;
             modulus = N,
         )
-        parent(z_bad_length)[1:length(z_bad_length)] .= T.([17, 19])
+        z_bad_length_values = T.([17, 19])
+        z_bad_length_inds = CartesianIndices(z_bad_length_values)
+        copyto!(
+            parent(z_bad_length),
+            z_bad_length_inds,
+            z_bad_length_values,
+            z_bad_length_inds,
+        )
         z_bad_length_before = Array(z_bad_length)
         @test_throws DimensionMismatch GPUFiniteFieldMatrices.stripe_mul!(
             z_bad_length,
@@ -337,7 +346,14 @@ function test_cuda_blas_compatibility()
             size(vector_A_data, 1);
             modulus = N + 1,
         )
-        parent(z_bad_modulus)[1:length(z_bad_modulus)] .= T.([17, 19, 23])
+        z_bad_modulus_values = T.([17, 19, 23])
+        z_bad_modulus_inds = CartesianIndices(z_bad_modulus_values)
+        copyto!(
+            parent(z_bad_modulus),
+            z_bad_modulus_inds,
+            z_bad_modulus_values,
+            z_bad_modulus_inds,
+        )
         z_bad_modulus_before = Array(z_bad_modulus)
         @test_throws GPUFiniteFieldMatrices.ModulusMismatchError GPUFiniteFieldMatrices.stripe_mul!(
             z_bad_modulus,
@@ -578,13 +594,15 @@ function test_cuda_blas_compatibility()
     A_outer = @view A_parent[2:11, 3:12]
     A_nested = @view A_outer[2:4, 2:8]
     A_host = [1 2 3 4 5 6 7; 8 9 10 11 12 13 14; 15 16 1 2 3 4 5]
-    A_nested .= Float32.(A_host)
+    A_nested_values = Float32.(A_host)
+    copyto!(A_nested, A_nested_values)
 
     B_parent = CUDA.zeros(Float32, 14, 9)
     B_outer = @view B_parent[3:12, 1:8]
     B_nested = @view B_outer[2:8, 3:4]
     B_host = [2 4; 6 8; 10 12; 14 16; 1 3; 5 7; 9 11]
-    B_nested .= Float32.(B_host)
+    B_nested_values = Float32.(B_host)
+    copyto!(B_nested, B_nested_values)
 
     C_parent = CUDA.fill(Float32(77), 8, 7)
     C_outer = @view C_parent[2:7, 2:6]
