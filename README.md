@@ -170,6 +170,11 @@ support matching `Float32` or `Float64` components. The precision checks use
 24 exact integer bits for `Float32` and 53 for `Float64`, and reject unsafe
 working moduli or accumulators before writing plans.
 
+GPU Karatsuba matrix and matrix-vector products require `CuModArray` low and
+high components. Mutating products also require initialized `CuModArray` plans.
+Raw `CuArray` components remain available for wrappers, factories, conversions,
+and pointwise operations, but product entrypoints reject them.
+
 For Karatsuba matrix multiplication, `A` and `B` must share input low radix
 `R`, while `C` may use an independent low radix `R_C`. The output components
 represent the product modulo `Q = R_C * high_modulus(C)`. The shared
