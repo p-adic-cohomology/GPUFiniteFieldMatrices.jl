@@ -1,15 +1,20 @@
-# Flip the package's `@stable` wrap (src/GPUFiniteFieldMatrices.jl) from its
-# downstream-safe `disable` default to an enforcing mode for the test run only.
-# This MUST run before `using GPUFiniteFieldMatrices` so the package compiles in
-# with the gate active. `codegen_level="min"` keeps the `@stable` precompile
-# overhead low.
+# Temporarily leave DispatchDoctor disabled for manual test runs so CUDA
+# correctness tests can finish. CI explicitly selects "error"; the same mode
+# can be requested locally through GPUFFM_DISPATCH_DOCTOR_MODE.
+# Preferences MUST be set before importing the package. A custom sysimage
+# already containing the package must be rebuilt to change its instrumentation.
 using Preferences: set_preferences!
+dispatch_doctor_mode = get(ENV, "GPUFFM_DISPATCH_DOCTOR_MODE", "disable")
+dispatch_doctor_mode in ("disable", "warn", "error") || error(
+    "GPUFFM_DISPATCH_DOCTOR_MODE must be disable, warn, or error; got $(repr(dispatch_doctor_mode))",
+)
 set_preferences!(
     (Base.UUID("465031f1-b347-4f72-85f6-baf667cdf853"), "GPUFiniteFieldMatrices"),
-    "dispatch_doctor_mode" => "error",
+    "dispatch_doctor_mode" => dispatch_doctor_mode,
     "dispatch_doctor_codegen_level" => "min";
     force = true,
 )
+@info "DispatchDoctor test mode" mode = dispatch_doctor_mode
 
 using Test
 using CUDA

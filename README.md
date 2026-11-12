@@ -279,3 +279,23 @@ For local checks, run `python -m pip install pre-commit==4.6.2` followed by `pre
 Arithmetic, allocation, triangular, batch, and raw-CuArray regression suites
 run inside the CUDA-functional gate. A CPU pass with that gate skipped does not
 verify GPU numerical results or allocation budgets.
+
+DispatchDoctor is temporarily disabled by default in manual test runs while
+CUDA type-stability findings are investigated. All existing correctness tests
+still run; CI explicitly enables strict DispatchDoctor checking. To run the
+suite manually from the checkout, start a fresh Julia process without a custom
+sysimage:
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.test()'
+```
+
+To enable strict checking locally, use:
+
+```sh
+GPUFFM_DISPATCH_DOCTOR_MODE=error julia --project=. -e 'using Pkg; Pkg.test()'
+```
+
+The switch also accepts `warn`. The test runner prints the selected mode before
+loading the package. Changing the mode requires a fresh process; a sysimage
+containing the package must be rebuilt to change its baked instrumentation.
