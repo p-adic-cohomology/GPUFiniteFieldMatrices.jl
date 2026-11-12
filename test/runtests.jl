@@ -6,7 +6,7 @@
 using Preferences: set_preferences!
 set_preferences!(
     (Base.UUID("465031f1-b347-4f72-85f6-baf667cdf853"), "GPUFiniteFieldMatrices"),
-    "dispatch_doctor_mode" => "error",
+    "dispatch_doctor_mode" => "warn",
     "dispatch_doctor_codegen_level" => "min";
     force = true,
 )
