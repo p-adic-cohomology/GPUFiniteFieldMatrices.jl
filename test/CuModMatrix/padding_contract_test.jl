@@ -69,8 +69,8 @@ function _wrapped_cumod_for_test(
 ) where {D}
     mod = GPUFiniteFieldMatrices
     storage = CUDA.fill(Float64(padding), backing_dims...)
-    logical_ranges = ntuple(d -> 1:size(values, d), D)
-    storage[logical_ranges...] .= values
+    logical_inds = CartesianIndices(values)
+    copyto!(storage, logical_inds, values, logical_inds)
     return mod.CuModArray{Float64,D}(
         storage;
         modulus = Int(q),
@@ -222,7 +222,14 @@ if CUDA.functional()
         @test Array(raw_copy_destination) == raw_copy_values[1:35]
 
         matrix_copy_source_storage = CUDA.fill(991.0, 3, 3)
-        matrix_copy_source_storage[1:2, 1:2] .= [1.0 2.0; 3.0 4.0]
+        matrix_copy_source_values = [1.0 2.0; 3.0 4.0]
+        matrix_copy_source_inds = CartesianIndices(matrix_copy_source_values)
+        copyto!(
+            matrix_copy_source_storage,
+            matrix_copy_source_inds,
+            matrix_copy_source_values,
+            matrix_copy_source_inds,
+        )
         matrix_copy_destination_storage = CUDA.fill(-555.0, 4, 4)
         matrix_copy_source = mod.CuModMatrix{Float64}(
             matrix_copy_source_storage;
@@ -286,8 +293,10 @@ if CUDA.functional()
         # objects for the independent exact-integer product oracle.
         A_values = Base.mod.(round.(Array(A)), q)
         B_values = Base.mod.(round.(Array(B)), q)
-        parent(A)[1:n, 1:n] .= A_values
-        parent(B)[1:n, 1:n] .= B_values
+        A_values_inds = CartesianIndices(A_values)
+        B_values_inds = CartesianIndices(B_values)
+        copyto!(parent(A), A_values_inds, A_values, A_values_inds)
+        copyto!(parent(B), B_values_inds, B_values, B_values_inds)
         expected = Float64.(Base.mod.(BigInt.(A_values) * BigInt.(B_values), BigInt(q)))
 
         clean_result = mod.zeros(mod.CuModMatrix{Float64}, n, n; modulus = q)

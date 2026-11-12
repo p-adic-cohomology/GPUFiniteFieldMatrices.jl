@@ -95,8 +95,8 @@ function _elementwise_preflight_wrap(
 ) where {D}
     mod = _ELEMENTWISE_PREFLIGHT
     storage = CUDA.fill(Float64(padding), backing_dims...)
-    logical_ranges = ntuple(d -> 1:size(values, d), D)
-    storage[logical_ranges...] .= values
+    logical_inds = CartesianIndices(values)
+    copyto!(storage, logical_inds, values, logical_inds)
     return mod.CuModArray{Float64,D}(
         storage;
         modulus = Int(n),
