@@ -45,7 +45,9 @@ function _validate_inverse_matmul_modulus(A::CuModMatrix)
 end
 
 function _pluq_host_i32_buffer()
-    return CUDA.pin(Vector{Int32}(undef, 1))
+    hostbuf = Vector{Int32}(undef, 1)
+    CUDA.pin(hostbuf)
+    return hostbuf
 end
 
 function _pluq_read_i32!(hostbuf::Vector{Int32}, devbuf)
