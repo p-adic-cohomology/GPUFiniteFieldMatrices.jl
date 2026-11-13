@@ -410,13 +410,8 @@ function _karatsuba_gemv_precision_plan(
     )
     low_bound =
         _karatsuba_gemv_dot_bound(T, terms, input_low_a, input_low_b, "low GEMV product")
-    middle_bound = _karatsuba_gemv_dot_bound(
-        T,
-        terms,
-        sum_bound_a,
-        sum_bound_b,
-        "middle GEMV product",
-    )
+    middle_bound =
+        _karatsuba_gemv_dot_bound(T, terms, sum_bound_a, sum_bound_b, "middle GEMV product")
     high_bound =
         _karatsuba_gemv_dot_bound(T, terms, input_high_a, input_high_b, "high GEMV product")
     output_capacity = _karatsuba_checked_working_modulus(
