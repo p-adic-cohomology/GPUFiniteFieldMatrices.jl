@@ -363,16 +363,16 @@ function test_cuda_blas_compatibility()
         @test Array(z_bad_modulus) == z_bad_modulus_before
 
         elementwise_destination = GPUFiniteFieldMatrices.zeros(
-            T,
+            GPUFiniteFieldMatrices.CuModMatrix{T},
             size(vector_A_data, 1),
-            size(vector_A_data, 2),
-            N,
+            size(vector_A_data, 2);
+            modulus = N,
         )
         scalar_destination = GPUFiniteFieldMatrices.zeros(
-            T,
+            GPUFiniteFieldMatrices.CuModMatrix{T},
             size(vector_A_data, 1),
-            size(vector_A_data, 2),
-            N,
+            size(vector_A_data, 2);
+            modulus = N,
         )
         elementwise_before_reject = Array(elementwise_destination)
         scalar_before_reject = Array(scalar_destination)
@@ -487,13 +487,20 @@ function test_cuda_blas_compatibility()
         half_B_data = [1 2; 2 3; 3 4; 4 5; 5 6]
         half_expected =
             Float16.(mod.(BigInt.(half_A_data) * BigInt.(half_B_data), half_modulus))
-        half_A = GPUFiniteFieldMatrices.CuModMatrix{Float16}(half_A_data, half_modulus)
-        half_B = GPUFiniteFieldMatrices.CuModMatrix{Float16}(half_B_data, half_modulus)
+        half_A =
+            GPUFiniteFieldMatrices.CuModMatrix{Float16}(half_A_data; modulus = half_modulus)
+        half_B =
+            GPUFiniteFieldMatrices.CuModMatrix{Float16}(half_B_data; modulus = half_modulus)
         half_A_before = Array(half_A)
         half_B_before = Array(half_B)
 
         for stripe_width in (5, 2)
-            half_C = GPUFiniteFieldMatrices.zeros(Float16, 2, 2, half_modulus)
+            half_C = GPUFiniteFieldMatrices.zeros(
+                GPUFiniteFieldMatrices.CuModMatrix{Float16},
+                2,
+                2;
+                modulus = half_modulus,
+            )
             CUDA.@sync GPUFiniteFieldMatrices.stripe_mul!(
                 half_C,
                 half_A,
