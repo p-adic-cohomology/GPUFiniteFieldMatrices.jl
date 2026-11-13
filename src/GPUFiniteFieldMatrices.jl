@@ -4,7 +4,6 @@ using CUDA:
     CUDA,
     @cuda,
     CuArray,
-    CuDeviceMatrix,
     CuDeviceVector,
     CuRef,
     CuStaticSharedArray,
