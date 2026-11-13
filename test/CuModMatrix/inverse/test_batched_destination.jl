@@ -437,11 +437,15 @@ function test_batched_destination_api()
         eachindex(inverse_inputs),
     )
     @test all(
-        i -> _check_identity_batch(inverse_inputs[i], augmented[i], p),
+        i -> _batch_host_inverse_identity(Array(inverse_inputs[i]), Array(augmented[i]), p),
         eachindex(inverse_inputs),
     )
     @test all(
-        i -> _check_identity_batch(inverse_inputs[i], pluq_strategy[i], p),
+        i -> _batch_host_inverse_identity(
+            Array(inverse_inputs[i]),
+            Array(pluq_strategy[i]),
+            p,
+        ),
         eachindex(inverse_inputs),
     )
 
