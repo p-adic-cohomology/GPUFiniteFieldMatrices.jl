@@ -1452,19 +1452,20 @@ function test_karatsuba_float32_float64_products()
                 )
             end
             padded_a = mod.KaratsubaMatrix(
-                padded_matrix(T[1 2; 2 1], (4, 5), input_radix),
-                padded_matrix(T[1 0; 0 1], (5, 4), input_high);
+                padded_matrix(T[4 4 1; 3 4 2], (4, 6), input_radix),
+                padded_matrix(T[2 1 2; 1 2 0], (5, 7), input_high);
                 low_modulus = input_radix,
                 high_modulus = input_high,
                 modulus = metadata,
             )
             padded_x = mod.KaratsubaVector(
-                padded_vector(T[1, 1], 5, input_radix),
-                padded_vector(T[0, 0], 4, input_high);
+                padded_vector(T[4, 3, 2], 6, input_radix),
+                padded_vector(T[6, 5, 4], 7, 7);
                 low_modulus = input_radix,
-                high_modulus = input_high,
+                high_modulus = 7,
                 modulus = metadata,
             )
+            @test mod.high_modulus(padded_a) != mod.high_modulus(padded_x)
             padded_y = Base.zeros(
                 mod.KaratsubaVector{T},
                 2;
@@ -1491,7 +1492,7 @@ function test_karatsuba_float32_float64_products()
                 ),
             )
             @test LinearAlgebra.mul!(padded_y, padded_a, padded_x) === padded_y
-            @test Array(mod.from_karatsuba(T, padded_y)) == T[8, 8]
+            @test Array(mod.from_karatsuba(T, padded_y)) == T[25, 8]
             padded_after = map(
                 padding_snapshot,
                 (
@@ -1515,6 +1516,7 @@ function test_karatsuba_float32_float64_products()
             batch_x_low_values = zeros(T, n)
             batch_x_low_values[1] = one(T)
             batch_x_high_values = zeros(T, n)
+            batch_x_high_values[1] = one(T)
             wrap_matrix =
                 (values, component_modulus) -> mod.CuModMatrix{T}(
                     CUDA.CuArray(values);
@@ -1536,9 +1538,9 @@ function test_karatsuba_float32_float64_products()
             )
             batch_x = mod.KaratsubaVector(
                 wrap_vector(batch_x_low_values, input_radix),
-                wrap_vector(batch_x_high_values, input_high);
+                wrap_vector(batch_x_high_values, 7);
                 low_modulus = input_radix,
-                high_modulus = input_high,
+                high_modulus = 7,
                 modulus = metadata,
             )
             batch_y = Base.zeros(
@@ -1596,7 +1598,7 @@ function test_karatsuba_float32_float64_products()
                 batch_targets,
             )
             @test LinearAlgebra.mul!(batch_y, batch_a, batch_x) === batch_y
-            @test Array(mod.from_karatsuba(T, batch_y)) == fill(T(6), n)
+            @test Array(mod.from_karatsuba(T, batch_y)) == fill(T(1), n)
 
             batch_a_plan_before = Array(parent(batch_a.plan))
             batch_x_plan_before = Array(parent(batch_x.plan))
@@ -1607,7 +1609,7 @@ function test_karatsuba_float32_float64_products()
                 low_part(batch_x),
                 high_part(batch_x);
                 low_modulus = input_radix,
-                high_modulus = input_high,
+                high_modulus = 7,
                 modulus = metadata + 1,
             )
             mod.initialize_plan!(wrong_modulus_x)
@@ -1757,50 +1759,53 @@ function test_karatsuba_float32_float64_products()
                 ) == unsafe_matrix_plans_before
                 @test Array(low_part(unsafe_matrix_c)) == zeros(T, 1, 1)
                 @test Array(high_part(unsafe_matrix_c)) == zeros(T, 1, 1)
-
-                unsafe_gemv_a = mod.KaratsubaMatrix(
-                    mod.CuModMatrix{T}(CUDA.zeros(T, 1, 2); modulus = 3000),
-                    mod.CuModMatrix{T}(CUDA.zeros(T, 1, 2); modulus = 2);
-                    low_modulus = 3000,
-                    high_modulus = 2,
-                    modulus = 100,
-                )
-                unsafe_gemv_x = mod.KaratsubaVector(
-                    mod.CuModVector{T}(CUDA.zeros(T, 2); modulus = 3000),
-                    mod.CuModVector{T}(CUDA.zeros(T, 2); modulus = 2);
-                    low_modulus = 3000,
-                    high_modulus = 2,
-                    modulus = 100,
-                )
-                unsafe_gemv_y = Base.zeros(
-                    mod.KaratsubaVector{T},
-                    1;
-                    low_modulus = 3000,
-                    high_modulus = 2,
-                    modulus = 100,
-                )
-                foreach(mod.initialize_plan!, (unsafe_gemv_a, unsafe_gemv_x, unsafe_gemv_y))
-                foreach(
-                    (plan, sentinel) -> fill!(parent(plan), T(sentinel)),
-                    (unsafe_gemv_a.plan, unsafe_gemv_x.plan, unsafe_gemv_y.plan),
-                    (29, 31, 37),
-                )
-                unsafe_gemv_plans_before = map(
-                    plan -> Array(parent(plan)),
-                    (unsafe_gemv_a.plan, unsafe_gemv_x.plan, unsafe_gemv_y.plan),
-                )
-                @test_throws ArgumentError LinearAlgebra.mul!(
-                    unsafe_gemv_y,
-                    unsafe_gemv_a,
-                    unsafe_gemv_x,
-                )
-                @test map(
-                    plan -> Array(parent(plan)),
-                    (unsafe_gemv_a.plan, unsafe_gemv_x.plan, unsafe_gemv_y.plan),
-                ) == unsafe_gemv_plans_before
-                @test Array(low_part(unsafe_gemv_y)) == zeros(T, 1)
-                @test Array(high_part(unsafe_gemv_y)) == zeros(T, 1)
             end
+
+            # Both precisions reject a dot bound beyond their exact-integer
+            # range before touching plans or the destination.
+            unsafe_radix = T === Float32 ? 3000 : (1 << 27)
+            unsafe_gemv_a = mod.KaratsubaMatrix(
+                mod.CuModMatrix{T}(CUDA.zeros(T, 1, 2); modulus = unsafe_radix),
+                mod.CuModMatrix{T}(CUDA.zeros(T, 1, 2); modulus = 2);
+                low_modulus = unsafe_radix,
+                high_modulus = 2,
+                modulus = 100,
+            )
+            unsafe_gemv_x = mod.KaratsubaVector(
+                mod.CuModVector{T}(CUDA.zeros(T, 2); modulus = unsafe_radix),
+                mod.CuModVector{T}(CUDA.zeros(T, 2); modulus = 2);
+                low_modulus = unsafe_radix,
+                high_modulus = 2,
+                modulus = 100,
+            )
+            unsafe_gemv_y = Base.zeros(
+                mod.KaratsubaVector{T},
+                1;
+                low_modulus = unsafe_radix,
+                high_modulus = 2,
+                modulus = 100,
+            )
+            foreach(mod.initialize_plan!, (unsafe_gemv_a, unsafe_gemv_x, unsafe_gemv_y))
+            foreach(
+                (plan, sentinel) -> fill!(parent(plan), T(sentinel)),
+                (unsafe_gemv_a.plan, unsafe_gemv_x.plan, unsafe_gemv_y.plan),
+                (29, 31, 37),
+            )
+            unsafe_gemv_plans_before = map(
+                plan -> Array(parent(plan)),
+                (unsafe_gemv_a.plan, unsafe_gemv_x.plan, unsafe_gemv_y.plan),
+            )
+            @test_throws ArgumentError LinearAlgebra.mul!(
+                unsafe_gemv_y,
+                unsafe_gemv_a,
+                unsafe_gemv_x,
+            )
+            @test map(
+                plan -> Array(parent(plan)),
+                (unsafe_gemv_a.plan, unsafe_gemv_x.plan, unsafe_gemv_y.plan),
+            ) == unsafe_gemv_plans_before
+            @test Array(low_part(unsafe_gemv_y)) == zeros(T, 1)
+            @test Array(high_part(unsafe_gemv_y)) == zeros(T, 1)
         end
     end
 end

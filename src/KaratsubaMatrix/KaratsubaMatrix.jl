@@ -389,13 +389,13 @@ function _karatsuba_gemv_precision_plan(
     )
     output_low == input_low_a || throw(
         ModulusMismatchError(
-            "legacy Karatsuba GEMV requires the output low modulus to match the input radix",
+            "three-product Karatsuba GEMV requires the output low modulus to match the input radix",
         ),
     )
 
-    # The legacy 7/5 GEMV path forms low+high sums modulo 2R, accumulates the
-    # three dot products in cuBLAS, and uses a conservative (4R)^2 recombination
-    # window. Check every integer intermediate before any caller plan is written.
+    # Input components are canonical digits. Keep their full low+high sums for
+    # the middle product; reducing these sums modulo 2R loses valid high-plane
+    # information whenever a high modulus differs from R.
     sum_bound_a = _karatsuba_checked_sum_bound(
         input_low_a,
         input_high_a,
@@ -408,25 +408,10 @@ function _karatsuba_gemv_precision_plan(
         "right GEMV sum input bound",
         T,
     )
-    middle_radix_a = _karatsuba_checked_working_modulus(
-        BigInt(2) * BigInt(input_low_a),
-        "left GEMV middle-product radix",
-        T,
-    )
-    middle_radix_b = _karatsuba_checked_working_modulus(
-        BigInt(2) * BigInt(input_low_b),
-        "right GEMV middle-product radix",
-        T,
-    )
     low_bound =
         _karatsuba_gemv_dot_bound(T, terms, input_low_a, input_low_b, "low GEMV product")
-    middle_bound = _karatsuba_gemv_dot_bound(
-        T,
-        terms,
-        middle_radix_a,
-        middle_radix_b,
-        "middle GEMV product",
-    )
+    middle_bound =
+        _karatsuba_gemv_dot_bound(T, terms, sum_bound_a, sum_bound_b, "middle GEMV product")
     high_bound =
         _karatsuba_gemv_dot_bound(T, terms, input_high_a, input_high_b, "high GEMV product")
     output_capacity = _karatsuba_checked_working_modulus(
@@ -434,16 +419,18 @@ function _karatsuba_gemv_precision_plan(
         "GEMV output component capacity",
         T,
     )
-    recombination_bound = (BigInt(4) * BigInt(output_low))^2 + BigInt(output_low)
-    recombination_bound <= _karatsuba_exact_integer_bound(T) ||
-        throw(ArgumentError("legacy GEMV recombination exceeds the exact-integer $T range"))
+    radix_mod_capacity = Int(mod(BigInt(input_low_a), BigInt(output_capacity)))
+    radix_squared_mod_capacity = Int(mod(BigInt(input_low_a)^2, BigInt(output_capacity)))
     return (
         low_dot_bound = low_bound,
         middle_dot_bound = middle_bound,
         high_dot_bound = high_bound,
         sum_input_bounds = (sum_bound_a, sum_bound_b),
+        input_radix = input_low_a,
+        output_radix = output_low,
         output_capacity = output_capacity,
-        recombination_bound = recombination_bound,
+        radix_mod_capacity = radix_mod_capacity,
+        radix_squared_mod_capacity = radix_squared_mod_capacity,
     )
 end
 
@@ -936,17 +923,12 @@ function karatsuba_gemv!(
             _logical_view(parent(b_plan), size(b_plan)),
             _logical_view(parent(low_part(B)), size(low_part(B))),
             _logical_view(parent(high_part(B)), size(high_part(B))),
-            low_modulus(A),
         )
     end
-    # add!(A.plan,low_part(A),high_part(A); modulus_override=2*low_modulus(A))
-    # add!(B.plan,low_part(B),high_part(B); modulus_override=2*low_modulus(B))
-
-    (zero_ptr, one_ptr) = _stripe_gemv_scalars(T)
-
 
     # C.plan is the independent, output-sized destination for the third
     # product. B.plan remains the second product's input sum.
+    (zero_ptr, one_ptr) = _stripe_gemv_scalars(T)
     Cplan_output = _logical_view(parent(c_plan), size(c_plan))
     matrix_parents = (parent(low_part(A)), parent(a_plan), parent(high_part(A)))
     vector_parents = (parent(low_part(B)), parent(b_plan), parent(high_part(B)))
@@ -1015,8 +997,10 @@ function karatsuba_gemv!(
             _logical_view(parent(low_part(C)), size(low_part(C))),
             _logical_view(parent(high_part(C)), size(high_part(C))),
             Cplan_output,
-            low_modulus(C),
-            high_modulus(C),
+            T(precision.radix_mod_capacity),
+            T(precision.radix_squared_mod_capacity),
+            T(precision.output_radix),
+            T(precision.output_capacity),
         )
     end
 

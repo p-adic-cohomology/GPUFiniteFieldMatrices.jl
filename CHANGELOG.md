@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Karatsuba GEMV high-plane arithmetic
+
+The three-product GEMV path now keeps full canonical low-plus-high operand
+sums and recombines its exact cuBLAS dot totals modulo the output component
+capacity `Q`. This fixes the prior `2R` sum wrap and legacy `7/5` recombination
+for interacting nonzero high planes. Matching Float32 and Float64 GPU-backed
+components remain subject to the existing common input/output low-radix and
+canonical-digit requirements; input high moduli may differ, and metadata
+modulus `M` remains distinct from output capacity `Q`. Exact-integer preflight
+checks run before caller plans or outputs are written. The independent BigInt
+proof passes and the CUDA-gated regressions are added; GPU runtime acceptance
+remains pending on a supported device.
+
 ### Breaking: consistent exceptions
 
 Shape and square-matrix requirements throw `DimensionMismatch`. Incompatible
@@ -87,9 +100,9 @@ storage. The same precision-aware support applies to matrix-vector `mul!` and
 allocating `A * x`, which returns a vector-shaped result with private plans.
 The exact-integer budgets are 24 bits for Float32 and 53 bits for Float64.
 Results use destination split capacity independently of the shared
-representation modulus. The inherited general high-plane GEMV arithmetic
-limitation remains unresolved; this extension does not claim general GEMV
-correctness.
+representation modulus. The high-plane GEMV arithmetic repair is recorded in
+the Unreleased section above; that CPU proof does not substitute for device
+runtime acceptance.
 
 ### Empty products, triangular inverses, and tests
 
@@ -101,8 +114,7 @@ square block and return a right inverse with zero trailing rows.
 Karatsuba basic arithmetic and allocation suites are included and invoked under
 the existing CUDA gate, with distinct helper names, warmed allocation checks,
 and raw-CuArray unary coverage. These source changes do not establish device
-correctness or allocation results on machines where CUDA is unavailable. The
-known general high-plane GEMV arithmetic limitation remains unresolved.
+correctness or allocation results on machines where CUDA is unavailable.
 
 The qualified `change_modulus!!` consumes its wrapper and shares storage with
 the returned wrapper. Shrinking reduces values in place; equal or larger

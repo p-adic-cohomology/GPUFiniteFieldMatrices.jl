@@ -191,16 +191,17 @@ function karatsuba_matmul_kernel_1!(
     nothing
 end
 
-# Legacy GEMV compatibility overload; preserve its original linear-index arithmetic.
-function karatsuba_matmul_kernel_1!(Aplan, Adata1, Adata2, Bplan, Bdata1, Bdata2, N1)
+# GEMV operand preparation uses linear-indexed logical vectors and preserves
+# the complete canonical low+high sum for the three-product identity.
+function karatsuba_matmul_kernel_1!(Aplan, Adata1, Adata2, Bplan, Bdata1, Bdata2)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
 
     if i <= length(Bplan) && i <= length(Bdata1) && i <= length(Bdata2)
-        Bplan[i] = (Bdata1[i] + Bdata2[i]) % (2*N1)
+        Bplan[i] = Bdata1[i] + Bdata2[i]
     end
 
     if i <= length(Aplan) && i <= length(Adata1) && i <= length(Adata2)
-        Aplan[i] = (Adata1[i] + Adata2[i]) % (2*N1)
+        Aplan[i] = Adata1[i] + Adata2[i]
     end
 
     nothing
@@ -275,6 +276,33 @@ end
     return low, high
 end
 
+@inline function _karatsuba_gemv_recombine(
+    p0::T,
+    p1::T,
+    p2::T,
+    radix_mod_capacity::T,
+    radix_squared_mod_capacity::T,
+    output_radix::T,
+    output_capacity::T,
+) where {T<:Union{Float32,Float64}}
+    # cuBLAS returns exact nonnegative dot totals, which need not be below Q.
+    # The GEMV precision plan bounds each total below 2^p, so conversion to Int
+    # and reduction modulo Q are exact before using the shared GEMM helper.
+    capacity_integer = Int(output_capacity)
+    p0_residue = T(mod(Int(p0), capacity_integer))
+    p1_residue = T(mod(Int(p1), capacity_integer))
+    p2_residue = T(mod(Int(p2), capacity_integer))
+    return _karatsuba_recombine(
+        p0_residue,
+        p1_residue,
+        p2_residue,
+        radix_mod_capacity,
+        radix_squared_mod_capacity,
+        output_radix,
+        output_capacity,
+    )
+end
+
 function karatsuba_matmul_kernel_2!(
     Cdata1,
     Cdata2,
@@ -317,23 +345,31 @@ function karatsuba_matmul_kernel_2!(
     nothing
 end
 
-# Legacy GEMV compatibility overload; preserve its original linear-index arithmetic.
-function karatsuba_matmul_kernel_2!(Cdata1, Cdata2, Bplan, N1, N2)
+# GEMV recombination operates on logical vector views. The precision plan
+# supplies checked Q-reduced radix factors so every intermediate stays exact.
+function karatsuba_matmul_kernel_2!(
+    Cdata1,
+    Cdata2,
+    Bplan,
+    radix_mod_capacity,
+    radix_squared_mod_capacity,
+    output_radix,
+    output_capacity,
+)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
 
     if i <= length(Cdata1) && i <= length(Cdata2) && i <= length(Bplan)
-        cc1 = mod(Cdata1[i], N1^2)
-        cc2 = mod(Cdata2[i], (4*N1)^2)
-        bp = mod(Bplan[i], N1)
-
-        cp = div(cc1, N1)
-        cc2 = (cc2 - cc1) % ((4*N1)^2)
-
-        cc2 = (cc2 - bp) % ((4*N1)^2)
-        cc2 = cc2 + cp
-
-        Cdata1[i] = mod(cc1, N1)
-        Cdata2[i] = mod(cc2, N2)
+        low, high = _karatsuba_gemv_recombine(
+            Cdata1[i],
+            Cdata2[i],
+            Bplan[i],
+            radix_mod_capacity,
+            radix_squared_mod_capacity,
+            output_radix,
+            output_capacity,
+        )
+        Cdata1[i] = low
+        Cdata2[i] = high
     end
 
     nothing
