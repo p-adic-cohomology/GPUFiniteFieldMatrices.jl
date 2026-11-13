@@ -133,7 +133,7 @@ function _batch_destination_matrix(A::CuModMatrix)
     return CuModMatrix(copy(parent(A)); modulus = modulus(A), new_size = size(A))
 end
 
-function _batch_destination_blank(A::CuModMatrix; value::Float32 = 37)
+function _batch_destination_blank(A::CuModMatrix; value::Float32 = 37.0f0)
     data = CUDA.fill(value, size(parent(A))...)
     return CuModMatrix(data; modulus = modulus(A), new_size = size(A))
 end

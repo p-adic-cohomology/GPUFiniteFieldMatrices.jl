@@ -169,7 +169,7 @@ function _recursive_upper_triangular_inverse_no_copy(
             @view(A_22_inv[1:(col_upper-col_mid), 1:(row_upper-row_mid)]);
             modulus = N,
         )
-        rscalar_sub!(tmp2, tmp2, N; modulus_override = N)
+        rscalar_sub!(tmp2, tmp2, N, N)
         A_inv[col_lower:col_mid, (row_mid+1):row_upper] = tmp2
 
         if debug
@@ -217,7 +217,7 @@ function _recursive_upper_triangular_inverse_no_copy(
             @view(A_22_inv[1:(col_upper-col_mid), 1:(row_upper-row_mid)]);
             modulus = N,
         )
-        rscalar_sub!(tmp2, tmp2, N; modulus_override = N)
+        rscalar_sub!(tmp2, tmp2, N, N)
         A_inv[col_lower:col_mid, (row_mid+1):row_upper] = tmp2
 
         return
@@ -487,7 +487,7 @@ function _recursive_lower_triangular_inverse_no_copy(
             modulus = N,
         )
         tmp2 = _stripe_mul(tmp, A_11_inv; modulus = N)
-        rscalar_sub!(tmp2, tmp2, N; modulus_override = N)
+        rscalar_sub!(tmp2, tmp2, N, N)
         A_inv[(col_mid+1):col_upper, row_lower:row_mid] = tmp2
 
         if debug
@@ -531,7 +531,7 @@ function _recursive_lower_triangular_inverse_no_copy(
         A_22_inv = @view A_inv[(col_mid+1):col_upper, (row_mid+1):row_upper]
         tmp = _stripe_mul(A_22_inv, A_21; modulus = N)
         tmp2 = _stripe_mul(tmp, A_11_inv; modulus = N)
-        rscalar_sub!(tmp2, tmp2, N; modulus_override = N)
+        rscalar_sub!(tmp2, tmp2, N, N)
         A_inv[(col_mid+1):col_upper, row_lower:row_mid] = tmp2
 
         return
