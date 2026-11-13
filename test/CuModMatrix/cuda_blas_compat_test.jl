@@ -651,39 +651,69 @@ function test_cuda_blas_compatibility()
     A2_data = reshape(mod.(3 .* matrix_indices .+ 1, N2), n, n)
     x1_data = mod.(vector_indices .+ 1, N1)
     x2_data = mod.(3 .* vector_indices .+ 1, N2)
+    A_values = BigInt.(A1_data) .+ BigInt(N1) .* BigInt.(A2_data)
+    x_values = BigInt.(x1_data) .+ BigInt(N1) .* BigInt.(x2_data)
+    expected = Base.mod.(A_values * x_values, BigInt(modulus))
+    @test any(value -> !iszero(value), A2_data)
+    @test any(value -> !iszero(value), x2_data)
 
-    A1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A1_data; modulus = N1)
-    A2 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A2_data; modulus = N2)
-    x1 = GPUFiniteFieldMatrices.CuModVector{Float64}(x1_data; modulus = N1)
-    x2 = GPUFiniteFieldMatrices.CuModVector{Float64}(x2_data; modulus = N2)
-    A = GPUFiniteFieldMatrices.KaratsubaMatrix(
-        A1,
-        A2;
-        low_modulus = N1,
-        high_modulus = N2,
-        modulus = modulus,
-    )
-    x = GPUFiniteFieldMatrices.KaratsubaVector(
-        x1,
-        x2;
-        low_modulus = N1,
-        high_modulus = N2,
-        modulus = modulus,
-    )
-    y = GPUFiniteFieldMatrices.zeros(
-        GPUFiniteFieldMatrices.KaratsubaVector{Float64},
-        n;
-        low_modulus = N1,
-        high_modulus = N2,
-        modulus = modulus,
-    )
+    for T in (Float32, Float64)
+        A1 = GPUFiniteFieldMatrices.CuModMatrix{T}(A1_data; modulus = N1)
+        A2 = GPUFiniteFieldMatrices.CuModMatrix{T}(A2_data; modulus = N2)
+        x1 = GPUFiniteFieldMatrices.CuModVector{T}(x1_data; modulus = N1)
+        x2 = GPUFiniteFieldMatrices.CuModVector{T}(x2_data; modulus = N2)
+        A = GPUFiniteFieldMatrices.KaratsubaMatrix(
+            A1,
+            A2;
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = modulus,
+        )
+        x = GPUFiniteFieldMatrices.KaratsubaVector(
+            x1,
+            x2;
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = modulus,
+        )
+        y = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.KaratsubaVector{T},
+            n;
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = modulus,
+        )
 
-    GPUFiniteFieldMatrices.initialize_plan!(A)
-    GPUFiniteFieldMatrices.initialize_plan!(x)
-    GPUFiniteFieldMatrices.initialize_plan!(y)
+        GPUFiniteFieldMatrices.initialize_plan!(A)
+        GPUFiniteFieldMatrices.initialize_plan!(x)
+        GPUFiniteFieldMatrices.initialize_plan!(y)
+        A_components_before = (Array(A1), Array(A2))
+        x_components_before = (Array(x1), Array(x2))
 
-    expected = mod.((A1_data + N1 .* A2_data) * (x1_data + N1 .* x2_data), modulus)
-    CUDA.@sync GPUFiniteFieldMatrices.karatsuba_gemv!(y, A, x)
-    @test Array(y) == expected
+        CUDA.@sync GPUFiniteFieldMatrices.karatsuba_gemv!(y, A, x)
+        @test Array(y) == expected
+
+        y_public = GPUFiniteFieldMatrices.zeros(
+            GPUFiniteFieldMatrices.KaratsubaVector{T},
+            n;
+            low_modulus = N1,
+            high_modulus = N2,
+            modulus = modulus,
+        )
+        GPUFiniteFieldMatrices.initialize_plan!(y_public)
+        CUDA.@sync LinearAlgebra.mul!(y_public, A, x)
+        @test Array(y_public) == expected
+        @test (Array(A1), Array(A2)) == A_components_before
+        @test (Array(x1), Array(x2)) == x_components_before
+
+        A_plan_before = Array(parent(A.plan))
+        x_plan_before = Array(parent(x.plan))
+        allocated = A * x
+        @test Array(allocated) == expected
+        @test (Array(A1), Array(A2)) == A_components_before
+        @test (Array(x1), Array(x2)) == x_components_before
+        @test Array(parent(A.plan)) == A_plan_before
+        @test Array(parent(x.plan)) == x_plan_before
+    end
 
 end

@@ -198,11 +198,18 @@ representation metadata; their component capacity is
 For `mul!(y, A, x)`, the matrix column count must match the vector length and
 `y` must have `size(A, 1)` entries. `A` and `x` must share low radix `R`, and
 the destination vector must use low radix `R` as well. Initialize all three
-plans before the mutating operation. The legacy GEMV recombination still has a
-known correctness limitation when both operands have interacting nonzero high
-planes; the new precision checks do not resolve that inherited arithmetic
-issue. The matrix-matrix correctness contract does not imply general GEMV
-correctness.
+plans before the mutating operation. GEMV preserves each complete low-plus-high
+sum for its middle product, then reconstructs the three exact dot products
+modulo the destination capacity `Q = low_modulus(y) * high_modulus(y)` and
+splits the result into canonical output digits. The input high moduli may
+differ from each other and from `R`; the shared representation modulus `M`
+remains compatibility metadata and does not replace `Q`. Preflight checks bound
+the operand sums, all three dot products, and `Q` by the exact integer range of
+the selected Float32 or Float64 type before plans or outputs are written.
+CUDA-gated regressions cover the reported 32-by-32 fixture, rectangular
+high-plane interaction, batching, and padded-view fallback. The CPU BigInt
+proof passes; device-level GEMV acceptance still requires running those
+regressions on supported CUDA hardware.
 
 For CPU-only data, `to_karatsuba` returns CPU component arrays and
 `from_karatsuba(T, K)` returns `Array{T}`. GPU-backed components produce a plain

@@ -225,7 +225,7 @@ BitIntegers.@define_integers 24
     ).module === mod
 
     # Resolve the raw launch signatures without allocating CuArrays or invoking
-    # a kernel. GEMV uses matrix/vector storage and the baseline 7/5 arities;
+    # a kernel. GEMV uses logical vector preparation/recombination signatures;
     # GEMM keeps its matrix-only launch signatures.
     raw_matrix_storage = CUDA.CuArray{Float64,2,CUDA.DeviceMemory}
     raw_vector_storage = CUDA.CuArray{Float64,1,CUDA.DeviceMemory}
@@ -288,14 +288,21 @@ BitIntegers.@define_integers 24
                 raw_vector_storage,
                 raw_vector_storage,
                 raw_vector_storage,
-                Int,
             },
-            7,
+            6,
         ),
         (
             mod.karatsuba_matmul_kernel_2!,
-            Tuple{raw_vector_storage,raw_vector_storage,raw_vector_storage,Int,Int},
-            5,
+            Tuple{
+                raw_vector_storage,
+                raw_vector_storage,
+                raw_vector_storage,
+                Float64,
+                Float64,
+                Float64,
+                Float64,
+            },
+            7,
         ),
     )
     for (kernel, signature, positional_arity) in kernel_dispatch_cases
@@ -974,10 +981,9 @@ end
 
         gemv_plan = mod._karatsuba_gemv_precision_plan(T, 2, 13, 7, 13, 5, 13, 11)
         @test gemv_plan.low_dot_bound == BigInt(2) * 12 * 12
-        @test gemv_plan.middle_dot_bound == BigInt(2) * 25 * 25
+        @test gemv_plan.middle_dot_bound == BigInt(2) * 19 * 17
         @test gemv_plan.high_dot_bound == BigInt(2) * 6 * 4
         @test gemv_plan.output_capacity == 143
-        @test gemv_plan.recombination_bound <= exact_max
 
         # Evaluate the three-product identity independently with BigInt, then
         # compare the type-specific device helper's exact residue and split.
