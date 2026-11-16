@@ -703,10 +703,7 @@ function test_cuda_blas_compatibility()
             GPUFiniteFieldMatrices.high_part(x),
         ),
     )
-    plans_before = map(
-        plan -> Array(parent(plan)),
-        (A.plan, x.plan, y.plan),
-    )
+    plans_before = map(plan -> Array(parent(plan)), (A.plan, x.plan, y.plan))
     output_before = map(
         component -> Array(parent(component)),
         (GPUFiniteFieldMatrices.low_part(y), GPUFiniteFieldMatrices.high_part(y)),

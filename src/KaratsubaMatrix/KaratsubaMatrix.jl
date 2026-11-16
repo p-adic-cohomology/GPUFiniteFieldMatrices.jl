@@ -393,8 +393,10 @@ function _karatsuba_gemv_validate_radices(
     output_low::Int,
     output_high::Int,
 )
-    all(>(0), (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high)) ||
-        throw(ArgumentError("Karatsuba split moduli must be positive"))
+    all(
+        >(0),
+        (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high),
+    ) || throw(ArgumentError("Karatsuba split moduli must be positive"))
     input_low_a == input_low_b || throw(
         ModulusMismatchError(
             "three-product Karatsuba GEMV requires a common low modulus for A and x",
@@ -434,12 +436,8 @@ function _karatsuba_gemv_precision_plan(
 
     # Full sums A0+A1 and x0+x1 feed the raw middle dot product. Each cuBLAS
     # total is an integer no larger than 2^p, including the exact endpoint.
-    sum_bound_a = _karatsuba_gemv_sum_bound(
-        input_low_a,
-        input_high_a,
-        "left GEMV sum input bound",
-        T,
-    )
+    sum_bound_a =
+        _karatsuba_gemv_sum_bound(input_low_a, input_high_a, "left GEMV sum input bound", T)
     sum_bound_b = _karatsuba_gemv_sum_bound(
         input_low_b,
         input_high_b,
@@ -448,13 +446,8 @@ function _karatsuba_gemv_precision_plan(
     )
     low_bound =
         _karatsuba_gemv_dot_bound(T, terms, input_low_a, input_low_b, "low GEMV product")
-    middle_bound = _karatsuba_gemv_dot_bound(
-        T,
-        terms,
-        sum_bound_a,
-        sum_bound_b,
-        "middle GEMV product",
-    )
+    middle_bound =
+        _karatsuba_gemv_dot_bound(T, terms, sum_bound_a, sum_bound_b, "middle GEMV product")
     high_bound =
         _karatsuba_gemv_dot_bound(T, terms, input_high_a, input_high_b, "high GEMV product")
     output_capacity = _karatsuba_checked_working_modulus(

@@ -1626,7 +1626,8 @@ function test_karatsuba_float32_float64_products()
             padded_gemv_padding_before = map(padding_snapshot, padded_gemv_components)
             CUDA.@sync LinearAlgebra.mul!(padded_gemv_y, padded_gemv_a, padded_gemv_x)
             @test Array(mod.from_karatsuba(T, padded_gemv_y)) == expected_gemv_q12
-            @test map(padding_snapshot, padded_gemv_components) == padded_gemv_padding_before
+            @test map(padding_snapshot, padded_gemv_components) ==
+                  padded_gemv_padding_before
 
             batch_a = mod.KaratsubaMatrix(
                 wrap_matrix(batch_a_low_values, input_radix),
