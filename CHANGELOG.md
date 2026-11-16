@@ -73,7 +73,7 @@ The table includes naming changes and the behavioral changes described above.
 | `forward_sub_gpu_type_32`, `backward_sub_gpu_type_32` | private destination-first triangular launch helpers | The allocating helper names are retired; recursive triangular inversion writes through the private helpers. |
 | add!, sub!, zero! | unchanged | These names remain available as qualified public functions. |
 | KMatMul!(C, A, B) | LinearAlgebra.mul!(C, A, B) | Extends LinearAlgebra's multiplication method. |
-| KMatMul_gemv!(C, A, x) | karatsuba_gemv!(C, A, x) | Name only; behavior is unchanged. |
+| KMatMul_gemv!(C, A, x) | karatsuba_gemv!(C, A, x) | The three-product GEMV now requires output N2 to divide common low radix N1; results are modulo Q=N1*N2. |
 | Karatsubacopy(A) | Base.copy(A) | The original rename was name-only; the approved 0.4.0 correction preserves representation metadata `M`, deep-copies component storage with the new padded geometry, and creates a fresh plan for a planned source. |
 | MatToKMat(...) | to_karatsuba(...) | Conversion helper; all overloads are renamed. |
 | KMatToMat(T, K) | from_karatsuba(T, K) | Conversion helper; argument order is unchanged. |
@@ -83,13 +83,19 @@ preflights all three raw stripe products before any plan writes. Each product
 executes through the existing raw `_stripe_mul!` core. The allocating
 `A * B` form preserves caller components and plans; the mutating form
 requires initialized plans and supports matching Float32 or Float64 GPU
-storage. The same precision-aware support applies to matrix-vector `mul!` and
-allocating `A * x`, which returns a vector-shaped result with private plans.
-The exact-integer budgets are 24 bits for Float32 and 53 bits for Float64.
-Results use destination split capacity independently of the shared
-representation modulus. The inherited general high-plane GEMV arithmetic
-limitation remains unresolved; this extension does not claim general GEMV
-correctness.
+storage. Results use destination split capacity independently of the shared
+representation modulus.
+
+Karatsuba GEMV now uses three raw cuBLAS dot products and exact floating
+mantissa recombination for canonical nonnegative component digits. `A` and
+`x` must share low radix `N1`; the output low radix must equal `N1`, and output
+high modulus `N2` must divide `N1`. Input high moduli may differ. Unsupported
+output radix pairs throw before destination or plan writes. The arithmetic
+returns the result modulo `Q = N1*N2`; representation modulus `M` remains
+compatibility metadata and is not part of the product reduction. Precision
+preflight retains the 24-bit Float32 and 53-bit Float64 exact-integer budgets.
+The allocating `A * x` form uses `A`'s split and private plans, so its high
+modulus must also divide `N1`.
 
 ### Empty products, triangular inverses, and tests
 
@@ -101,8 +107,7 @@ square block and return a right inverse with zero trailing rows.
 Karatsuba basic arithmetic and allocation suites are included and invoked under
 the existing CUDA gate, with distinct helper names, warmed allocation checks,
 and raw-CuArray unary coverage. These source changes do not establish device
-correctness or allocation results on machines where CUDA is unavailable. The
-known general high-plane GEMV arithmetic limitation remains unresolved.
+correctness or allocation results on machines where CUDA is unavailable.
 
 The qualified `change_modulus!!` consumes its wrapper and shares storage with
 the returned wrapper. Shrinking reduces values in place; equal or larger

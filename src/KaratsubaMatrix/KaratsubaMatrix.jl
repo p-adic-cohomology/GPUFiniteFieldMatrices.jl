@@ -363,9 +363,54 @@ function _karatsuba_gemv_dot_bound(
     left_bound > 0 && right_bound > 0 ||
         throw(ArgumentError("GEMV component bounds must be positive"))
     bound = BigInt(terms) * BigInt(left_bound - 1) * BigInt(right_bound - 1)
-    bound < _karatsuba_exact_integer_bound(T) ||
+    bound <= _karatsuba_exact_integer_bound(T) ||
         throw(ArgumentError("$label exceeds the exact-integer $T accumulation range"))
     return bound
+end
+
+function _karatsuba_gemv_sum_bound(
+    left_bound::Int,
+    right_bound::Int,
+    label::AbstractString,
+    ::Type{T},
+) where {T<:Union{Float32,Float64}}
+    left_bound > 0 && right_bound > 0 ||
+        throw(ArgumentError("GEMV component bounds must be positive"))
+    # Each input digit is below its modulus. The largest sum is therefore
+    # (left_bound - 1) + (right_bound - 1), so the exclusive bound is a+b-1.
+    value = BigInt(left_bound) + BigInt(right_bound) - 1
+    value <= typemax(Int) || throw(OverflowError("$label overflows Int"))
+    value - 1 <= _karatsuba_exact_integer_bound(T) ||
+        throw(ArgumentError("$label exceeds the exact-integer $T range"))
+    return Int(value)
+end
+
+function _karatsuba_gemv_validate_radices(
+    input_low_a::Int,
+    input_high_a::Int,
+    input_low_b::Int,
+    input_high_b::Int,
+    output_low::Int,
+    output_high::Int,
+)
+    all(>(0), (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high)) ||
+        throw(ArgumentError("Karatsuba split moduli must be positive"))
+    input_low_a == input_low_b || throw(
+        ModulusMismatchError(
+            "three-product Karatsuba GEMV requires a common low modulus for A and x",
+        ),
+    )
+    output_low == input_low_a || throw(
+        ModulusMismatchError(
+            "Karatsuba GEMV requires the output low modulus to match the input radix",
+        ),
+    )
+    rem(output_low, output_high) == 0 || throw(
+        ArgumentError(
+            "Karatsuba GEMV requires output high modulus N2=$output_high to divide low radix N1=$output_low",
+        ),
+    )
+    return nothing
 end
 
 function _karatsuba_gemv_precision_plan(
@@ -378,44 +423,27 @@ function _karatsuba_gemv_precision_plan(
     output_low::Int,
     output_high::Int,
 ) where {T<:Union{Float32,Float64}}
-    all(
-        >(0),
-        (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high),
-    ) || throw(ArgumentError("Karatsuba split moduli must be positive"))
-    input_low_a == input_low_b || throw(
-        ModulusMismatchError(
-            "three-product Karatsuba GEMV requires a common low modulus for A and x",
-        ),
-    )
-    output_low == input_low_a || throw(
-        ModulusMismatchError(
-            "legacy Karatsuba GEMV requires the output low modulus to match the input radix",
-        ),
+    _karatsuba_gemv_validate_radices(
+        input_low_a,
+        input_high_a,
+        input_low_b,
+        input_high_b,
+        output_low,
+        output_high,
     )
 
-    # The legacy 7/5 GEMV path forms low+high sums modulo 2R, accumulates the
-    # three dot products in cuBLAS, and uses a conservative (4R)^2 recombination
-    # window. Check every integer intermediate before any caller plan is written.
-    sum_bound_a = _karatsuba_checked_sum_bound(
+    # Full sums A0+A1 and x0+x1 feed the raw middle dot product. Each cuBLAS
+    # total is an integer no larger than 2^p, including the exact endpoint.
+    sum_bound_a = _karatsuba_gemv_sum_bound(
         input_low_a,
         input_high_a,
         "left GEMV sum input bound",
         T,
     )
-    sum_bound_b = _karatsuba_checked_sum_bound(
+    sum_bound_b = _karatsuba_gemv_sum_bound(
         input_low_b,
         input_high_b,
         "right GEMV sum input bound",
-        T,
-    )
-    middle_radix_a = _karatsuba_checked_working_modulus(
-        BigInt(2) * BigInt(input_low_a),
-        "left GEMV middle-product radix",
-        T,
-    )
-    middle_radix_b = _karatsuba_checked_working_modulus(
-        BigInt(2) * BigInt(input_low_b),
-        "right GEMV middle-product radix",
         T,
     )
     low_bound =
@@ -423,8 +451,8 @@ function _karatsuba_gemv_precision_plan(
     middle_bound = _karatsuba_gemv_dot_bound(
         T,
         terms,
-        middle_radix_a,
-        middle_radix_b,
+        sum_bound_a,
+        sum_bound_b,
         "middle GEMV product",
     )
     high_bound =
@@ -434,16 +462,15 @@ function _karatsuba_gemv_precision_plan(
         "GEMV output component capacity",
         T,
     )
-    recombination_bound = (BigInt(4) * BigInt(output_low))^2 + BigInt(output_low)
-    recombination_bound <= _karatsuba_exact_integer_bound(T) ||
-        throw(ArgumentError("legacy GEMV recombination exceeds the exact-integer $T range"))
+    # For canonical nonnegative digits, P1=P0+P2+cross. Both sequential
+    # differences are nonnegative, carry<=P0, and carry+cross<=P1.
     return (
         low_dot_bound = low_bound,
         middle_dot_bound = middle_bound,
         high_dot_bound = high_bound,
         sum_input_bounds = (sum_bound_a, sum_bound_b),
         output_capacity = output_capacity,
-        recombination_bound = recombination_bound,
+        high_total_bound = middle_bound,
     )
 end
 
@@ -902,12 +929,21 @@ function karatsuba_gemv!(
     c_plan = _karatsuba_initialized_plan(C)
     tw = TILE_WIDTH
     rows, cols = size(low_part(A))
+    _karatsuba_validate_gemv(A, B, C, a_plan, b_plan, c_plan)
+    _karatsuba_require_same_device_gemv(A, a_plan, B, b_plan, C, c_plan)
+
+    # The output radix relation is checked for every shape before writes.
+    _karatsuba_gemv_validate_radices(
+        low_modulus(A),
+        high_modulus(A),
+        low_modulus(B),
+        high_modulus(B),
+        low_modulus(C),
+        high_modulus(C),
+    )
     if rows == 0
         return C
     end
-
-    _karatsuba_validate_gemv(A, B, C, a_plan, b_plan, c_plan)
-    _karatsuba_require_same_device_gemv(A, a_plan, B, b_plan, C, c_plan)
     if cols == 0
         fill!(_logical_view(parent(low_part(C)), size(low_part(C))), zero(T))
         fill!(_logical_view(parent(high_part(C)), size(high_part(C))), zero(T))
@@ -936,11 +972,9 @@ function karatsuba_gemv!(
             _logical_view(parent(b_plan), size(b_plan)),
             _logical_view(parent(low_part(B)), size(low_part(B))),
             _logical_view(parent(high_part(B)), size(high_part(B))),
-            low_modulus(A),
         )
     end
-    # add!(A.plan,low_part(A),high_part(A); modulus_override=2*low_modulus(A))
-    # add!(B.plan,low_part(B),high_part(B); modulus_override=2*low_modulus(B))
+    # A.plan and B.plan now hold the full low-plus-high sums used by P1.
 
     (zero_ptr, one_ptr) = _stripe_gemv_scalars(T)
 
@@ -1015,8 +1049,8 @@ function karatsuba_gemv!(
             _logical_view(parent(low_part(C)), size(low_part(C))),
             _logical_view(parent(high_part(C)), size(high_part(C))),
             Cplan_output,
-            low_modulus(C),
-            high_modulus(C),
+            T(low_modulus(C)),
+            T(high_modulus(C)),
         )
     end
 

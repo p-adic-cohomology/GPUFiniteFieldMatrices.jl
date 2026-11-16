@@ -225,7 +225,7 @@ BitIntegers.@define_integers 24
     ).module === mod
 
     # Resolve the raw launch signatures without allocating CuArrays or invoking
-    # a kernel. GEMV uses matrix/vector storage and the baseline 7/5 arities;
+    # a kernel. GEMV uses matrix/vector storage and the 6/5 launch arities;
     # GEMM keeps its matrix-only launch signatures.
     raw_matrix_storage = CUDA.CuArray{Float64,2,CUDA.DeviceMemory}
     raw_vector_storage = CUDA.CuArray{Float64,1,CUDA.DeviceMemory}
@@ -288,13 +288,12 @@ BitIntegers.@define_integers 24
                 raw_vector_storage,
                 raw_vector_storage,
                 raw_vector_storage,
-                Int,
             },
-            7,
+            6,
         ),
         (
             mod.karatsuba_matmul_kernel_2!,
-            Tuple{raw_vector_storage,raw_vector_storage,raw_vector_storage,Int,Int},
+            Tuple{raw_vector_storage,raw_vector_storage,raw_vector_storage,Float64,Float64},
             5,
         ),
     )
@@ -947,18 +946,18 @@ end
         near_root = isqrt(exact_max)
         near_dot_bound = mod._karatsuba_gemv_dot_bound(
             T,
-            1,
-            Int(near_root),
-            Int(near_root),
-            "near-limit GEMV dot",
+            Int(exact_limit),
+            2,
+            2,
+            "exact-endpoint GEMV dot",
         )
-        @test near_dot_bound < exact_limit
+        @test near_dot_bound == exact_limit
         @test exact_limit - near_dot_bound < 4 * near_root + 4
         @test_throws ArgumentError mod._karatsuba_gemv_dot_bound(
             T,
             1,
-            Int(near_root + 2),
-            Int(near_root + 2),
+            Int(near_root + 3),
+            Int(near_root + 3),
             "past-limit GEMV dot",
         )
 
@@ -972,12 +971,12 @@ end
                   BigInt(product.max_ops) * BigInt(product.input_bound - 1)^2 <= exact_max
         end
 
-        gemv_plan = mod._karatsuba_gemv_precision_plan(T, 2, 13, 7, 13, 5, 13, 11)
+        gemv_plan = mod._karatsuba_gemv_precision_plan(T, 2, 13, 7, 13, 5, 13, 13)
         @test gemv_plan.low_dot_bound == BigInt(2) * 12 * 12
-        @test gemv_plan.middle_dot_bound == BigInt(2) * 25 * 25
+        @test gemv_plan.middle_dot_bound == BigInt(2) * 18 * 16
         @test gemv_plan.high_dot_bound == BigInt(2) * 6 * 4
-        @test gemv_plan.output_capacity == 143
-        @test gemv_plan.recombination_bound <= exact_max
+        @test gemv_plan.output_capacity == 169
+        @test gemv_plan.high_total_bound == gemv_plan.middle_dot_bound
 
         # Evaluate the three-product identity independently with BigInt, then
         # compare the type-specific device helper's exact residue and split.
