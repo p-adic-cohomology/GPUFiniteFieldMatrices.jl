@@ -469,7 +469,7 @@ function test_batched_destination_api()
             CuModMatrix{Float64}(_batch_destination_host(33, 33, 1); modulus = p),
         ]
         mixed_input_storage = [Array(parent(A)) for A in mixed_inputs]
-        mixed_originals = [Array(parent(A))[1:rows(A), 1:cols(A)] for A in mixed_inputs]
+        mixed_originals = [Array(A) for A in mixed_inputs]
         mixed_inverses =
             GPUFiniteFieldMatrices.inverse_batched(mixed_inputs; options = options)
         @test eltype(parent(mixed_inverses[1])) === Float32
