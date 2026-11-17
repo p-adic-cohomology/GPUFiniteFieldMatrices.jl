@@ -29,6 +29,15 @@ function test_karatsuba_basic_operations()
     end
 end
 
+function _karatsuba_operations_diagnostic(iteration, phase)
+    peak_host_rss_mib = Sys.maxrss() / 2^20
+    println(
+        stderr,
+        "Karatsuba iteration=$iteration phase=$phase pid=$(getpid()) peak_host_rss_mib=$peak_host_rss_mib",
+    )
+    flush(stderr)
+end
+
 function test_karatsuba_operations()
     n = 500
     N1 = 13^4
@@ -37,6 +46,8 @@ function test_karatsuba_operations()
     @testset "Karatsuba Operations" begin
 
         for i = 1:100
+            _karatsuba_operations_diagnostic(i, "allocating")
+
             A1_data = Base.rand(0:(N1-1), n, n)
             A2_data = Base.rand(0:(N2-1), n, n)
             x1_data = Base.rand(0:(N1-1), n)
@@ -77,11 +88,22 @@ function test_karatsuba_operations()
             GPUFiniteFieldMatrices.initialize_plan!(xK)
             GPUFiniteFieldMatrices.initialize_plan!(yK)
 
+            _karatsuba_operations_diagnostic(i, "CPU reconstruction")
             ACpu = Array(AK)
             xCpu = Array(xK)
 
-            @test Array(GPUFiniteFieldMatrices.karatsuba_gemv!(yK, AK, xK)) ==
-                  mod.((BigInt.(ACpu)*BigInt.(xCpu)), (N1*N2))
+            _karatsuba_operations_diagnostic(i, "GEMV")
+            CUDA.@sync GPUFiniteFieldMatrices.karatsuba_gemv!(yK, AK, xK)
+
+            _karatsuba_operations_diagnostic(i, "download")
+            actual = Array(yK)
+
+            _karatsuba_operations_diagnostic(i, "CPU oracle")
+            expected = mod.((BigInt.(ACpu)*BigInt.(xCpu)), (N1*N2))
+
+            _karatsuba_operations_diagnostic(i, "comparison")
+            @test actual == expected
+            _karatsuba_operations_diagnostic(i, "finished")
         end
     end
 end
