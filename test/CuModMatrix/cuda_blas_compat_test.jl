@@ -639,8 +639,9 @@ function test_cuda_blas_compatibility()
         modulus = 101,
     )
 
-    # Exercise the batched GEMV path with initialized plans and an independent
-    # CPU modular product. The inputs are small and deterministic.
+    # This historical arithmetic fixture has output N2=13, which does not
+    # divide N1=11. Keep it as a prewrite rejection regression across the
+    # qualified helper and public allocating/mutating APIs.
     n = 32
     N1 = 11
     N2 = 13
@@ -682,8 +683,48 @@ function test_cuda_blas_compatibility()
     GPUFiniteFieldMatrices.initialize_plan!(x)
     GPUFiniteFieldMatrices.initialize_plan!(y)
 
-    expected = mod.((A1_data + N1 .* A2_data) * (x1_data + N1 .* x2_data), modulus)
-    CUDA.@sync GPUFiniteFieldMatrices.karatsuba_gemv!(y, A, x)
-    @test Array(y) == expected
+    foreach(
+        (storage, value) -> fill!(storage, value),
+        (
+            parent(A.plan),
+            parent(x.plan),
+            parent(y.plan),
+            parent(GPUFiniteFieldMatrices.low_part(y)),
+            parent(GPUFiniteFieldMatrices.high_part(y)),
+        ),
+        (9001.0, 9002.0, 9003.0, 9004.0, 9005.0),
+    )
+    inputs_before = map(
+        component -> Array(parent(component)),
+        (
+            GPUFiniteFieldMatrices.low_part(A),
+            GPUFiniteFieldMatrices.high_part(A),
+            GPUFiniteFieldMatrices.low_part(x),
+            GPUFiniteFieldMatrices.high_part(x),
+        ),
+    )
+    plans_before = map(plan -> Array(parent(plan)), (A.plan, x.plan, y.plan))
+    output_before = map(
+        component -> Array(parent(component)),
+        (GPUFiniteFieldMatrices.low_part(y), GPUFiniteFieldMatrices.high_part(y)),
+    )
+
+    @test_throws ArgumentError GPUFiniteFieldMatrices.karatsuba_gemv!(y, A, x)
+    @test_throws ArgumentError LinearAlgebra.mul!(y, A, x)
+    @test_throws ArgumentError A * x
+    @test map(
+        component -> Array(parent(component)),
+        (
+            GPUFiniteFieldMatrices.low_part(A),
+            GPUFiniteFieldMatrices.high_part(A),
+            GPUFiniteFieldMatrices.low_part(x),
+            GPUFiniteFieldMatrices.high_part(x),
+        ),
+    ) == inputs_before
+    @test map(plan -> Array(parent(plan)), (A.plan, x.plan, y.plan)) == plans_before
+    @test map(
+        component -> Array(parent(component)),
+        (GPUFiniteFieldMatrices.low_part(y), GPUFiniteFieldMatrices.high_part(y)),
+    ) == output_before
 
 end
