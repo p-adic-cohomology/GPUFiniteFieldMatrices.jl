@@ -39,22 +39,13 @@ function test_karatsuba_operations()
         for i = 1:100
             A1_data = Base.rand(0:(N1-1), n, n)
             A2_data = Base.rand(0:(N2-1), n, n)
-            B1_data = Base.rand(0:(N1-1), n, n)
-            B2_data = Base.rand(0:(N2-1), n, n)
-            C1_data = Base.rand(0:(N1-1), n, n)
-            C2_data = Base.rand(0:(N2-1), n, n)
             x1_data = Base.rand(0:(N1-1), n)
             x2_data = Base.rand(0:(N2-1), n)
             y1_data = Base.rand(0:(N1-1), n)
             y2_data = Base.rand(0:(N2-1), n)
-            a = Base.rand(0:100)
 
             A1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A1_data; modulus = N1)
             A2 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(A2_data; modulus = N1)
-            B1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(B1_data; modulus = N1)
-            B2 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(B2_data; modulus = N1)
-            C1 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(C1_data; modulus = N1)
-            C2 = GPUFiniteFieldMatrices.CuModMatrix{Float64}(C2_data; modulus = N1)
             x1 = GPUFiniteFieldMatrices.CuModVector{Float64}(x1_data; modulus = N1)
             x2 = GPUFiniteFieldMatrices.CuModVector{Float64}(x2_data; modulus = N1)
             y1 = GPUFiniteFieldMatrices.CuModVector{Float64}(y1_data; modulus = N1)
@@ -63,20 +54,6 @@ function test_karatsuba_operations()
             AK = GPUFiniteFieldMatrices.KaratsubaMatrix(
                 A1,
                 A2;
-                low_modulus = N1,
-                high_modulus = N2,
-                modulus = N1 * N2,
-            )
-            BK = GPUFiniteFieldMatrices.KaratsubaMatrix(
-                B1,
-                B2;
-                low_modulus = N1,
-                high_modulus = N2,
-                modulus = N1 * N2,
-            )
-            CK = GPUFiniteFieldMatrices.KaratsubaMatrix(
-                C1,
-                C2;
                 low_modulus = N1,
                 high_modulus = N2,
                 modulus = N1 * N2,
@@ -97,26 +74,14 @@ function test_karatsuba_operations()
             )
 
             GPUFiniteFieldMatrices.initialize_plan!(AK)
-            GPUFiniteFieldMatrices.initialize_plan!(BK)
-            GPUFiniteFieldMatrices.initialize_plan!(CK)
             GPUFiniteFieldMatrices.initialize_plan!(xK)
             GPUFiniteFieldMatrices.initialize_plan!(yK)
 
             ACpu = Array(AK)
-            BCpu = Array(BK)
-            CCpu = Array(CK)
             xCpu = Array(xK)
-            yCpu = Array(yK)
 
-            #@testset "Karatsuba Operations" begin
-            #@test Array(GPUFiniteFieldMatrices.add!(CK,AK,BK)) == mod.((ACpu + BCpu),(N1*N2))
-            #@test Array(GPUFiniteFieldMatrices.sub!(CK,AK,BK)) == mod.((ACpu - BCpu),(N1*N2))
             @test Array(GPUFiniteFieldMatrices.karatsuba_gemv!(yK, AK, xK)) ==
                   mod.((BigInt.(ACpu)*BigInt.(xCpu)), (N1*N2))
-            #@test Array(GPUFiniteFieldMatrices.karatsuba_gemv!(yK,AK,xK)) == mod.((ACpu*xCpu),(N1*N2))
-            #@test Array(GPUFiniteFieldMatrices.scalar_multiply!(CK,AK,a)) == mod.((ACpu*a),(N1*N2))
-
-            #end
         end
     end
 end
