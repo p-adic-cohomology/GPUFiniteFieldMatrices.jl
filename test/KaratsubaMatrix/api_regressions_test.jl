@@ -626,7 +626,8 @@ function test_karatsuba_api_regressions()
             @test parent(mod.low_part(allocated)) isa CUDA.CuArray{Float64,2}
             @test parent(mod.high_part(allocated)) isa CUDA.CuArray{Float64,2}
             @test allocated.plan isa mod.CuModMatrix{Float64}
-            @test typeof(allocated.plan) === mod.CuModMatrix{Float64}
+            @test typeof(allocated.plan) ===
+                  mod._karatsuba_plan_type(typeof(mod.low_part(allocated)))
             @test Array(allocated) == allocating_expected
             @test any(value -> !iszero(value), Array(mod.high_part(allocated)))
             assert_input_unchanged(unplanned_a, unplanned_a_before)
@@ -1378,8 +1379,9 @@ function test_karatsuba_float32_float64_products()
             @test LinearAlgebra.mul!(rect_output, rect_a, rect_b) === rect_output
             @test Array(mod.from_karatsuba(T, rect_output)) == expected_rect
 
-            # Allocating GEMV returns a vector and uses private plans. The
-            # nonzero matrix high plane is paired with a zero vector high plane.
+            # This input split keeps a high modulus that does not divide its
+            # low radix, so the inherited allocating output split is outside
+            # GEMV's supported domain and must reject before touching inputs.
             x_values = T[1, 1]
             x = split_vector(x_values)
             a_components_before = (Array(low_part(a)), Array(high_part(a)))
@@ -1388,11 +1390,7 @@ function test_karatsuba_float32_float64_products()
             a_plan_storage = parent(a_plan_object)
             a_plan_before = Array(parent(a.plan))
             x_plan_before = x.plan === nothing ? nothing : Array(parent(x.plan))
-            allocated_vector = a * x
-            expected_vector = T.(Base.mod.(BigInt.(a_values) * BigInt.(x_values), 15))
-            @test allocated_vector isa mod.KaratsubaVector{T}
-            @test size(allocated_vector) == (2,)
-            @test Array(mod.from_karatsuba(T, allocated_vector)) == expected_vector
+            @test_throws ArgumentError a * x
             @test (Array(low_part(a)), Array(high_part(a))) == a_components_before
             @test (Array(low_part(x)), Array(high_part(x))) == x_components_before
             @test a.plan === a_plan_object
@@ -1401,19 +1399,21 @@ function test_karatsuba_float32_float64_products()
             @test x.plan === nothing
             @test x_plan_before === nothing
 
-            # Mutating GEMV allows a distinct high output modulus while keeping
-            # the legacy input radix requirement explicit.
+            # N2=1 divides N1=5. The output capacity is Q=5 while the shared
+            # representation metadata remains M=101.
             y = Base.zeros(
                 mod.KaratsubaVector{T},
                 2;
                 low_modulus = input_radix,
-                high_modulus = 7,
+                high_modulus = 1,
                 modulus = metadata,
             )
             foreach(mod.initialize_plan!, (x, y))
             @test LinearAlgebra.mul!(y, a, x) === y
-            expected_y = T.(Base.mod.(BigInt.(a_values) * BigInt.(x_values), 35))
+            expected_y = T.(Base.mod.(BigInt.(a_values) * BigInt.(x_values), 5))
             @test Array(mod.from_karatsuba(T, y)) == expected_y
+            @test mod.modulus(y) == metadata
+            @test mod.low_modulus(y) * mod.high_modulus(y) == 5
 
             # Exercise the complementary high-plane case. This avoids treating
             # an all-zero high plane as the only GEMV numerical fixture.
@@ -1421,11 +1421,7 @@ function test_karatsuba_float32_float64_products()
             high_only_x_values = T[6, 7]
             low_only_a = split_matrix(low_only_a_values)
             high_only_x = split_vector(high_only_x_values)
-            high_only_result = low_only_a * high_only_x
-            expected_high_only =
-                T.(Base.mod.(BigInt.(low_only_a_values) * BigInt.(high_only_x_values), 15))
-            @test high_only_result isa mod.KaratsubaVector{T}
-            @test Array(mod.from_karatsuba(T, high_only_result)) == expected_high_only
+            @test_throws ArgumentError low_only_a * high_only_x
 
             # Non-whole CuArray views select the individual GEMV fallback. The
             # logical product is correct and sentinels in padded storage remain
@@ -1468,7 +1464,7 @@ function test_karatsuba_float32_float64_products()
                 mod.KaratsubaVector{T},
                 2;
                 low_modulus = input_radix,
-                high_modulus = 7,
+                high_modulus = 1,
                 modulus = metadata,
             )
             foreach(mod.initialize_plan!, (padded_a, padded_x, padded_y))
@@ -1490,7 +1486,7 @@ function test_karatsuba_float32_float64_products()
                 ),
             )
             @test LinearAlgebra.mul!(padded_y, padded_a, padded_x) === padded_y
-            @test Array(mod.from_karatsuba(T, padded_y)) == T[8, 8]
+            @test Array(mod.from_karatsuba(T, padded_y)) == T[3, 3]
             padded_after = map(
                 padding_snapshot,
                 (
@@ -1526,6 +1522,113 @@ function test_karatsuba_float32_float64_products()
                     modulus = component_modulus,
                     mod = false,
                 )
+
+            # A rectangular three-product GEMV with nonzero high planes on
+            # both inputs. Input high moduli may differ; the output N2=2
+            # strictly divides N1=6. M remains metadata, while Q varies by
+            # output split. The values exercise P0 carry and high wraparound.
+            gemv_N1, gemv_high_a, gemv_high_x = 6, 3, 4
+            gemv_low_a = T[5 5 4; 3 1 2]
+            gemv_high_a_values = T[2 2 1; 1 0 2]
+            gemv_low_x = T[5, 4, 3]
+            gemv_high_x_values = T[3, 2, 1]
+            gemv_a = mod.KaratsubaMatrix(
+                wrap_matrix(gemv_low_a, gemv_N1),
+                wrap_matrix(gemv_high_a_values, gemv_high_a);
+                low_modulus = gemv_N1,
+                high_modulus = gemv_high_a,
+                modulus = metadata,
+            )
+            gemv_x = mod.KaratsubaVector(
+                wrap_vector(gemv_low_x, gemv_N1),
+                wrap_vector(gemv_high_x_values, gemv_high_x);
+                low_modulus = gemv_N1,
+                high_modulus = gemv_high_x,
+                modulus = metadata,
+            )
+            gemv_a_integer =
+                BigInt.(gemv_low_a) .+ BigInt(gemv_N1) .* BigInt.(gemv_high_a_values)
+            gemv_x_integer =
+                BigInt.(gemv_low_x) .+ BigInt(gemv_N1) .* BigInt.(gemv_high_x_values)
+            gemv_product_integer = gemv_a_integer * gemv_x_integer
+            expected_gemv_q12 = T.(Base.mod.(gemv_product_integer, BigInt(12)))
+            expected_gemv_q18 = T.(Base.mod.(gemv_product_integer, BigInt(18)))
+            expected_gemv_q36 = T.(Base.mod.(gemv_product_integer, BigInt(36)))
+
+            gemv_y_q12 = Base.zeros(
+                mod.KaratsubaVector{T},
+                2;
+                low_modulus = gemv_N1,
+                high_modulus = 2,
+                modulus = metadata,
+            )
+            gemv_y_q36 = Base.zeros(
+                mod.KaratsubaVector{T},
+                2;
+                low_modulus = gemv_N1,
+                high_modulus = gemv_N1,
+                modulus = metadata,
+            )
+            foreach(mod.initialize_plan!, (gemv_a, gemv_x, gemv_y_q12, gemv_y_q36))
+            @test LinearAlgebra.mul!(gemv_y_q12, gemv_a, gemv_x) === gemv_y_q12
+            @test Array(mod.from_karatsuba(T, gemv_y_q12)) == expected_gemv_q12
+            @test mod.modulus(gemv_y_q12) == metadata
+            @test mod.low_modulus(gemv_y_q12) * mod.high_modulus(gemv_y_q12) == 12
+            CUDA.@sync mod.karatsuba_gemv!(gemv_y_q36, gemv_a, gemv_x)
+            @test Array(mod.from_karatsuba(T, gemv_y_q36)) == expected_gemv_q36
+
+            allocated_gemv = gemv_a * gemv_x
+            @test mod.low_modulus(allocated_gemv) == gemv_N1
+            @test mod.high_modulus(allocated_gemv) == gemv_high_a
+            @test mod.modulus(allocated_gemv) == metadata
+            @test mod.low_modulus(allocated_gemv) * mod.high_modulus(allocated_gemv) == 18
+            @test Array(mod.from_karatsuba(T, allocated_gemv)) == expected_gemv_q18
+
+            # The same supported strict-divisor case through partial padded
+            # layouts exercises logical views and protects physical padding.
+            padded_gemv_a = mod.KaratsubaMatrix(
+                padded_matrix(gemv_low_a, (4, 5), gemv_N1),
+                padded_matrix(gemv_high_a_values, (5, 6), gemv_high_a);
+                low_modulus = gemv_N1,
+                high_modulus = gemv_high_a,
+                modulus = metadata,
+            )
+            padded_gemv_x = mod.KaratsubaVector(
+                padded_vector(gemv_low_x, 5, gemv_N1),
+                padded_vector(gemv_high_x_values, 4, gemv_high_x);
+                low_modulus = gemv_N1,
+                high_modulus = gemv_high_x,
+                modulus = metadata,
+            )
+            padded_gemv_y = Base.zeros(
+                mod.KaratsubaVector{T},
+                2;
+                low_modulus = gemv_N1,
+                high_modulus = 2,
+                modulus = metadata,
+            )
+            foreach(mod.initialize_plan!, (padded_gemv_a, padded_gemv_x, padded_gemv_y))
+            padded_gemv_components = (
+                mod.low_part(padded_gemv_a),
+                mod.high_part(padded_gemv_a),
+                padded_gemv_a.plan,
+                mod.low_part(padded_gemv_x),
+                mod.high_part(padded_gemv_x),
+                padded_gemv_x.plan,
+                mod.low_part(padded_gemv_y),
+                mod.high_part(padded_gemv_y),
+                padded_gemv_y.plan,
+            )
+            foreach(
+                component -> _dirty_padding_for_test!(component, T(9017)),
+                padded_gemv_components,
+            )
+            padded_gemv_padding_before = map(padding_snapshot, padded_gemv_components)
+            CUDA.@sync LinearAlgebra.mul!(padded_gemv_y, padded_gemv_a, padded_gemv_x)
+            @test Array(mod.from_karatsuba(T, padded_gemv_y)) == expected_gemv_q12
+            @test map(padding_snapshot, padded_gemv_components) ==
+                  padded_gemv_padding_before
+
             batch_a = mod.KaratsubaMatrix(
                 wrap_matrix(batch_a_low_values, input_radix),
                 wrap_matrix(batch_a_high_values, input_high);
@@ -1544,7 +1647,7 @@ function test_karatsuba_float32_float64_products()
                 mod.KaratsubaVector{T},
                 n;
                 low_modulus = input_radix,
-                high_modulus = 7,
+                high_modulus = 1,
                 modulus = metadata,
             )
             batch_a.plan = wrap_matrix(zeros(T, n, n), input_radix)
@@ -1595,7 +1698,7 @@ function test_karatsuba_float32_float64_products()
                 batch_targets,
             )
             @test LinearAlgebra.mul!(batch_y, batch_a, batch_x) === batch_y
-            @test Array(mod.from_karatsuba(T, batch_y)) == fill(T(6), n)
+            @test Array(mod.from_karatsuba(T, batch_y)) == fill(T(1), n)
 
             batch_a_plan_before = Array(parent(batch_a.plan))
             batch_x_plan_before = Array(parent(batch_x.plan))
@@ -1619,7 +1722,7 @@ function test_karatsuba_float32_float64_products()
                 mod.KaratsubaVector{T},
                 n + 1;
                 low_modulus = input_radix,
-                high_modulus = 7,
+                high_modulus = 1,
                 modulus = metadata,
             )
             mod.initialize_plan!(wrong_shape_y)
@@ -1640,9 +1743,9 @@ function test_karatsuba_float32_float64_products()
             # plan or the shared output/input component is written.
             alias_y = mod.KaratsubaVector(
                 mod.low_part(batch_x),
-                wrap_vector(zeros(T, n), 7);
+                wrap_vector(zeros(T, n), 1);
                 low_modulus = input_radix,
-                high_modulus = 7,
+                high_modulus = 1,
                 modulus = metadata,
             )
             mod.initialize_plan!(alias_y)
@@ -1668,7 +1771,7 @@ function test_karatsuba_float32_float64_products()
                 mod.KaratsubaVector{T},
                 0;
                 low_modulus = input_radix,
-                high_modulus = 7,
+                high_modulus = 1,
                 modulus = metadata,
             )
             foreach(mod.initialize_plan!, (empty_a, empty_x, empty_y))
@@ -1693,7 +1796,7 @@ function test_karatsuba_float32_float64_products()
                 mod.KaratsubaVector{T},
                 2;
                 low_modulus = input_radix,
-                high_modulus = 7,
+                high_modulus = 1,
                 modulus = metadata,
             )
             foreach(

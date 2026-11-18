@@ -248,8 +248,8 @@ function run_phase0_regime_benchmark(;
                     )
                 else
                     CuModMatrix{T}(
-                        _phase0_bench_rect_host(reg.rect_m, reg.rect_n, p, T, rng),
-                        p,
+                        _phase0_bench_rect_host(reg.rect_m, reg.rect_n, p, T, rng);
+                        modulus = p,
                     )
                 end
                 push!(batch, A)

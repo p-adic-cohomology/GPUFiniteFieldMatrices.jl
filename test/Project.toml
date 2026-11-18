@@ -1,5 +1,5 @@
 [compat]
-Aqua = "0.8.14"
+Aqua = "0.8.19"
 BitIntegers = "0.3.7"
 JET = "0.10.6, 0.12, 0.13"
 JuliaFormatter = "=2.14.0"

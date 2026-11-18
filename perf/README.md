@@ -5,6 +5,16 @@ This harness captures correctness-checked, synchronized timings for the public
 a long-lived Julia REPL with Revise. It does not add CI checks or change
 `Pkg.test()`.
 
+The primary baseline is **v0.3.1**; v0.3.2 is an additional comparison. The goal
+is to avoid regressions from v0.3.1 in correctness, runtime, and allocations.
+The 10% flag is a screening threshold, not an allowance for smaller regressions:
+review positive timing deltas and allocation growth, then repeat suspected
+changes in fresh processes before drawing conclusions.
+
+This branch includes main at `47d164a31a3e8c01b2adae6d293feb68468c2c46`
+(the PR #85 merge, 2026-11-18). Captures record the actual checkout commit and
+source fingerprint, so the unchanged package version cannot hide stale source.
+
 ## 1. Clone and prepare the three environments
 
 Install Julia 1.12 and a working NVIDIA driver, then run:
@@ -26,6 +36,21 @@ modified or wrongly pinned baseline worktrees. It leaves existing results
 untouched; use unique capture labels. Use a new checkout or run root after
 moving the clone to another path.
 
+For an existing clone, exit any Julia processes using it, then update and rerun
+setup from the repository root:
+
+```sh
+git switch manual-testing/perf-regressions
+git pull --ff-only origin manual-testing/perf-regressions
+./perf/setup.sh
+```
+
+This preserves saved results and the frozen release worktrees. If Git reports
+local edits or a diverged branch, preserve that work and use a separate clone.
+Restart Julia after the update; an already-loaded package will not become the
+new checkout merely because Git changed. Saved baselines remain usable when
+the harness fingerprint, environment, device, and measurement settings match.
+
 Each variant environment lists `Revise`, `BenchmarkTools`, `JSON3`, and `CUDA`
 as direct dependencies so the documented `Main` imports work. Setup verifies
 that these versions match across variants and repairs missing direct entries in
@@ -44,10 +69,10 @@ CUDA.versioninfo()
 Start from the repository root. Do not change a package path or dependency in a
 process after loading `GPUFiniteFieldMatrices`.
 
-For v0.3.2:
+For v0.3.1:
 
 ```sh
-julia --startup-file=no --project=.perf-regressions/envs/v0.3.2
+julia --startup-file=no --project=.perf-regressions/envs/v0.3.1
 ```
 
 At the Julia prompt, load Revise before the target package and capture:
@@ -58,16 +83,16 @@ using CUDA
 using GPUFiniteFieldMatrices
 using GFMPerf
 @assert CUDA.functional()
-pathof(GPUFiniteFieldMatrices)  # should be the v0.3.2 tag worktree
-Base.active_project()           # should be .perf-regressions/envs/v0.3.2/Project.toml
-baseline032 = GFMPerf.capture("baseline-032-001";
-    suite=:quick, role="baseline-v0.3.2", samples=20, seconds=2, warmups=3)
+pathof(GPUFiniteFieldMatrices)  # should be the v0.3.1 tag worktree
+Base.active_project()           # should be .perf-regressions/envs/v0.3.1/Project.toml
+baseline031 = GFMPerf.capture("baseline-031-001";
+    suite=:quick, role="baseline-v0.3.1", samples=20, seconds=2, warmups=3)
 ```
 
-Exit Julia. Repeat in another fresh process with the v0.3.1 environment:
+Exit Julia. Repeat in another fresh process with the v0.3.2 environment:
 
 ```sh
-julia --startup-file=no --project=.perf-regressions/envs/v0.3.1
+julia --startup-file=no --project=.perf-regressions/envs/v0.3.2
 ```
 
 ```julia
@@ -76,9 +101,9 @@ using CUDA
 using GPUFiniteFieldMatrices
 using GFMPerf
 @assert CUDA.functional()
-pathof(GPUFiniteFieldMatrices)  # should be the v0.3.1 tag worktree
-baseline031 = GFMPerf.capture("baseline-031-001";
-    suite=:quick, role="baseline-v0.3.1", samples=20, seconds=2, warmups=3)
+pathof(GPUFiniteFieldMatrices)  # should be the v0.3.2 tag worktree
+baseline032 = GFMPerf.capture("baseline-032-001";
+    suite=:quick, role="baseline-v0.3.2", samples=20, seconds=2, warmups=3)
 ```
 
 Each label is a new result directory under `perf/results/`. The returned value
@@ -104,8 +129,8 @@ using GFMPerf
 @assert CUDA.functional()
 pathof(GPUFiniteFieldMatrices)  # should be this checkout's src/GPUFiniteFieldMatrices.jl
 repo_root = pwd()
-baseline032_path = joinpath(repo_root, "perf", "results", "baseline-032-001")
 baseline031_path = joinpath(repo_root, "perf", "results", "baseline-031-001")
+baseline032_path = joinpath(repo_root, "perf", "results", "baseline-032-001")
 dev_before_path = GFMPerf.capture("dev-before-edit-001";
     suite=:quick, role="current", samples=20, seconds=2, warmups=3)
 ```
@@ -117,23 +142,23 @@ the edits (or call `Revise.revise()`), then take a new capture:
 Revise.revise()
 dev_after_path = GFMPerf.capture("dev-after-edit-001";
     suite=:quick, role="current", samples=20, seconds=2, warmups=3)
-cmp032_path = GFMPerf.compare(dev_after_path, baseline032_path; threshold=0.10, min_samples=5)
 cmp031_path = GFMPerf.compare(dev_after_path, baseline031_path; threshold=0.10, min_samples=5)
+cmp032_path = GFMPerf.compare(dev_after_path, baseline032_path; threshold=0.10, min_samples=5)
 ```
 
 If Julia exits before comparison or a rerun, rehydrate the paths in the new
-REPL from their saved labels; do not expect `baseline032_path` or
-`cmp032_path` variables to persist. For the labels above, for example:
+REPL from their saved labels; do not expect `baseline031_path` or
+`cmp031_path` variables to persist. For the labels above, for example:
 
 ```julia
 repo_root = pwd()
-baseline032_path = joinpath(repo_root, "perf", "results", "baseline-032-001")
 baseline031_path = joinpath(repo_root, "perf", "results", "baseline-031-001")
+baseline032_path = joinpath(repo_root, "perf", "results", "baseline-032-001")
 dev_after_path = joinpath(repo_root, "perf", "results", "dev-after-edit-001")
-cmp032_path = joinpath(repo_root, "perf", "results", "comparisons",
-    "dev-after-edit-001-vs-baseline-032-001")
 cmp031_path = joinpath(repo_root, "perf", "results", "comparisons",
     "dev-after-edit-001-vs-baseline-031-001")
+cmp032_path = joinpath(repo_root, "perf", "results", "comparisons",
+    "dev-after-edit-001-vs-baseline-032-001")
 ```
 
 Use the exact labels you captured if they differ. Capture and comparison calls
@@ -160,23 +185,23 @@ process, then rerun only those cases:
 
 ```julia
 repo_root = pwd()
-cmp032_path = joinpath(repo_root, "perf", "results", "comparisons",
-    "dev-after-edit-001-vs-baseline-032-001")
-rerun_dev_path = GFMPerf.rerun_flagged(cmp032_path; label="dev-rerun-001",
+cmp031_path = joinpath(repo_root, "perf", "results", "comparisons",
+    "dev-after-edit-001-vs-baseline-031-001")
+rerun_dev_path = GFMPerf.rerun_flagged(cmp031_path; label="dev-rerun-001",
     samples=40, seconds=4, warmups=3)
 ```
 
-Capture the same case IDs from the v0.3.2 environment in its own fresh process.
+Capture the same case IDs from the v0.3.1 environment in its own fresh process.
 Rehydrate the comparison path in that process and read the IDs through the
 harness helper:
 
 ```julia
 repo_root = pwd()
-cmp032_path = joinpath(repo_root, "perf", "results", "comparisons",
-    "dev-after-edit-001-vs-baseline-032-001")
-ids = GFMPerf.flagged_case_ids(cmp032_path)
-baseline032_rerun_path = GFMPerf.capture("baseline-032-rerun-001";
-    suite=:full, case_ids=ids, role="baseline-v0.3.2",
+cmp031_path = joinpath(repo_root, "perf", "results", "comparisons",
+    "dev-after-edit-001-vs-baseline-031-001")
+ids = GFMPerf.flagged_case_ids(cmp031_path)
+baseline031_rerun_path = GFMPerf.capture("baseline-031-rerun-001";
+    suite=:full, case_ids=ids, role="baseline-v0.3.1",
     samples=40, seconds=4, warmups=3)
 ```
 

@@ -242,7 +242,7 @@ function test_triangular_destination_helpers()
     end
 
     @testset "recursive triangular inverse agrees with integer oracle" begin
-        recursive_n = TILE_WIDTH + 3
+        recursive_n = GPUFiniteFieldMatrices.TILE_WIDTH + 3
         recursive_lower = Matrix{Int}(undef, recursive_n, recursive_n)
         recursive_upper = Matrix{Int}(undef, recursive_n, recursive_n)
         for row = 1:recursive_n, col = 1:recursive_n

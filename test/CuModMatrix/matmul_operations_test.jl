@@ -98,7 +98,7 @@ function test_inplace_matmul_operations()
         modulus = 9,
     )
     C_data = parent(C)
-    modulus = 9  # Prime modulus
+    modulus = 9  # Composite modulus; this test exercises arithmetic only.
 
     A = CuModMatrix(A_data; modulus = modulus)
     B = CuModMatrix(B_data; modulus = modulus)

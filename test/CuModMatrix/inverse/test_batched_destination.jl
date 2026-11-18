@@ -133,7 +133,7 @@ function _batch_destination_matrix(A::CuModMatrix)
     return CuModMatrix(copy(parent(A)); modulus = modulus(A), new_size = size(A))
 end
 
-function _batch_destination_blank(A::CuModMatrix; value::Float32 = 37)
+function _batch_destination_blank(A::CuModMatrix; value::Float32 = 37.0f0)
     data = CUDA.fill(value, size(parent(A))...)
     return CuModMatrix(data; modulus = modulus(A), new_size = size(A))
 end
@@ -437,11 +437,15 @@ function test_batched_destination_api()
         eachindex(inverse_inputs),
     )
     @test all(
-        i -> _check_identity_batch(inverse_inputs[i], augmented[i], p),
+        i -> _batch_host_inverse_identity(Array(inverse_inputs[i]), Array(augmented[i]), p),
         eachindex(inverse_inputs),
     )
     @test all(
-        i -> _check_identity_batch(inverse_inputs[i], pluq_strategy[i], p),
+        i -> _batch_host_inverse_identity(
+            Array(inverse_inputs[i]),
+            Array(pluq_strategy[i]),
+            p,
+        ),
         eachindex(inverse_inputs),
     )
 
@@ -465,7 +469,7 @@ function test_batched_destination_api()
             CuModMatrix{Float64}(_batch_destination_host(33, 33, 1); modulus = p),
         ]
         mixed_input_storage = [Array(parent(A)) for A in mixed_inputs]
-        mixed_originals = [Array(parent(A))[1:rows(A), 1:cols(A)] for A in mixed_inputs]
+        mixed_originals = [Array(A) for A in mixed_inputs]
         mixed_inverses =
             GPUFiniteFieldMatrices.inverse_batched(mixed_inputs; options = options)
         @test eltype(parent(mixed_inverses[1])) === Float32

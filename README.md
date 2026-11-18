@@ -170,6 +170,11 @@ support matching `Float32` or `Float64` components. The precision checks use
 24 exact integer bits for `Float32` and 53 for `Float64`, and reject unsafe
 working moduli or accumulators before writing plans.
 
+GPU Karatsuba matrix and matrix-vector products require `CuModArray` low and
+high components. Mutating products also require initialized `CuModArray` plans.
+Raw `CuArray` components remain available for wrappers, factories, conversions,
+and pointwise operations, but product entrypoints reject them.
+
 For Karatsuba matrix multiplication, `A` and `B` must share input low radix
 `R`, while `C` may use an independent low radix `R_C`. The output components
 represent the product modulo `Q = R_C * high_modulus(C)`. The shared
@@ -191,13 +196,30 @@ representation metadata; their component capacity is
 `Q = low_modulus(A) * high_modulus(A)`, independent of metadata modulus `M`.
 
 For `mul!(y, A, x)`, the matrix column count must match the vector length and
-`y` must have `size(A, 1)` entries. `A` and `x` must share low radix `R`, and
-the destination vector must use low radix `R` as well. Initialize all three
-plans before the mutating operation. The legacy GEMV recombination still has a
-known correctness limitation when both operands have interacting nonzero high
-planes; the new precision checks do not resolve that inherited arithmetic
-issue. The matrix-matrix correctness contract does not imply general GEMV
-correctness.
+`y` must have `size(A, 1)` entries. `A` and `x` must share low radix `N1`, and
+the destination vector must use low radix `N1` as well. Its output high modulus
+`N2` must divide `N1`; other output high moduli are rejected before plans or
+components are written. The input high moduli may differ, provided their
+components contain canonical digits. Initialize all three plans before the
+mutating operation.
+
+GEMV computes three raw dot products from `A = A0 + N1*A1` and
+`x = x0 + N1*x1`: `P0 = A0*x0`, `P1 = (A0+A1)*(x0+x1)`, and `P2 = A1*x1`.
+It recombines these as `cross = (P1-P0)-P2`, `low = mod(P0,N1)`, and
+`high = mod(div(P0,N1)+cross,N2)`. Since `N2` divides `N1`, the omitted
+`N1^2*P2` term vanishes modulo the output component capacity
+`Q = N1*N2`. The input digits must be nonnegative and below their respective
+component moduli; this canonical-digit condition is a caller promise, not a
+runtime scan. The precision preflight bounds the full sums, each raw dot total,
+and the recombination intermediates within the exact integer ranges of
+`Float32` (24 bits) and `Float64` (53 bits).
+
+The product is computed modulo `Q`. Stored representation modulus `M` remains
+compatibility metadata and is not required to equal, divide, or be below `Q`;
+this GEMV arithmetic does not promise a result modulo `M`. The allocating form
+`A * x` uses `A`'s output split, so it is supported when
+`high_modulus(A)` divides `N1`. This GEMV contract is separate from the
+matrix-matrix arithmetic contract.
 
 For CPU-only data, `to_karatsuba` returns CPU component arrays and
 `from_karatsuba(T, K)` returns `Array{T}`. GPU-backed components produce a plain

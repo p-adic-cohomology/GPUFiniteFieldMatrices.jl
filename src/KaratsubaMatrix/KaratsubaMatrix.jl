@@ -3,8 +3,9 @@
 
 An array represented by low and high components of storage type `S`. The
 component arrays must have the same concrete storage type. `P` is independent
-of `S`: the factory-created plan type is `CuModArray{T,D}` for every component
-backend, matching the original padded GPU workspace behavior. Use `low_part`,
+of `S`: the factory-created plan type is the concrete default-memory
+`CuModArray{T,D,M}` for every component backend, matching the original padded
+GPU workspace behavior. Use `low_part`,
 `high_part`, `low_modulus`, `high_modulus`, and `modulus` to inspect a value;
 the fields are internal implementation details.
 """
@@ -25,9 +26,13 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
         high_modulus::Union{Nothing,Integer} = nothing,
         modulus::Union{Nothing,Integer} = nothing,
     ) where {T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}}
-        isconcretetype(S) ||
+        typeof(A) === typeof(B) ||
+            throw(ArgumentError("Karatsuba components must have the same storage type"))
+        component_type = _karatsuba_resolve_component_type(S, typeof(A), T, Val(D))
+        plan_type = _karatsuba_resolve_plan_type(P, T, Val(D))
+        isconcretetype(component_type) ||
             throw(ArgumentError("Karatsuba components require a concrete storage type"))
-        isconcretetype(P) ||
+        isconcretetype(plan_type) ||
             throw(ArgumentError("Karatsuba plans require a concrete storage type"))
         if size(A) != size(B)
             throw(DimensionMismatch("Dimensions of matrices must match"))
@@ -51,7 +56,7 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
             throw(ArgumentError("Modulus too large"))
         end
 
-        return new{T,D,S,P}(A, B, nothing, N1, N2, M)
+        return new{T,D,component_type,plan_type}(A, B, nothing, N1, N2, M)
     end
 end
 
@@ -68,11 +73,81 @@ function KaratsubaArray{T,D}(
     return KaratsubaArray{T,D,typeof(A)}(A, B; kwargs...)
 end
 
-_karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} = CuModArray{T,D}
+function _default_cumod_storage_type(::Type{T}, ::Val{D}) where {T,D}
+    # A lazy Karatsuba value needs a concrete plan field type before its first
+    # plan allocation. Infer the type returned by CUDA's public zero allocator
+    # without allocating GPU storage or reading CUDA's private default-memory
+    # preference. Ordinary CuModArray allocations still use CUDA.zeros directly.
+    compiler_return_type = getfield(getfield(Core, :Compiler), :return_type)
+    data_type = compiler_return_type(CUDA.zeros, Tuple{Type{T},Vararg{Int,D}})
+    isconcretetype(data_type) && data_type <: CUDA.CuArray{T,D} || throw(
+        ArgumentError("CUDA.zeros does not infer a concrete CuArray{$T,$D} storage type"),
+    )
+    memory_type = data_type.parameters[3]
+    isconcretetype(memory_type) || throw(
+        ArgumentError("CUDA.zeros does not infer a concrete CuArray memory type for $T,$D"),
+    )
+    return CuModArray{T,D,memory_type}
+end
+
+_karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} =
+    _default_cumod_storage_type(T, Val(D))
+
+@inline function _karatsuba_resolve_component_type(
+    ::Type{CuModArray{T,D}},
+    ::Type{A},
+    ::Type{T},
+    ::Val{D},
+) where {T,D,A}
+    isconcretetype(A) && A <: CuModArray{T,D} || throw(
+        ArgumentError(
+            "partial CuModArray component requests need concrete CuModArray inputs",
+        ),
+    )
+    return A
+end
+
+@inline function _karatsuba_resolve_component_type(
+    ::Type{S},
+    ::Type{A},
+    ::Type{T},
+    ::Val{D},
+) where {S,A,T,D}
+    isconcretetype(S) ||
+        throw(ArgumentError("Karatsuba components require a concrete storage type"))
+    S === A ||
+        throw(ArgumentError("Karatsuba component input does not match requested type $S"))
+    return S
+end
+
+@inline function _karatsuba_resolve_requested_component_type(
+    ::Type{S},
+    ::Type{T},
+    ::Val{D},
+) where {S,T,D}
+    if S === CuModArray{T,D}
+        return _default_cumod_storage_type(T, Val(D))
+    end
+    isconcretetype(S) ||
+        throw(ArgumentError("Karatsuba components require a concrete storage type"))
+    return S
+end
+
+@inline function _karatsuba_resolve_plan_type(::Type{P}, ::Type{T}, ::Val{D}) where {P,T,D}
+    if P === CuModArray{T,D}
+        return _default_cumod_storage_type(T, Val(D))
+    end
+    isconcretetype(P) ||
+        throw(ArgumentError("Karatsuba plans require a concrete storage type"))
+    return P
+end
 
 function KaratsubaArray{T,D,S}(A::S, B::S; kwargs...) where {T,D,S<:AbstractArray{T,D}}
-    P = _karatsuba_plan_type(S)
-    return KaratsubaArray{T,D,S,P}(A, B; kwargs...)
+    typeof(A) === typeof(B) ||
+        throw(ArgumentError("Karatsuba components must have the same storage type"))
+    component_type = _karatsuba_resolve_component_type(S, typeof(A), T, Val(D))
+    plan_type = _karatsuba_plan_type(component_type)
+    return KaratsubaArray{T,D,component_type,plan_type}(A, B; kwargs...)
 end
 
 """Return the low component array stored by `K`, preserving object identity."""
@@ -288,9 +363,56 @@ function _karatsuba_gemv_dot_bound(
     left_bound > 0 && right_bound > 0 ||
         throw(ArgumentError("GEMV component bounds must be positive"))
     bound = BigInt(terms) * BigInt(left_bound - 1) * BigInt(right_bound - 1)
-    bound < _karatsuba_exact_integer_bound(T) ||
+    bound <= _karatsuba_exact_integer_bound(T) ||
         throw(ArgumentError("$label exceeds the exact-integer $T accumulation range"))
     return bound
+end
+
+function _karatsuba_gemv_sum_bound(
+    left_bound::Int,
+    right_bound::Int,
+    label::AbstractString,
+    ::Type{T},
+) where {T<:Union{Float32,Float64}}
+    left_bound > 0 && right_bound > 0 ||
+        throw(ArgumentError("GEMV component bounds must be positive"))
+    # Each input digit is below its modulus. The largest sum is therefore
+    # (left_bound - 1) + (right_bound - 1), so the exclusive bound is a+b-1.
+    value = BigInt(left_bound) + BigInt(right_bound) - 1
+    value <= typemax(Int) || throw(OverflowError("$label overflows Int"))
+    value - 1 <= _karatsuba_exact_integer_bound(T) ||
+        throw(ArgumentError("$label exceeds the exact-integer $T range"))
+    return Int(value)
+end
+
+function _karatsuba_gemv_validate_radices(
+    input_low_a::Int,
+    input_high_a::Int,
+    input_low_b::Int,
+    input_high_b::Int,
+    output_low::Int,
+    output_high::Int,
+)
+    all(
+        >(0),
+        (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high),
+    ) || throw(ArgumentError("Karatsuba split moduli must be positive"))
+    input_low_a == input_low_b || throw(
+        ModulusMismatchError(
+            "three-product Karatsuba GEMV requires a common low modulus for A and x",
+        ),
+    )
+    output_low == input_low_a || throw(
+        ModulusMismatchError(
+            "Karatsuba GEMV requires the output low modulus to match the input radix",
+        ),
+    )
+    rem(output_low, output_high) == 0 || throw(
+        ArgumentError(
+            "Karatsuba GEMV requires output high modulus N2=$output_high to divide low radix N1=$output_low",
+        ),
+    )
+    return nothing
 end
 
 function _karatsuba_gemv_precision_plan(
@@ -303,55 +425,29 @@ function _karatsuba_gemv_precision_plan(
     output_low::Int,
     output_high::Int,
 ) where {T<:Union{Float32,Float64}}
-    all(
-        >(0),
-        (input_low_a, input_high_a, input_low_b, input_high_b, output_low, output_high),
-    ) || throw(ArgumentError("Karatsuba split moduli must be positive"))
-    input_low_a == input_low_b || throw(
-        ModulusMismatchError(
-            "three-product Karatsuba GEMV requires a common low modulus for A and x",
-        ),
-    )
-    output_low == input_low_a || throw(
-        ModulusMismatchError(
-            "legacy Karatsuba GEMV requires the output low modulus to match the input radix",
-        ),
-    )
-
-    # The legacy 7/5 GEMV path forms low+high sums modulo 2R, accumulates the
-    # three dot products in cuBLAS, and uses a conservative (4R)^2 recombination
-    # window. Check every integer intermediate before any caller plan is written.
-    sum_bound_a = _karatsuba_checked_sum_bound(
+    _karatsuba_gemv_validate_radices(
         input_low_a,
         input_high_a,
-        "left GEMV sum input bound",
-        T,
+        input_low_b,
+        input_high_b,
+        output_low,
+        output_high,
     )
-    sum_bound_b = _karatsuba_checked_sum_bound(
+
+    # Full sums A0+A1 and x0+x1 feed the raw middle dot product. Each cuBLAS
+    # total is an integer no larger than 2^p, including the exact endpoint.
+    sum_bound_a =
+        _karatsuba_gemv_sum_bound(input_low_a, input_high_a, "left GEMV sum input bound", T)
+    sum_bound_b = _karatsuba_gemv_sum_bound(
         input_low_b,
         input_high_b,
         "right GEMV sum input bound",
         T,
     )
-    middle_radix_a = _karatsuba_checked_working_modulus(
-        BigInt(2) * BigInt(input_low_a),
-        "left GEMV middle-product radix",
-        T,
-    )
-    middle_radix_b = _karatsuba_checked_working_modulus(
-        BigInt(2) * BigInt(input_low_b),
-        "right GEMV middle-product radix",
-        T,
-    )
     low_bound =
         _karatsuba_gemv_dot_bound(T, terms, input_low_a, input_low_b, "low GEMV product")
-    middle_bound = _karatsuba_gemv_dot_bound(
-        T,
-        terms,
-        middle_radix_a,
-        middle_radix_b,
-        "middle GEMV product",
-    )
+    middle_bound =
+        _karatsuba_gemv_dot_bound(T, terms, sum_bound_a, sum_bound_b, "middle GEMV product")
     high_bound =
         _karatsuba_gemv_dot_bound(T, terms, input_high_a, input_high_b, "high GEMV product")
     output_capacity = _karatsuba_checked_working_modulus(
@@ -359,16 +455,15 @@ function _karatsuba_gemv_precision_plan(
         "GEMV output component capacity",
         T,
     )
-    recombination_bound = (BigInt(4) * BigInt(output_low))^2 + BigInt(output_low)
-    recombination_bound <= _karatsuba_exact_integer_bound(T) ||
-        throw(ArgumentError("legacy GEMV recombination exceeds the exact-integer $T range"))
+    # For canonical nonnegative digits, P1=P0+P2+cross. Both sequential
+    # differences are nonnegative, carry<=P0, and carry+cross<=P1.
     return (
         low_dot_bound = low_bound,
         middle_dot_bound = middle_bound,
         high_dot_bound = high_bound,
         sum_input_bounds = (sum_bound_a, sum_bound_b),
         output_capacity = output_capacity,
-        recombination_bound = recombination_bound,
+        high_total_bound = middle_bound,
     )
 end
 
@@ -387,15 +482,23 @@ end
     return TA
 end
 
-function _karatsuba_prepare_gemm_views(
+@inline function _karatsuba_initialized_plan(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
+    plan = K.plan
+    plan === nothing && throw(ArgumentError("Must initialize plans first"))
+    return plan::P
+end
+
+function _karatsuba_validate_gemm(
     A::KaratsubaArray{T,2},
     B::KaratsubaArray{T,2},
     C::KaratsubaArray{T,2},
+    a_plan,
+    b_plan,
+    c_plan,
 ) where {T}
-    for (name, K) in (("A", A), ("B", B), ("C", C))
+    for (name, K, plan) in (("A", A, a_plan), ("B", B, b_plan), ("C", C, c_plan))
         low = low_part(K)
         high = high_part(K)
-        plan = K.plan
         for (plane_name, plane) in (("low", low), ("high", high), ("plan", plan))
             plane isa CuModArray{T,2} || throw(
                 ArgumentError(
@@ -419,8 +522,8 @@ function _karatsuba_prepare_gemm_views(
     end
 
     inputs = (low_part(A), high_part(A), low_part(B), high_part(B))
-    outputs = (low_part(C), high_part(C), C.plan)
-    scratch = (A.plan, B.plan)
+    outputs = (low_part(C), high_part(C), c_plan)
+    scratch = (a_plan, b_plan)
     for output in outputs, input in inputs
         _stripe_mightalias(parent(output), parent(input)) && throw(
             ArgumentError(
@@ -441,35 +544,32 @@ function _karatsuba_prepare_gemm_views(
         _stripe_mightalias(parent(plan), parent(output)) &&
             throw(ArgumentError("Karatsuba plan scratch must not alias output components"))
     end
-    _stripe_mightalias(parent(A.plan), parent(B.plan)) &&
+    _stripe_mightalias(parent(a_plan), parent(b_plan)) &&
         A !== B &&
         throw(ArgumentError("Karatsuba input plan scratch must not alias each other"))
-    return (
-        a_low = _stripe_logical_data(low_part(A)),
-        a_high = _stripe_logical_data(high_part(A)),
-        a_plan = _stripe_logical_data(A.plan),
-        b_low = _stripe_logical_data(low_part(B)),
-        b_high = _stripe_logical_data(high_part(B)),
-        b_plan = _stripe_logical_data(B.plan),
-        c_low = _stripe_logical_data(low_part(C)),
-        c_high = _stripe_logical_data(high_part(C)),
-        c_plan = _stripe_logical_data(C.plan),
-    )
+    return nothing
 end
 
-function _karatsuba_require_same_device(data)
-    expected_device = CUDA.device(_stripe_storage_root(data.c_low))
-    for plane in (
-        data.c_high,
-        data.c_plan,
-        data.a_low,
-        data.a_high,
-        data.a_plan,
-        data.b_low,
-        data.b_high,
-        data.b_plan,
+function _karatsuba_require_same_device_gemm(
+    A::KaratsubaArray{TA,2},
+    a_plan::CuModArray{TA,2},
+    B::KaratsubaArray{TB,2},
+    b_plan::CuModArray{TB,2},
+    C::KaratsubaArray{TC,2},
+    c_plan::CuModArray{TC,2},
+) where {TA,TB,TC}
+    expected_device = CUDA.device(_stripe_storage_root(parent(low_part(C))))
+    for storage in (
+        parent(high_part(C)),
+        parent(c_plan),
+        parent(low_part(A)),
+        parent(high_part(A)),
+        parent(a_plan),
+        parent(low_part(B)),
+        parent(high_part(B)),
+        parent(b_plan),
     )
-        CUDA.device(_stripe_storage_root(plane)) == expected_device || throw(
+        CUDA.device(_stripe_storage_root(storage)) == expected_device || throw(
             ArgumentError(
                 "Karatsuba components and plans must reside on the same CUDA device",
             ),
@@ -478,19 +578,26 @@ function _karatsuba_require_same_device(data)
     return nothing
 end
 
-function _karatsuba_require_same_device_gemv(data)
-    expected_device = CUDA.device(_stripe_storage_root(data.y_low))
-    for plane in (
-        data.y_high,
-        data.y_plan,
-        data.a_low,
-        data.a_high,
-        data.a_plan,
-        data.x_low,
-        data.x_high,
-        data.x_plan,
+function _karatsuba_require_same_device_gemv(
+    A::KaratsubaArray{TA,2},
+    a_plan::CuModArray{TA,2},
+    x::KaratsubaArray{TX,1},
+    x_plan::CuModArray{TX,1},
+    y::KaratsubaArray{TY,1},
+    y_plan::CuModArray{TY,1},
+) where {TA,TX,TY}
+    expected_device = CUDA.device(_stripe_storage_root(parent(low_part(y))))
+    for storage in (
+        parent(high_part(y)),
+        parent(y_plan),
+        parent(low_part(A)),
+        parent(high_part(A)),
+        parent(a_plan),
+        parent(low_part(x)),
+        parent(high_part(x)),
+        parent(x_plan),
     )
-        CUDA.device(_stripe_storage_root(plane)) == expected_device || throw(
+        CUDA.device(_stripe_storage_root(storage)) == expected_device || throw(
             ArgumentError(
                 "Karatsuba components and plans must reside on the same CUDA device",
             ),
@@ -519,6 +626,79 @@ function _karatsuba_stripe_product!(Cdata, Adata, Bdata, product)
         input_bound = product.input_bound,
         max_ops = product.max_ops,
     )
+end
+
+function _karatsuba_compute_gemm!(
+    C::KaratsubaArray{TC,2},
+    A::KaratsubaArray{TA,2},
+    B::KaratsubaArray{TB,2},
+    a_plan::CuModArray{TA,2},
+    b_plan::CuModArray{TB,2},
+    c_plan::CuModArray{TC,2},
+    data,
+    products,
+) where {TC,TA,TB}
+    T = TC
+    rows_a, cols_a = size(low_part(A))
+    rows_b, cols_b = size(low_part(B))
+    logical_count = max(length(low_part(A)), length(low_part(B)))
+    threads = TILE_WIDTH
+    blocks = max(1, cld(logical_count, threads))
+    @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
+        parent(a_plan),
+        parent(low_part(A)),
+        parent(high_part(A)),
+        rows_a,
+        cols_a,
+        stride(parent(a_plan), 1),
+        stride(parent(a_plan), 2),
+        stride(parent(low_part(A)), 1),
+        stride(parent(low_part(A)), 2),
+        stride(parent(high_part(A)), 1),
+        stride(parent(high_part(A)), 2),
+        parent(b_plan),
+        parent(low_part(B)),
+        parent(high_part(B)),
+        rows_b,
+        cols_b,
+        stride(parent(b_plan), 1),
+        stride(parent(b_plan), 2),
+        stride(parent(low_part(B)), 1),
+        stride(parent(low_part(B)), 2),
+        stride(parent(high_part(B)), 1),
+        stride(parent(high_part(B)), 2),
+    )
+
+    _karatsuba_stripe_product!(data.c_low, data.a_low, data.b_low, products.low)
+    _karatsuba_stripe_product!(data.c_high, data.a_plan, data.b_plan, products.middle)
+    _karatsuba_stripe_product!(data.c_plan, data.a_high, data.b_high, products.high)
+
+    output_rows, output_cols = size(low_part(C))
+    output_count = length(low_part(C))
+    output_blocks = max(1, cld(output_count, threads))
+    output_capacity = T(products.output_capacity)
+    radix_mod_capacity = T(products.radix_mod_capacity)
+    radix_squared_mod_capacity = T(products.radix_squared_mod_capacity)
+    output_radix = T(products.output_radix)
+    @cuda threads=threads blocks=output_blocks karatsuba_matmul_kernel_2!(
+        parent(low_part(C)),
+        parent(high_part(C)),
+        parent(c_plan),
+        output_rows,
+        output_cols,
+        stride(parent(low_part(C)), 1),
+        stride(parent(low_part(C)), 2),
+        stride(parent(high_part(C)), 1),
+        stride(parent(high_part(C)), 2),
+        stride(parent(c_plan), 1),
+        stride(parent(c_plan), 2),
+        radix_mod_capacity,
+        radix_squared_mod_capacity,
+        output_radix,
+        output_capacity,
+    )
+
+    return C
 end
 
 """
@@ -557,12 +737,23 @@ function LinearAlgebra.mul!(
     if size(low_part(A))[2] != size(low_part(B))[1]
         throw(DimensionMismatch("Matrix dimensions don't work for multiplication"))
     end
-    if (A.plan == nothing) || (B.plan == nothing) || (C.plan == nothing)
-        throw(ArgumentError("Must initialize plans first"))
-    end
+    a_plan = _karatsuba_initialized_plan(A)
+    b_plan = _karatsuba_initialized_plan(B)
+    c_plan = _karatsuba_initialized_plan(C)
     size(low_part(C)) == (size(low_part(A), 1), size(low_part(B), 2)) ||
         throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
-    data = _karatsuba_prepare_gemm_views(A, B, C)
+    _karatsuba_validate_gemm(A, B, C, a_plan, b_plan, c_plan)
+    data = (
+        a_low = _stripe_logical_data(low_part(A)),
+        a_high = _stripe_logical_data(high_part(A)),
+        a_plan = _stripe_logical_data(a_plan),
+        b_low = _stripe_logical_data(low_part(B)),
+        b_high = _stripe_logical_data(high_part(B)),
+        b_plan = _stripe_logical_data(b_plan),
+        c_low = _stripe_logical_data(low_part(C)),
+        c_high = _stripe_logical_data(high_part(C)),
+        c_plan = _stripe_logical_data(c_plan),
+    )
     products = _karatsuba_matmul_product_plan(
         T,
         low_modulus(A),
@@ -590,69 +781,9 @@ function LinearAlgebra.mul!(
     )
     # The stripe preflights validate each product group independently. The
     # staging and recombination kernels combine all nine storage roots.
-    _karatsuba_require_same_device(data)
-
-    rows_a, cols_a = size(low_part(A))
-    rows_b, cols_b = size(low_part(B))
-    logical_count = max(length(low_part(A)), length(low_part(B)))
-    threads = TILE_WIDTH
-    blocks = max(1, cld(logical_count, threads))
-    @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
-        parent(A.plan),
-        parent(low_part(A)),
-        parent(high_part(A)),
-        rows_a,
-        cols_a,
-        stride(parent(A.plan), 1),
-        stride(parent(A.plan), 2),
-        stride(parent(low_part(A)), 1),
-        stride(parent(low_part(A)), 2),
-        stride(parent(high_part(A)), 1),
-        stride(parent(high_part(A)), 2),
-        parent(B.plan),
-        parent(low_part(B)),
-        parent(high_part(B)),
-        rows_b,
-        cols_b,
-        stride(parent(B.plan), 1),
-        stride(parent(B.plan), 2),
-        stride(parent(low_part(B)), 1),
-        stride(parent(low_part(B)), 2),
-        stride(parent(high_part(B)), 1),
-        stride(parent(high_part(B)), 2),
-    )
-
-    _karatsuba_stripe_product!(data.c_low, data.a_low, data.b_low, products.low)
-    _karatsuba_stripe_product!(data.c_high, data.a_plan, data.b_plan, products.middle)
-    _karatsuba_stripe_product!(data.c_plan, data.a_high, data.b_high, products.high)
-
-    output_rows, output_cols = size(low_part(C))
-    output_count = length(low_part(C))
-    output_blocks = max(1, cld(output_count, threads))
-    output_capacity = T(products.output_capacity)
-    radix_mod_capacity = T(products.radix_mod_capacity)
-    radix_squared_mod_capacity = T(products.radix_squared_mod_capacity)
-    output_radix = T(products.output_radix)
-    @cuda threads=threads blocks=output_blocks karatsuba_matmul_kernel_2!(
-        parent(low_part(C)),
-        parent(high_part(C)),
-        parent(C.plan),
-        output_rows,
-        output_cols,
-        stride(parent(low_part(C)), 1),
-        stride(parent(low_part(C)), 2),
-        stride(parent(high_part(C)), 1),
-        stride(parent(high_part(C)), 2),
-        stride(parent(C.plan), 1),
-        stride(parent(C.plan), 2),
-        radix_mod_capacity,
-        radix_squared_mod_capacity,
-        output_radix,
-        output_capacity,
-    )
-
-
-    C
+    _karatsuba_require_same_device_gemm(A, a_plan, B, b_plan, C, c_plan)
+    _karatsuba_compute_gemm!(C, A, B, a_plan, b_plan, c_plan, data, products)
+    return C
 end
 
 """
@@ -713,15 +844,17 @@ end
            eltype(eltype(mats)) === eltype(eltype(targets))
 end
 
-function _karatsuba_prepare_gemv_views(
+function _karatsuba_validate_gemv(
     A::KaratsubaArray{T,2},
     x::KaratsubaArray{T,1},
     y::KaratsubaArray{T,1},
+    a_plan,
+    x_plan,
+    y_plan,
 ) where {T}
-    for (name, K) in (("A", A), ("x", x), ("y", y))
+    for (name, K, plan) in (("A", A, a_plan), ("x", x, x_plan), ("y", y, y_plan))
         low = low_part(K)
         high = high_part(K)
-        plan = K.plan
         D = ndims(low)
         for (plane_name, plane) in (("low", low), ("high", high), ("plan", plan))
             plane isa CuModArray{T,D} || throw(
@@ -744,8 +877,8 @@ function _karatsuba_prepare_gemv_views(
         throw(DimensionMismatch("Output vector y has incorrect dimensions"))
 
     inputs = (low_part(A), high_part(A), low_part(x), high_part(x))
-    outputs = (low_part(y), high_part(y), y.plan)
-    scratch = (A.plan, x.plan)
+    outputs = (low_part(y), high_part(y), y_plan)
+    scratch = (a_plan, x_plan)
     for output in outputs, input in inputs
         _stripe_mightalias(parent(output), parent(input)) && throw(
             ArgumentError("Karatsuba GEMV output storage must not alias input components"),
@@ -766,20 +899,10 @@ function _karatsuba_prepare_gemv_views(
             ArgumentError("Karatsuba GEMV plan scratch must not alias output components"),
         )
     end
-    _stripe_mightalias(parent(A.plan), parent(x.plan)) &&
+    _stripe_mightalias(parent(a_plan), parent(x_plan)) &&
         throw(ArgumentError("Karatsuba GEMV input plan scratch must not alias each other"))
 
-    return (
-        a_low = _stripe_logical_data(low_part(A)),
-        a_high = _stripe_logical_data(high_part(A)),
-        a_plan = _stripe_logical_data(A.plan),
-        x_low = _stripe_logical_data(low_part(x)),
-        x_high = _stripe_logical_data(high_part(x)),
-        x_plan = _stripe_logical_data(x.plan),
-        y_low = _stripe_logical_data(low_part(y)),
-        y_high = _stripe_logical_data(high_part(y)),
-        y_plan = _stripe_logical_data(y.plan),
-    )
+    return nothing
 end
 
 function karatsuba_gemv!(
@@ -794,17 +917,26 @@ function karatsuba_gemv!(
     if size(low_part(A), 2) != length(low_part(B))
         throw(DimensionMismatch("Matrix dimensions don't work for multiplication"))
     end
-    if (A.plan == nothing) || (B.plan == nothing) || (C.plan == nothing)
-        throw(ArgumentError("Must initialize plans first"))
-    end
+    a_plan = _karatsuba_initialized_plan(A)
+    b_plan = _karatsuba_initialized_plan(B)
+    c_plan = _karatsuba_initialized_plan(C)
     tw = TILE_WIDTH
     rows, cols = size(low_part(A))
+    _karatsuba_validate_gemv(A, B, C, a_plan, b_plan, c_plan)
+    _karatsuba_require_same_device_gemv(A, a_plan, B, b_plan, C, c_plan)
+
+    # The output radix relation is checked for every shape before writes.
+    _karatsuba_gemv_validate_radices(
+        low_modulus(A),
+        high_modulus(A),
+        low_modulus(B),
+        high_modulus(B),
+        low_modulus(C),
+        high_modulus(C),
+    )
     if rows == 0
         return C
     end
-
-    data = _karatsuba_prepare_gemv_views(A, B, C)
-    _karatsuba_require_same_device_gemv(data)
     if cols == 0
         fill!(_logical_view(parent(low_part(C)), size(low_part(C))), zero(T))
         fill!(_logical_view(parent(high_part(C)), size(high_part(C))), zero(T))
@@ -822,42 +954,40 @@ function karatsuba_gemv!(
         high_modulus(C),
     )
 
-    logical_count = max(length(A.plan), length(B.plan))
+    logical_count = max(length(a_plan), length(b_plan))
     if logical_count > 0
         threads = tw
         blocks = cld(logical_count, threads)
         @cuda threads=threads blocks=blocks karatsuba_matmul_kernel_1!(
-            _logical_view(parent(A.plan), size(A.plan)),
+            _logical_view(parent(a_plan), size(a_plan)),
             _logical_view(parent(low_part(A)), size(low_part(A))),
             _logical_view(parent(high_part(A)), size(high_part(A))),
-            _logical_view(parent(B.plan), size(B.plan)),
+            _logical_view(parent(b_plan), size(b_plan)),
             _logical_view(parent(low_part(B)), size(low_part(B))),
             _logical_view(parent(high_part(B)), size(high_part(B))),
-            low_modulus(A),
         )
     end
-    # add!(A.plan,low_part(A),high_part(A); modulus_override=2*low_modulus(A))
-    # add!(B.plan,low_part(B),high_part(B); modulus_override=2*low_modulus(B))
+    # A.plan and B.plan now hold the full low-plus-high sums used by P1.
 
     (zero_ptr, one_ptr) = _stripe_gemv_scalars(T)
 
 
     # C.plan is the independent, output-sized destination for the third
     # product. B.plan remains the second product's input sum.
-    Cplan_output = _logical_view(parent(C.plan), size(C.plan))
-    matrix_parents = (parent(low_part(A)), parent(A.plan), parent(high_part(A)))
-    vector_parents = (parent(low_part(B)), parent(B.plan), parent(high_part(B)))
-    target_parents = (parent(low_part(C)), parent(high_part(C)), parent(C.plan))
+    Cplan_output = _logical_view(parent(c_plan), size(c_plan))
+    matrix_parents = (parent(low_part(A)), parent(a_plan), parent(high_part(A)))
+    vector_parents = (parent(low_part(B)), parent(b_plan), parent(high_part(B)))
+    target_parents = (parent(low_part(C)), parent(high_part(C)), parent(c_plan))
     whole_parent_operands =
         _karatsuba_gemv_whole_cuarray_parent(low_part(A)) &&
-        _karatsuba_gemv_whole_cuarray_parent(A.plan) &&
+        _karatsuba_gemv_whole_cuarray_parent(a_plan) &&
         _karatsuba_gemv_whole_cuarray_parent(high_part(A)) &&
         _karatsuba_gemv_whole_cuarray_parent(low_part(B)) &&
-        _karatsuba_gemv_whole_cuarray_parent(B.plan) &&
+        _karatsuba_gemv_whole_cuarray_parent(b_plan) &&
         _karatsuba_gemv_whole_cuarray_parent(high_part(B)) &&
         _karatsuba_gemv_whole_cuarray_parent(low_part(C)) &&
         _karatsuba_gemv_whole_cuarray_parent(high_part(C)) &&
-        _karatsuba_gemv_whole_cuarray_parent(C.plan)
+        _karatsuba_gemv_whole_cuarray_parent(c_plan)
     if whole_parent_operands
         mats = collect(matrix_parents)
         vecs = collect(vector_parents)
@@ -882,12 +1012,12 @@ function karatsuba_gemv!(
     else
         mats = [
             _logical_view(parent(low_part(A)), size(low_part(A))),
-            _logical_view(parent(A.plan), size(A.plan)),
+            _logical_view(parent(a_plan), size(a_plan)),
             _logical_view(parent(high_part(A)), size(high_part(A))),
         ]
         vecs = [
             _logical_view(parent(low_part(B)), size(low_part(B))),
-            _logical_view(parent(B.plan), size(B.plan)),
+            _logical_view(parent(b_plan), size(b_plan)),
             _logical_view(parent(high_part(B)), size(high_part(B))),
         ]
         targets = [
@@ -912,8 +1042,8 @@ function karatsuba_gemv!(
             _logical_view(parent(low_part(C)), size(low_part(C))),
             _logical_view(parent(high_part(C)), size(high_part(C))),
             Cplan_output,
-            low_modulus(C),
-            high_modulus(C),
+            T(low_modulus(C)),
+            T(high_modulus(C)),
         )
     end
 
@@ -1014,7 +1144,9 @@ _karatsuba_gpu_storage(A::CuModArray) = parent(A)
 _karatsuba_gpu_storage(A::CUDA.CuArray) = A
 _karatsuba_gpu_strides(A::CuModArray) = strides(parent(A))
 _karatsuba_gpu_strides(A::CUDA.CuArray) = strides(A)
-_karatsuba_logical_view(A::CuModArray) = _logical_view(parent(A), size(A))
+@stable default_mode = "disable" default_union_limit = 2 begin
+    _karatsuba_logical_view(A::CuModArray) = _logical_view(parent(A), size(A))
+end
 _karatsuba_logical_view(A::CUDA.CuArray) = A
 
 function _karatsuba_gpu_float_precision(::Type{Float16})
@@ -1360,16 +1492,18 @@ function _karatsuba_zeros(
     (explicit || shorthand) || throw(
         ArgumentError("Karatsuba zeros require either modulus or all three split moduli"),
     )
-    isconcretetype(S) || throw(
+    component_type = _karatsuba_resolve_requested_component_type(S, T, Val(D))
+    plan_type = _karatsuba_resolve_plan_type(P, T, Val(D))
+    isconcretetype(component_type) || throw(
         ArgumentError("Karatsuba zero factories require a concrete component storage type"),
     )
-    isconcretetype(P) || throw(
+    isconcretetype(plan_type) || throw(
         ArgumentError("Karatsuba zero factories require a concrete plan storage type"),
     )
-    expected_plan_type = _karatsuba_plan_type(S)
-    P === expected_plan_type || throw(
+    expected_plan_type = _karatsuba_plan_type(component_type)
+    plan_type === expected_plan_type || throw(
         ArgumentError(
-            "Requested plan storage type $P does not match the plan type $expected_plan_type for component storage $S",
+            "Requested plan storage type $plan_type does not match the plan type $expected_plan_type for component storage $component_type",
         ),
     )
 
@@ -1381,20 +1515,20 @@ function _karatsuba_zeros(
     )
     (N1 > 0 && N2 > 0 && M > 0) || throw(ArgumentError("Karatsuba moduli must be positive"))
 
-    first = _karatsuba_zero_component(S, dims, N1)
-    second = _karatsuba_zero_component(S, dims, N2)
-    typeof(first) === S || throw(
+    first = _karatsuba_zero_component(component_type, dims, N1)
+    second = _karatsuba_zero_component(component_type, dims, N2)
+    typeof(first) === component_type || throw(
         ArgumentError(
-            "Storage factory returned $(typeof(first)) for requested component type $S",
+            "Storage factory returned $(typeof(first)) for requested component type $component_type",
         ),
     )
-    typeof(second) === S || throw(
+    typeof(second) === component_type || throw(
         ArgumentError(
-            "Storage factory returned $(typeof(second)) for requested component type $S",
+            "Storage factory returned $(typeof(second)) for requested component type $component_type",
         ),
     )
 
-    return KaratsubaArray{T,D,S,P}(
+    return KaratsubaArray{T,D,component_type,plan_type}(
         first,
         second;
         low_modulus = N1,
@@ -1409,8 +1543,9 @@ function _karatsuba_zeros(
     dims::Dims{D};
     kwargs...,
 ) where {T,D,S<:AbstractArray{T,D}}
-    P = _karatsuba_plan_type(S)
-    return _karatsuba_zeros(T, S, P, dims; kwargs...)
+    component_type = _karatsuba_resolve_requested_component_type(S, T, Val(D))
+    plan_type = _karatsuba_plan_type(component_type)
+    return _karatsuba_zeros(T, component_type, plan_type, dims; kwargs...)
 end
 
 function _karatsuba_zero_component(::Type{Array{T,D}}, dims::Dims{D}, ::Int) where {T,D}
@@ -1418,10 +1553,10 @@ function _karatsuba_zero_component(::Type{Array{T,D}}, dims::Dims{D}, ::Int) whe
 end
 
 function _karatsuba_zero_component(
-    ::Type{CuModArray{T,D}},
+    ::Type{S},
     dims::Dims{D},
     component_modulus::Int,
-) where {T,D}
+) where {T,D,S<:CuModArray{T,D}}
     return zeros(CuModArray{T,D}, dims...; modulus = component_modulus)
 end
 
@@ -1506,7 +1641,7 @@ function initialize_plan!(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
             "initialize_plan! requires plan storage type $expected_plan_type, got $P",
         ),
     )
-    K.plan = zeros(expected_plan_type, size(low_part(K))...; modulus = Int(low_modulus(K)))
+    K.plan = zeros(CuModArray{T,D}, size(low_part(K))...; modulus = Int(low_modulus(K)))
     return K
 end
 

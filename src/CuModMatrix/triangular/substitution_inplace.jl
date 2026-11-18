@@ -30,8 +30,8 @@ Perform forward substitution on one bounded block of `A`, writing its inverse
 columns into `A_inv`.
 """
 function _lower_triangular_inv_32_kernel!(
-    A_inv::CuDeviceMatrix{T2},
-    A::CuDeviceMatrix{T1},
+    A_inv::AbstractMatrix{T2},
+    A::AbstractMatrix{T1},
     N::Int,
     row_shift::Int,
     col_shift::Int,
@@ -88,8 +88,8 @@ Perform backward substitution on one bounded block of `A`, writing its inverse
 columns into `A_inv`.
 """
 function _upper_triangular_inv_32_kernel!(
-    A_inv::CuDeviceMatrix{T2},
-    A::CuDeviceMatrix{T1},
+    A_inv::AbstractMatrix{T2},
+    A::AbstractMatrix{T1},
     N::Int,
     row_shift::Int,
     col_shift::Int,

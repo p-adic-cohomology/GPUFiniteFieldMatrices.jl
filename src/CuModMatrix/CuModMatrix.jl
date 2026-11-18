@@ -5,8 +5,12 @@ const DEFAULT_TYPE = Float32
 @inline _padded_extent(d::Integer) = cld(d, TILE_WIDTH) * TILE_WIDTH
 @inline _padded_size(dims::Dims{D}) where {D} = ntuple(i -> _padded_extent(dims[i]), D)
 
-@inline function _logical_view(data::AbstractArray{T,D}, dims::Dims{D}) where {T,D}
-    return view(data, ntuple(i -> 1:dims[i], D)...)
+# GPUArrays.view returns a contiguous CuArray or strided SubArray based on runtime
+# indices; both concrete representations fit this local union bound.
+@stable default_mode = "disable" default_union_limit = 2 begin
+    @inline function _logical_view(data::AbstractArray{T,D}, dims::Dims{D}) where {T,D}
+        return view(data, ntuple(i -> 1:dims[i], D)...)
+    end
 end
 
 """Operand moduli are incompatible for the requested operation."""
@@ -38,8 +42,8 @@ caller, who must then ensure the arrays are compatible. A supplied
 Note matrices over the permitted size for efficient matmul may be created, but matmul 
 will throw an exception if these matrices are multiplied.
 """
-struct CuModArray{T,D} <: AbstractArray{T,D}
-    data::CuArray{T,D}  # Padded CuArray data
+struct CuModArray{T,D,M} <: AbstractArray{T,D}
+    data::CuArray{T,D,M}  # Padded CuArray data with its CUDA memory type
     size::Dims{D}        # True dimensions
     N::Int               # The modulus N
 
@@ -97,10 +101,11 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
             mod!(data, data, N)
         end
 
+        memory_type = typeof(data).parameters[3]
         if new_size != nothing
-            new{T,D}(data, new_size, N)
+            new{T,D,memory_type}(data, new_size, N)
         else
-            new{T,D}(data, size(A), N)
+            new{T,D,memory_type}(data, size(A), N)
         end
     end
 
@@ -117,19 +122,19 @@ struct CuModArray{T,D} <: AbstractArray{T,D}
     keeping the same data as a previous CuModarray.
     """
     function CuModArray{T,D}(
-        A::CuArray{T,D},
+        A::CuArray{T,D,M},
         ;
         modulus::Int,
         mod = false,
         new_size = nothing,
-    ) where {T,D}
+    ) where {T,D,M}
         data = A
         N = modulus
 
         if new_size != nothing
-            new{T,D}(data, new_size, N)
+            new{T,D,M}(data, new_size, N)
         else
-            new{T,D}(data, size(data), N)
+            new{T,D,M}(data, size(data), N)
         end
     end
 end
@@ -407,28 +412,32 @@ function _is_invertible(F)
     return m == n && F.rank == m
 end
 
-"""
-    is_invertible_with_inverse(A::CuModMatrix)
+# The documented singular and inverse results are two intentional concrete
+# tuple alternatives; keep their union allowance local to this API method.
+@stable default_mode = "disable" default_union_limit = 2 begin
+    """
+        is_invertible_with_inverse(A::CuModMatrix)
 
-Checks if a matrix is invertible. If not, returns
-false and nothing. If it is, returns true and the
-inverse matrix.
-"""
-function is_invertible_with_inverse(A::CuModMatrix; debug::Bool = false)
-    F = _setup_PLUQ(A)
-    if !_is_invertible(F)
-        return false, nothing
+    Checks if a matrix is invertible. If not, returns
+    false and nothing. If it is, returns true and the
+    inverse matrix.
+    """
+    function is_invertible_with_inverse(A::CuModMatrix; debug::Bool = false)
+        F = _setup_PLUQ(A)
+        if !_is_invertible(F)
+            return false, nothing
+        end
+        A_inv = inv(A)
+        if debug
+            println("A")
+            display(A)
+            println("A_inv")
+            display(A_inv)
+            println("A * A_inv")
+            display(A * A_inv)
+        end
+        return true, A_inv
     end
-    A_inv = inv(A)
-    if debug
-        println("A")
-        display(A)
-        println("A_inv")
-        display(A_inv)
-        println("A * A_inv")
-        display(A * A_inv)
-    end
-    return true, A_inv
 end
 
 function inverse_permutation(P::Vector{Int})

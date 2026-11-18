@@ -101,7 +101,10 @@ changes while the suite is running.
 
 ## Comparison and regression policy
 
-The v0.3.2 capture is the primary reference; v0.3.1 is a secondary reference.
+The v0.3.1 capture is the primary reference; v0.3.2 is a secondary reference.
+The goal is no regressions from v0.3.1 in correctness, runtime, and allocations.
+The default 10% slowdown flag is a screening threshold, not an acceptance budget;
+smaller suspected slowdowns and allocation growth also require investigation.
 The comparison intentionally permits the target package path, source commit,
 dirty-source hash, and package version to differ. It requires the Julia,
 CUDA.jl, BenchmarkTools, CUDA runtime/driver, GPU, preference and launch
