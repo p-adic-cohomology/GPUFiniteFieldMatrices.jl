@@ -319,7 +319,7 @@ function pluq_rect_panel_fused_kernel!(
         # rows, which is contiguous in Julia/CUDA column-major matrices.
         local_row = m + Int32(1)
         row = k + tid - Int32(1)
-        while row <= m
+        while row <= kend
             if _pluq_mod_t(A[row, k], N) != zero(eltype(A))
                 local_row = min(local_row, row)
             end
