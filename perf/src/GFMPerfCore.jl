@@ -6,6 +6,7 @@ using SHA
 using Statistics
 
 export CaseSpec,
+    PLUQ_TOTAL_CONTRACT,
     quick_cases,
     full_cases,
     case_id,
@@ -18,6 +19,7 @@ export CaseSpec,
 
 const RUN_SCHEMA = 2
 const COMPARISON_SCHEMA = 1
+const PLUQ_TOTAL_CONTRACT = "pluq-total-materialized-factors-v1"
 
 struct CaseSpec
     group::String
@@ -79,7 +81,7 @@ function _base_cases()
             low_modulus = 101, high_modulus = 1, seed = 509, target = "current-only"))
     end
     push!(cases, CaseSpec("inverse-pluq", "inv", "Float64", (8, 8); seed = 601))
-    push!(cases, CaseSpec("inverse-pluq", "pluq", "Float64", (8, 8); seed = 607))
+    push!(cases, CaseSpec("inverse-pluq", PLUQ_TOTAL_CONTRACT, "Float64", (8, 8); seed = 607))
     return cases
 end
 

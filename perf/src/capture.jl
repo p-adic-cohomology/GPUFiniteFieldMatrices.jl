@@ -3,6 +3,78 @@ const DEFAULT_SECONDS = 2.0
 const DEFAULT_WARMUPS = 3
 const DEFAULT_MODULUS = 101
 
+_measurement_contract(c::CaseSpec) = c.group == "inverse-pluq" && c.operation == GFMPerfCore.PLUQ_TOTAL_CONTRACT ?
+    GFMPerfCore.PLUQ_TOTAL_CONTRACT : "public-operation-v1"
+
+function _select_pluq_api(package = GPUFiniteFieldMatrices)
+    if isdefined(package, :pluq)
+        return (:current, getfield(package, :pluq))
+    elseif isdefined(package, :pluq_gpu_kernel)
+        return (:legacy, getfield(package, :pluq_gpu_kernel))
+    end
+    return (nothing, nothing)
+end
+
+function _materialized_pluq_runner(api, pluq_call, A, factors, permutations, rank)
+    if api === :current
+        return () -> begin
+            F = pluq_call(A)
+            L = F.L
+            U = F.U
+            factors[] = (L, U)
+            permutations[] = (F.p, F.q)
+            rank[] = F.rank
+            nothing
+        end
+    elseif api === :legacy
+        return () -> begin
+            U, L, row_swaps, column_swaps = pluq_call(A)
+            factors[] = (L, U)
+            permutations[] = (row_swaps, column_swaps)
+            rank[] = nothing
+            nothing
+        end
+    end
+    throw(ArgumentError("unknown PLUQ API representation: $api"))
+end
+
+function _pluq_permutation_is_identity(api, permutation_data, n)
+    permutation_data isa Tuple && length(permutation_data) == 2 || return false
+    if api === :current
+        p, q = permutation_data
+        return length(p) == n && length(q) == n &&
+            all(p[i] == i && q[i] == i for i in 1:n)
+    elseif api === :legacy
+        row_swaps, column_swaps = permutation_data
+        return isempty(row_swaps) && isempty(column_swaps)
+    end
+    return false
+end
+
+function _stored_modulus(A)
+    if isdefined(GPUFiniteFieldMatrices, :modulus)
+        modulus_fn = getfield(GPUFiniteFieldMatrices, :modulus)
+        applicable(modulus_fn, A) && return Int(modulus_fn(A))
+    end
+    hasfield(typeof(A), :N) && return Int(getfield(A, :N))
+    throw(ArgumentError("no modulus accessor is available for $(typeof(A))"))
+end
+
+function _cpu_pluq_product_matches(L, U, A, modulus)
+    size(L, 2) == size(U, 1) || return false
+    size(L, 1) == size(A, 1) && size(U, 2) == size(A, 2) || return false
+    big_modulus = BigInt(modulus)
+    big_modulus > 0 || return false
+    for j in axes(A, 2), i in axes(A, 1)
+        product = BigInt(0)
+        for k in axes(L, 2)
+            product += BigInt(L[i, k]) * BigInt(U[k, j])
+        end
+        mod(product, big_modulus) == mod(BigInt(A[i, j]), big_modulus) || return false
+    end
+    return true
+end
+
 _type(c::CaseSpec) = c.dtype == "Float32" ? Float32 : Float64
 
 function _git_output(repo, args...)
@@ -432,7 +504,17 @@ function _make_case(c::CaseSpec, role)
             end
             A = _typed_cumod(T, ah, N)
             result = Ref{Any}(nothing)
-            runner = op == "inv" ? (() -> (result[] = inv(A))) : (() -> (result[] = GPUFiniteFieldMatrices.pluq(A)))
+            if op == "inv"
+                runner = () -> (result[] = inv(A))
+            else
+                api, pluq_call = _select_pluq_api()
+                isnothing(api) && return _unavailable("package revision provides no public PLUQ entry point")
+                factors = Ref{Any}(nothing)
+                permutations = Ref{Any}(nothing)
+                rank = Ref{Any}(nothing)
+                result = (factors = factors, permutations = permutations, rank = rank)
+                runner = _materialized_pluq_runner(api, pluq_call, A, factors, permutations, rank)
+            end
             validate = () -> begin
                 runner()
                 CUDA.synchronize()
@@ -445,13 +527,26 @@ function _make_case(c::CaseSpec, role)
                     ok = size(got) == size(expected) && all(BigInt(got[i]) == expected[i] for i in eachindex(expected))
                     return ok, ok ? "diagonal modular inverse oracle passed" : "inverse oracle mismatch"
                 end
-                F = result[]
-                hasproperty(F, :L) && hasproperty(F, :U) || return false, "PLUQ result lacks L/U factors"
-                got = _host(F.L * F.U)
-                identity_p = hasproperty(F, :p) && collect(F.p) == collect(1:n)
-                identity_q = hasproperty(F, :q) && collect(F.q) == collect(1:n)
-                ok = identity_p && identity_q && got == ah
-                return ok, ok ? "pivot-free PLUQ factorization oracle passed" : "PLUQ factorization mismatch"
+                factor_pair = result.factors[]
+                isnothing(factor_pair) && return false, "PLUQ result lacks materialized L/U factors"
+                L, U = factor_pair
+                size(A) == (n, n) || return false, "PLUQ input dimensions do not match the fixture"
+                size(L) == (n, n) && size(U) == (n, n) ||
+                    return false, "PLUQ materialized factor dimensions do not match the fixture"
+                _stored_modulus(A) == N || return false, "PLUQ input modulus does not match the fixture"
+                _stored_modulus(L) == N && _stored_modulus(U) == N ||
+                    return false, "PLUQ materialized factor moduli do not match the input"
+                _pluq_permutation_is_identity(api, result.permutations[], n) ||
+                    return false, "pivot-free fixture returned non-identity PLUQ permutations"
+                !isnothing(result.rank[]) && result.rank[] != n &&
+                    return false, "PLUQ rank does not match the full-rank fixture"
+                input_ok = _host(A) == ah
+                input_ok || return false, "PLUQ changed its input matrix"
+                Lh = _host(L)
+                Uh = _host(U)
+                ok = _cpu_pluq_product_matches(Lh, Uh, ah, N)
+                return ok, ok ? "independent BigInt modular PLUQ oracle passed; factors materialized" :
+                    "independent BigInt modular PLUQ oracle mismatch"
             end
             return (status = "ready", reason = "", runner = runner, reset = () -> nothing,
                 validate = validate, geometry = Dict("A" => _geometry(A)))
@@ -584,7 +679,8 @@ function _case_record(c, built, cuda_ok, role, samples, seconds, warmups)
         "group" => c.group, "operation" => c.operation, "dtype" => c.dtype,
         "dims" => c.dims, "modulus" => c.modulus, "low_modulus" => c.low_modulus,
         "high_modulus" => c.high_modulus, "layout" => c.layout, "seed" => c.seed,
-        "target" => c.target), "geometry" => built.geometry,
+        "target" => c.target), "measurement_contract" => _measurement_contract(c),
+        "geometry" => built.geometry,
         "correctness" => nothing, "correctness_detail" => "not run",
         "times_ns" => Int[], "gctimes_ns" => Int[],
         "cpu_alloc_bytes" => nothing, "cpu_alloc_count" => nothing,
@@ -623,7 +719,9 @@ function _case_record(c, built, cuda_ok, role, samples, seconds, warmups)
         base["gpu_alloc_accounting"] = gpu.raw
         base["actual_samples"] = length(trial.times)
         base["status"] = "ok"
-        base["detail"] = "correctness oracle passed; public operation timed with CUDA synchronization"
+        base["detail"] = c.operation == GFMPerfCore.PLUQ_TOTAL_CONTRACT ?
+            "independent modular oracle passed; total PLUQ with materialized L/U timed with CUDA synchronization" :
+            "correctness oracle passed; public operation timed with CUDA synchronization"
     catch err
         base["status"] = err isa MethodError ? "unsupported" : "failed"
         base["detail"] = sprint(showerror, err)
@@ -674,6 +772,8 @@ function capture(label; suite = :quick, groups = nothing, case_ids = nothing,
     policy = Dict{String,Any}("samples_requested" => samples, "seconds_per_case" => seconds,
         "warmups_per_case" => warmups, "evals_per_sample" => 1,
         "timer" => "BenchmarkTools host wall time with CUDA.@sync",
+        "operation_contracts" => Dict(case_id(c) => _measurement_contract(c) for c in all_cases
+            if _measurement_contract(c) != "public-operation-v1"),
         "setup" => "mutable output restore and CUDA synchronization outside timed sample")
     repo = _repo_for(dirname(dirname(pathof(GPUFiniteFieldMatrices))))
     before = _metadata(repo, role, suite, policy)

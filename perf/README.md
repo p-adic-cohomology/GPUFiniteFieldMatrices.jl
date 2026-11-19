@@ -171,6 +171,39 @@ that affects the loaded package layout. Use the same harness revision and
 measurement settings for both baselines and development. If you edit the
 harness itself, recapture both baselines in fresh processes before comparing.
 
+### Focused total PLUQ recapture
+
+The existing diagonal fixture case ID is
+`group=inverse-pluq|op=pluq-total-materialized-factors-v1|dtype=Float64|dims=8x8|mod=101|split=none|layout=package-default|seed=607`.
+
+In separate fresh Julia processes, use the same updated harness to capture
+this ID from the v0.3.1 and current environments with matching settings:
+
+```julia
+# In a fresh v0.3.1 process:
+pluq_case_id = "group=inverse-pluq|op=pluq-total-materialized-factors-v1|dtype=Float64|dims=8x8|mod=101|split=none|layout=package-default|seed=607"
+baseline_pluq = GFMPerf.capture("baseline-031-pluq-total-001";
+    suite=:quick, case_ids=[pluq_case_id], role="baseline-v0.3.1",
+    samples=20, seconds=2, warmups=3)
+
+# After starting a fresh current process, recreate the case ID and capture:
+pluq_case_id = "group=inverse-pluq|op=pluq-total-materialized-factors-v1|dtype=Float64|dims=8x8|mod=101|split=none|layout=package-default|seed=607"
+current_pluq = GFMPerf.capture("current-pluq-total-001";
+    suite=:quick, case_ids=[pluq_case_id], role="current",
+    samples=20, seconds=2, warmups=3)
+
+# Rehydrate paths in this process and compare the paired captures:
+repo_root = pwd()
+baseline_pluq_path = joinpath(repo_root, "perf", "results", "baseline-031-pluq-total-001")
+current_pluq_path = joinpath(repo_root, "perf", "results", "current-pluq-total-001")
+comparison_pluq = GFMPerf.compare(current_pluq_path, baseline_pluq_path)
+```
+
+Run each capture in its named environment and process, and rehydrate the saved
+paths before comparing after a restart.
+Do not compare either new capture with old PLUQ rows: the case ID and
+measurement contract changed, so recapture both sides with this same harness.
+
 To narrow work, pass `groups=["gemm", "gemv"]`. For the larger opt-in set,
 including 1024 and 5000 square products, pass `suite=:full`. You can change
 `samples`, `seconds`, and `warmups`; use identical values across captures.

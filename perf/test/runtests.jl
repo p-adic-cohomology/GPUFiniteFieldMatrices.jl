@@ -2,6 +2,22 @@ using Test
 using GFMPerf
 using GFMPerf.GFMPerfCore
 
+struct TrackedPluqResult
+    factor_reads::Base.RefValue{Int}
+    L::Matrix{Int}
+    U::Matrix{Int}
+    p::Vector{Int}
+    q::Vector{Int}
+    rank::Int
+end
+
+function Base.getproperty(result::TrackedPluqResult, name::Symbol)
+    if name === :L || name === :U
+        getfield(result, :factor_reads)[] += 1
+    end
+    return getfield(result, name)
+end
+
 function synthetic_run(label; package_version = "0.3.2", package_path = "/variant/package",
         commit = "a", cuda = "5.11.3", gpu = "NVIDIA test fixture", deps = Dict("CUDA" => cuda),
         samples = [100, 101, 99, 100, 100], correctness = true, status = "ok", valid = true)
@@ -61,6 +77,63 @@ end
     @test any(c -> c.group == "gemm-padding" && c.dims == [65, 65, 65], full)
     @test any(c -> c.group == "gemm-scale" && c.dims == [5000, 5000, 5000], full)
     @test any(c -> c.target == "current-only" && c.dtype == "Float32", quick)
+    pluq_case = only(filter(c -> c.group == "inverse-pluq" && c.operation == PLUQ_TOTAL_CONTRACT, quick))
+    @test occursin("op=pluq-total-materialized-factors-v1", case_id(pluq_case))
+    @test GFMPerf._measurement_contract(pluq_case) == PLUQ_TOTAL_CONTRACT
+end
+
+@testset "total PLUQ materialized-factor adapter" begin
+    fake_current = Module(:FakeCurrentPluqApi)
+    Core.eval(fake_current, :(pluq(A) = A))
+    Core.eval(fake_current, :(pluq_gpu_kernel(A) = error("current API should win")))
+    api, call = GFMPerf._select_pluq_api(fake_current)
+    @test api == :current
+    @test call(:value) == :value
+
+    fake_legacy = Module(:FakeLegacyPluqApi)
+    Core.eval(fake_legacy, :(pluq_gpu_kernel(A) = A))
+    api, call = GFMPerf._select_pluq_api(fake_legacy)
+    @test api == :legacy
+    @test call(:value) == :value
+    @test first(GFMPerf._select_pluq_api(Module(:NoPluqApi))) === nothing
+
+    L = [1 0; 0 1]
+    U = [2 0; 0 3]
+    factor_reads = Ref(0)
+    current = TrackedPluqResult(factor_reads, L, U, [1, 2], [1, 2], 2)
+    factors = Ref{Any}(nothing)
+    permutations = Ref{Any}(nothing)
+    rank = Ref{Any}(nothing)
+    calls = Ref(0)
+    runner = GFMPerf._materialized_pluq_runner(:current,
+        _ -> (calls[] += 1; current), nothing, factors, permutations, rank)
+    runner()
+    @test calls[] == 1
+    @test factor_reads[] == 2 # L and U are extracted before the timed runner returns.
+    @test factors[] == (L, U)
+    @test permutations[] == ([1, 2], [1, 2])
+    @test rank[] == 2
+
+    legacy_factors = Ref{Any}(nothing)
+    legacy_permutations = Ref{Any}(nothing)
+    legacy_rank = Ref{Any}(nothing)
+    legacy_runner = GFMPerf._materialized_pluq_runner(:legacy,
+        _ -> (calls[] += 1; (U, L, Int[], Int[])), nothing,
+        legacy_factors, legacy_permutations, legacy_rank)
+    legacy_runner()
+    @test calls[] == 2
+    @test legacy_factors[] == (L, U)
+    @test legacy_permutations[] == (Int[], Int[])
+    @test legacy_rank[] === nothing
+
+    diagonal = [2 0; 0 3]
+    @test GFMPerf._cpu_pluq_product_matches(L, U, diagonal, 101)
+    @test !GFMPerf._cpu_pluq_product_matches(L, U, [2 1; 0 3], 101)
+    @test GFMPerf._cpu_pluq_product_matches(L, U, diagonal, 0) == false
+    @test GFMPerf._pluq_permutation_is_identity(:current, ([1, 2], [1, 2]), 2)
+    @test !GFMPerf._pluq_permutation_is_identity(:current, ([2, 1], [1, 2]), 2)
+    @test GFMPerf._pluq_permutation_is_identity(:legacy, (Int[], Int[]), 2)
+    @test !GFMPerf._pluq_permutation_is_identity(:legacy, ([(1, 2)], Int[]), 2)
 end
 
 @testset "constructor and storage adapters for the loaded package" begin
@@ -133,6 +206,14 @@ end
     @test !compare_runs(synthetic_run("new-gpu"; gpu = "other GPU"), base)["compatible"]
     @test !compare_runs(synthetic_run("new-dep"; deps = Dict("CUDA" => "5.11.3", "Foo" => "2.0")), base)["compatible"]
     @test !compare_runs(synthetic_run("mixed-source"; valid = false), base)["compatible"]
+
+    changed_contract = synthetic_run("changed-contract")
+    changed_contract["measurement_policy"] = Dict{String,Any}(changed_contract["measurement_policy"])
+    changed_contract["measurement_policy"]["operation_contracts"] =
+        Dict("pluq-fixture" => "pluq-total-materialized-factors-v1")
+    incompatible_contract = compare_runs(changed_contract, base)
+    @test !incompatible_contract["compatible"]
+    @test haskey(incompatible_contract["compatibility_differences"], "measurement_policy")
 
     unsupported = compare_runs(synthetic_run("unsupported"; status = "unsupported"), base)
     @test only(unsupported["rows"])["status"] == "not-comparable"

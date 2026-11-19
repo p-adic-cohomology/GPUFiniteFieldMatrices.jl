@@ -44,6 +44,29 @@ The quick suite includes:
 - Shared-semantic Float64 Karatsuba GEMM/GEMV cases, current-only Float32
   Karatsuba cases, and a small diagonal inverse/PLUQ group.
 
+The diagonal PLUQ case uses the operation and contract ID
+`pluq-total-materialized-factors-v1`. Its primary timing is the total public
+factorization call plus usable, materialized `L` and `U` outputs. On current
+revisions the timed runner calls `pluq(A)` and extracts `F.L` and `F.U` inside
+the runner; on v0.3.1 it calls the complete public `pluq_gpu_kernel(A)` and
+keeps its returned factors. Neither side recomputes factors. Input copies and
+allocations performed by those public operations, current factor extraction,
+and GPU completion under `CUDA.@sync` are included.
+
+The existing 8×8 diagonal fixture is pivot-free. Validation checks current
+gather permutations are identity or legacy row/column swap stacks are empty;
+it does not normalize arbitrary permutations. The timed runner retains each
+API's raw permutation outputs by reference; it performs no conversion. The
+identity check is validation-only, outside timed samples. The oracle checks
+factor dimensions and moduli, input preservation, and `L*U == A` with
+independent host-side BigInt modular arithmetic after the timed call. This
+adapter makes no claim about general pivoted factors.
+
+The contract appears in the PLUQ case ID, each outcome row, and the stored
+measurement policy. Old packed-factorization-only captures have a different
+case ID, harness fingerprint, and/or policy and are not comparable. Recapture
+both revisions with the same updated harness before comparing them.
+
 The full suite adds 31/32/33 and 63/64/65 tile-boundary sizes, 127/128/129 and
 256/1024 square cases, and opt-in 5000-square GEMM. Full workloads are not part
 of an ordinary edit loop. Group and case-ID filters allow focused captures.
@@ -151,5 +174,6 @@ and a readable text report. All commands and REPL snippets are documented in
 Julia syntax, package imports, setup and result/comparison logic can be checked
 without a functional GPU. `CUDA.functional() == false` yields explicit
 unavailable rows and never substitutes CPU timings. GPU correctness and timing
-must be exercised on the intended CUDA Linux host; this repository change does
-not claim a local GPU result.
+must be exercised on the intended CUDA Linux host; host-only adapter/oracle
+checks do not establish GPU correctness or performance. This repository change
+does not claim a local GPU result.
