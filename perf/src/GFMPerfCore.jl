@@ -111,15 +111,14 @@ function hotpath_cases()
     cases = CaseSpec[]
     addition_shapes = ((31, 33), (64, 64), (256, 256), (257, 255))
     for dtype in ("Float32", "Float64"), dims in addition_shapes
-        seed = 1201 + 3 * dims[1] + dims[2]
+        seed = 307 + sum(dims)
         push!(cases, CaseSpec("hotpath-addition", "add!", dtype, dims; seed))
     end
     for dtype in ("Float32", "Float64"), n in (32, 128, 256)
         push!(cases, CaseSpec("hotpath-square-gemv", "mul!", dtype, (n, n);
-            seed = 2201 + n))
+            seed = 211 + 2 * n))
     end
-    # Keep this literal aligned with child4's GFMPerfCore.PLUQ_TOTAL_CONTRACT.
-    push!(cases, CaseSpec("inverse-pluq", "pluq-total-materialized-factors-v1", "Float64", (8, 8);
+    push!(cases, CaseSpec("inverse-pluq", PLUQ_TOTAL_CONTRACT, "Float64", (8, 8);
         seed = 607))
     return cases
 end
@@ -128,7 +127,7 @@ end
 function addition_diagnostic_cases()
     cases = CaseSpec[]
     for dtype in ("Float32", "Float64"), dims in ((31, 33), (64, 64), (256, 256), (257, 255))
-        seed = 1201 + 3 * dims[1] + dims[2]
+        seed = 307 + sum(dims)
         push!(cases, CaseSpec("hotpath-addition-diagnostic", "+", dtype, dims; seed))
     end
     return cases

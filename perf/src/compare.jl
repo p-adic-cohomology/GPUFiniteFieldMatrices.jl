@@ -249,6 +249,23 @@ function _cycle_case_record(cycle_index, runs, pair_rows, case_id)
         "cycle_change_percent" => isnothing(cycle_ratio) ? nothing : 100 * (cycle_ratio - 1))
 end
 
+function _review_invalid_run_details(cycles)
+    details = String[]
+    roles = (("baseline_before", "baseline_before_run"), ("current", "current_run"),
+        ("baseline_after", "baseline_after_run"))
+    for cycle in cycles, (role, run_key) in roles
+        outcome = cycle["runs"][role]
+        correctness = get(outcome, "correctness", nothing)
+        if get(outcome, "status", "unknown") != "ok" || correctness !== true
+            push!(details, "cycle $(cycle["cycle"])/$role ($(cycle[run_key])): " *
+                "status=$(get(outcome, "status", "unknown")), correctness=$(correctness), " *
+                "detail=$(get(outcome, "detail", "")), " *
+                "correctness_detail=$(get(outcome, "correctness_detail", ""))")
+        end
+    end
+    return details
+end
+
 function _bracketed_case_status(cycles; compatible, source_identity_ok)
     pair_rows = [vcat(c["current_vs_baseline_before"], c["current_vs_baseline_after"]) for c in cycles]
     rows = reduce(vcat, pair_rows; init = Dict{String,Any}[])
@@ -302,7 +319,13 @@ function _source_identity(run)
     metadata = run["metadata"]
     fields = ("target_commit", "target_source_hash_before", "target_source_hash_after", "target_dirty")
     all(haskey(metadata, field) for field in fields) || return nothing
-    return Dict{String,Any}(field => metadata[field] for field in fields)
+    identity = Dict{String,Any}(field => metadata[field] for field in fields)
+    known_string(value) = value isa AbstractString && !isempty(strip(value)) &&
+        !(lowercase(strip(value)) in ("unknown", "unavailable", "missing", "none", "null"))
+    all(known_string(identity[field]) for field in fields[1:3]) || return nothing
+    identity["target_dirty"] isa Bool || return nothing
+    identity["target_source_hash_before"] == identity["target_source_hash_after"] || return nothing
+    return identity
 end
 
 function _stable_source_group(runs)
@@ -374,6 +397,8 @@ function review_bracketed_cycles(cycles; label, threshold = 0.0, min_samples = 5
         end
         status, detail, summary = _bracketed_case_status(case_cycles;
             compatible = all_compatible, source_identity_ok)
+        invalid_runs = _review_invalid_run_details(case_cycles)
+        !isempty(invalid_runs) && (detail *= "; " * join(invalid_runs, " | "))
         summary = isnothing(summary) ? Dict{String,Any}() : summary
         push!(records, Dict{String,Any}("case_id" => id, "status" => status, "detail" => detail,
             "cycle_ratio_median" => get(summary, "cycle_ratio_median", nothing),
@@ -408,6 +433,22 @@ function review_bracketed_cycles(cycles; label, threshold = 0.0, min_samples = 5
     end
     for row in records
         println(row["status"], "  ", row["case_id"], "  ", row["detail"])
+    end
+    if !all_compatible
+        for difference in compatibility_differences
+            println("incompatible run  ", difference["run"], "  fields=",
+                join(sort!(collect(keys(difference["differences"]))), ","))
+        end
+    end
+    if !baseline_source_stable || !candidate_source_stable
+        for (name, stable, source_runs) in (("baseline", baseline_source_stable, baseline_runs),
+                ("current", candidate_source_stable, candidate_runs))
+            stable && continue
+            println("source identity unstable  ", name)
+            for (run, identity) in zip(source_runs, name == "baseline" ? baseline_identities : candidate_identities)
+                println("  run=", get(run, "run_dir", "unknown"), "  identity=", identity)
+            end
+        end
     end
     return abspath(target)
 end

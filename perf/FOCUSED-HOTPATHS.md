@@ -1,4 +1,4 @@
-# Focused addition and square GEMV repeats
+# Focused addition, square GEMV, and PLUQ repeats
 
 The opt-in `:hotpaths` suite contains 15 primary cases:
 
@@ -9,9 +9,9 @@ The opt-in `:hotpaths` suite contains 15 primary cases:
 All cases use modulus 101 and deterministic per-case fixtures. Logical and
 physical storage geometry, correctness outcomes, synchronized times, spreads,
 and CPU/GPU allocations are saved for every requested case. The usual
-`quick`/`full` workloads and their identifiers are unchanged, except for
-child4's intentional change of the older PLUQ operation ID to
-`pluq-total-materialized-factors-v1`.
+`quick`/`full` workloads and their identifiers are unchanged, except for the
+PLUQ operation ID change from the earlier packed-factorization-only measurement
+to `pluq-total-materialized-factors-v1`.
 
 Allocating `+` is a separate optional diagnostic suite with the same four
 addition shapes and both element types (eight cases). It does not contribute to
@@ -43,9 +43,10 @@ export GIT_SSL_CAINFO=/etc/pki/tls/certs/ca-bundle.crt
 export JULIA_SSL_CA_ROOTS_PATH=/etc/pki/tls/certs/ca-bundle.crt
 ```
 
-Use the same Julia 1.12 environment for all nine captures. Julia 1.12.7 was
-used for local validation. From the repository root, start the first baseline
-process with:
+Use the same Julia 1.12 patch version for all nine captures; the compatibility
+check compares the full `VERSION` string. Julia 1.12.7 was used for local
+validation, but the snippets do not require that specific patch. From the
+repository root, start the first baseline process with:
 
 ```sh
 julia --startup-file=no --project=.perf-regressions/envs/v0.3.1
@@ -62,8 +63,8 @@ using GFMPerf
 @assert VERSION.major == 1 && VERSION.minor == 12
 VERSION # record the exact Julia patch version
 @assert CUDA.functional()
-@assert pathof(GPUFiniteFieldMatrices) == joinpath(pwd(), ".perf-regressions/worktrees/v0.3.1/src/GPUFiniteFieldMatrices.jl")
-@assert Base.active_project() == joinpath(pwd(), ".perf-regressions/envs/v0.3.1/Project.toml")
+@assert realpath(pathof(GPUFiniteFieldMatrices)) == realpath(joinpath(pwd(), ".perf-regressions/worktrees/v0.3.1/src/GPUFiniteFieldMatrices.jl"))
+@assert realpath(Base.active_project()) == realpath(joinpath(pwd(), ".perf-regressions/envs/v0.3.1/Project.toml"))
 GFMPerf.capture("hotpaths-031-before-1"; suite=:hotpaths,
     role="baseline-v0.3.1", samples=100, seconds=5, warmups=10)
 ```
@@ -85,8 +86,8 @@ using GFMPerf
 @assert VERSION.major == 1 && VERSION.minor == 12
 VERSION # record the exact Julia patch version
 @assert CUDA.functional()
-@assert pathof(GPUFiniteFieldMatrices) == joinpath(pwd(), "src/GPUFiniteFieldMatrices.jl")
-@assert Base.active_project() == joinpath(pwd(), ".perf-regressions/envs/current/Project.toml")
+@assert realpath(pathof(GPUFiniteFieldMatrices)) == realpath(joinpath(pwd(), "src/GPUFiniteFieldMatrices.jl"))
+@assert realpath(Base.active_project()) == realpath(joinpath(pwd(), ".perf-regressions/envs/current/Project.toml"))
 GFMPerf.capture("hotpaths-current-1"; suite=:hotpaths,
     role="current", samples=100, seconds=5, warmups=10)
 ```
@@ -143,6 +144,13 @@ The JSON records each run's status, detail,
 correctness, median, spread, and allocation data, plus all six pair medians in
 microseconds, ratios, percentage changes, spreads, and CPU/GPU allocation
 deltas.
+
+For a single flagged primary case, use the exact case ID shown in the review
+and capture it from each source variant in its own fresh process with
+`GFMPerf.capture(...; suite=:hotpaths, case_ids=[case_id], ...)`. The legacy
+`GFMPerf.rerun_flagged` helper selects from the `quick`/`full` catalogues and
+does not include this opt-in suite. Use `suite=:addition_diagnostic` for one
+of the separate allocating-`+` diagnostic cases.
 
 Captures include source and harness hashes. If harness code changes, capture
 both source variants again with the same updated harness before reviewing;

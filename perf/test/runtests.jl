@@ -124,9 +124,21 @@ end
     @test count(c -> c.operation == "pluq-total-materialized-factors-v1" && c.dtype == "Float64" &&
         c.dims == [8, 8] && c.seed == 607 && c.modulus == 101, hotpaths) == 1
     @test length(case_id.(hotpaths)) == length(unique(case_id.(hotpaths)))
+    for c in filter(c -> c.group == "hotpath-addition", hotpaths)
+        @test c.seed == 307 + sum(c.dims)
+        diagnostic = only(filter(d -> d.dtype == c.dtype && d.dims == c.dims, addition_diagnostics))
+        @test diagnostic.seed == c.seed
+    end
+    for c in filter(c -> c.group == "hotpath-square-gemv", hotpaths)
+        @test c.seed == 211 + sum(c.dims)
+    end
     @test length(addition_diagnostics) == 8
     @test all(c -> c.group == "hotpath-addition-diagnostic" && c.operation == "+", addition_diagnostics)
     @test isempty(intersect(Set(case_id.(hotpaths)), Set(case_id.(addition_diagnostics))))
+    @test_throws ArgumentError GFMPerf.capture("unknown-hotpath-case"; suite = :hotpaths,
+        case_ids = ["unknown-case"], output_dir = mktempdir())
+    @test_throws ArgumentError GFMPerf.capture("empty-hotpath-selection"; suite = :hotpaths,
+        groups = ["unknown-group"], output_dir = mktempdir())
 
 end
 
@@ -384,6 +396,52 @@ end
         changed_report = GFMPerf.JSON3.read(read(joinpath(changed_dir, "review.json"), String), Dict{String,Any})
         @test !changed_report["source_identity"]["candidate_stable"]
         @test only(changed_report["rows"])["status"] == "incompatible-source-identity"
+
+        for (label, source_edit) in (("unknown-source-identity", :unknown), ("missing-source-identity", :missing))
+            unknown_source = fixture_cycles(joinpath(dir, label))
+            path = joinpath(unknown_source[1][1], "run.json")
+            run = GFMPerf.JSON3.read(read(path, String), Dict{String,Any})
+            if source_edit == :unknown
+                run["metadata"]["target_commit"] = "unknown"
+            else
+                delete!(run["metadata"], "target_commit")
+            end
+            write_json(path, run)
+            unknown_dir = GFMPerf.review_bracketed_cycles(unknown_source; label,
+                output_dir = joinpath(dir, "reviews"))
+            unknown_report = GFMPerf.JSON3.read(read(joinpath(unknown_dir, "review.json"), String), Dict{String,Any})
+            @test !unknown_report["source_identity"]["baseline_stable"]
+            @test only(unknown_report["rows"])["status"] == "incompatible-source-identity"
+        end
+
+        failed_capture = fixture_cycles(joinpath(dir, "failed-capture"))
+        failed_path = joinpath(failed_capture[2][2], "run.json")
+        failed_run = GFMPerf.JSON3.read(read(failed_path, String), Dict{String,Any})
+        failed_case = only(failed_run["cases"])
+        failed_case["status"] = "failed"
+        failed_case["correctness"] = false
+        failed_case["detail"] = "injected GPU kernel failure"
+        failed_case["correctness_detail"] = "host oracle did not complete"
+        write_json(failed_path, failed_run)
+        failed_dir = GFMPerf.review_bracketed_cycles(failed_capture; label = "failed-capture-review",
+            output_dir = joinpath(dir, "reviews"))
+        failed_review_row = only(GFMPerf.JSON3.read(read(joinpath(failed_dir, "review.json"), String), Dict{String,Any})["rows"])
+        @test failed_review_row["status"] == "not-comparable"
+        @test occursin("cycle 2/current", failed_review_row["detail"])
+        @test occursin("injected GPU kernel failure", failed_review_row["detail"])
+        @test occursin("correctness=false", failed_review_row["detail"])
+
+        missing_case_capture = fixture_cycles(joinpath(dir, "missing-case"))
+        missing_path = joinpath(missing_case_capture[1][1], "run.json")
+        missing_run = GFMPerf.JSON3.read(read(missing_path, String), Dict{String,Any})
+        empty!(missing_run["cases"])
+        write_json(missing_path, missing_run)
+        missing_dir = GFMPerf.review_bracketed_cycles(missing_case_capture; label = "missing-case-review",
+            output_dir = joinpath(dir, "reviews"))
+        missing_row = only(GFMPerf.JSON3.read(read(joinpath(missing_dir, "review.json"), String), Dict{String,Any})["rows"])
+        @test missing_row["status"] == "missing-case"
+        @test occursin("cycle 1/baseline_before", missing_row["detail"])
+        @test occursin("case not present in capture", missing_row["detail"])
 
         duplicate = copy(cycles)
         duplicate[2] = (duplicate[1][1], duplicate[2][2], duplicate[2][3])

@@ -95,7 +95,7 @@ function _file_tree_hash(root; paths = nothing)
         try
             split(_git_output(root, "ls-files", "--cached", "--others", "--exclude-standard"), '\n'; keepempty = false)
         catch
-            String[]
+            return "unknown"
         end
     else
         String.(paths)
