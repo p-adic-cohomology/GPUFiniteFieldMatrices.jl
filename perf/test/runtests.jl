@@ -20,25 +20,61 @@ end
 
 function synthetic_run(label; package_version = "0.3.2", package_path = "/variant/package",
         commit = "a", cuda = "5.11.3", gpu = "NVIDIA test fixture", deps = Dict("CUDA" => cuda),
-        samples = [100, 101, 99, 100, 100], correctness = true, status = "ok", valid = true)
+        samples = [100, 101, 99, 100, 100], correctness = true, status = "ok", valid = true,
+        source_hash = "source-$commit", source_hash_after = source_hash, harness_hash = "same-harness",
+        case_id = "gemm-fixture", run_dir = "/results/$label")
     metadata = Dict{String,Any}(
         "julia_version" => "1.12.7", "cuda_version" => cuda,
         "benchmarktools_version" => "1.5.0", "cuda_runtime" => "12.6",
         "cuda_driver" => "12060", "gpu_identity" => gpu,
         "cuda_preferences" => Dict("memory_pool" => "default"),
         "launch_settings" => Dict("threads" => "1"),
-        "normalized_dependencies" => deps, "harness_hash" => "same-harness",
+        "normalized_dependencies" => deps, "harness_hash" => harness_hash,
         "target_package_version" => package_version, "target_package_path" => package_path,
-        "target_commit" => commit, "capture_valid" => valid)
+        "target_commit" => commit, "target_dirty" => source_hash != "source-$commit",
+        "target_source_hash_before" => source_hash, "target_source_hash_after" => source_hash_after,
+        "capture_valid" => valid)
     policy = Dict("samples_requested" => 5, "seconds_per_case" => 1.0,
         "warmups_per_case" => 3, "evals_per_sample" => 1)
-    case = Dict{String,Any}("case_id" => "gemm-fixture", "status" => status,
+    case = Dict{String,Any}("case_id" => case_id, "status" => status,
         "correctness" => correctness, "times_ns" => collect(samples),
+        "correctness_detail" => correctness ? "fixture oracle passed" : "fixture oracle failed",
+        "detail" => status == "ok" ? "fixture ready" : "fixture outcome",
         "cpu_alloc_bytes" => 40, "cpu_alloc_count" => 2,
         "gpu_alloc_bytes" => 0, "gpu_alloc_count" => 0)
     return Dict{String,Any}("schema_version" => GFMPerf.GFMPerfCore.RUN_SCHEMA, "run_label" => label,
-        "run_dir" => "/results/$label", "metadata" => metadata,
+        "run_dir" => run_dir, "metadata" => metadata,
         "measurement_policy" => policy, "cases" => [case])
+end
+
+function save_fixture_capture(root, label; samples, kwargs...)
+    path = joinpath(root, label)
+    mkpath(path)
+    run = synthetic_run(label; samples, run_dir = path, kwargs...)
+    write_json(joinpath(path, "run.json"), run)
+    return path
+end
+
+function fixture_cycles(root; current_samples = fill(105, 5), baseline_samples = fill(100, 5),
+        current_samples_by_cycle = fill(current_samples, 3),
+        baseline_before_samples_by_cycle = fill(baseline_samples, 3),
+        baseline_after_samples_by_cycle = fill(baseline_samples, 3),
+        candidate_hashes = fill("candidate-source", 3), baseline_cuda = fill("5.11.3", 3),
+        candidate_cuda = fill("5.11.3", 3))
+    cycles = Tuple{String,String,String}[]
+    for i in 1:3
+        before = save_fixture_capture(root, "before-$i"; samples = baseline_before_samples_by_cycle[i],
+            package_path = "/baseline", package_version = "0.3.1", commit = "baseline-commit",
+            source_hash = "baseline-source", cuda = baseline_cuda[i])
+        current = save_fixture_capture(root, "current-$i"; samples = current_samples_by_cycle[i],
+            package_path = "/current", package_version = "0.3.2", commit = "current-commit",
+            source_hash = candidate_hashes[i], cuda = candidate_cuda[i])
+        after = save_fixture_capture(root, "after-$i"; samples = baseline_after_samples_by_cycle[i],
+            package_path = "/baseline", package_version = "0.3.1", commit = "baseline-commit",
+            source_hash = "baseline-source", cuda = baseline_cuda[i])
+        push!(cycles, (before, current, after))
+    end
+    return cycles
 end
 
 @testset "real CPU BenchmarkTools Trial allocation extraction" begin
@@ -68,6 +104,8 @@ end
 @testset "stable case catalogue" begin
     quick = quick_cases()
     full = full_cases()
+    hotpaths = hotpath_cases()
+    addition_diagnostics = addition_diagnostic_cases()
     ids = case_id.(quick)
     @test !isempty(quick)
     @test length(ids) == length(unique(ids))
@@ -80,6 +118,16 @@ end
     pluq_case = only(filter(c -> c.group == "inverse-pluq" && c.operation == PLUQ_TOTAL_CONTRACT, quick))
     @test occursin("op=pluq-total-materialized-factors-v1", case_id(pluq_case))
     @test GFMPerf._measurement_contract(pluq_case) == PLUQ_TOTAL_CONTRACT
+    @test length(hotpaths) == 15
+    @test count(c -> c.group == "hotpath-addition" && c.operation == "add!", hotpaths) == 8
+    @test count(c -> c.group == "hotpath-square-gemv" && c.operation == "mul!", hotpaths) == 6
+    @test count(c -> c.operation == "pluq-total-materialized-factors-v1" && c.dtype == "Float64" &&
+        c.dims == [8, 8] && c.seed == 607 && c.modulus == 101, hotpaths) == 1
+    @test length(case_id.(hotpaths)) == length(unique(case_id.(hotpaths)))
+    @test length(addition_diagnostics) == 8
+    @test all(c -> c.group == "hotpath-addition-diagnostic" && c.operation == "+", addition_diagnostics)
+    @test isempty(intersect(Set(case_id.(hotpaths)), Set(case_id.(addition_diagnostics))))
+
 end
 
 @testset "total PLUQ materialized-factor adapter" begin
@@ -261,5 +309,85 @@ end
         @test only(confirmation["rows"])["status"] == "confirmed"
         @test only(confirmation["rows"])["independent_pairs"] == 3
         @test_throws ArgumentError GFMPerf.confirm([paths[1], paths[1], paths[2]])
+    end
+end
+
+@testset "bracketed hotpath review uses pair noise and all nine run identities" begin
+    mktempdir() do dir
+        cycles = fixture_cycles(dir)
+        review_dir = GFMPerf.review_bracketed_cycles(cycles; label = "stable-five-percent",
+            output_dir = joinpath(dir, "reviews"))
+        review = GFMPerf.JSON3.read(read(joinpath(review_dir, "review.json"), String), Dict{String,Any})
+        row = only(review["rows"])
+        @test review["threshold_fraction"] == 0.0
+        @test review["compatible_across_all_runs"]
+        @test review["source_identity"]["baseline_stable"]
+        @test review["source_identity"]["candidate_stable"]
+        @test review["independent_repeat_count"] == 3
+        @test row["status"] == "confirmed-slowdown"
+        @test row["cycle_ratio_median"] ≈ 1.05
+        @test all(c -> c["current_vs_baseline_before"]["status"] == "flagged-unconfirmed" &&
+            c["current_vs_baseline_after"]["status"] == "flagged-unconfirmed", row["cycles"])
+        @test first(row["cycles"])["runs"]["current"]["correctness"]
+        @test first(row["cycles"])["current_vs_baseline_before"]["current_median_us"] ≈ 0.105
+        @test isfile(joinpath(review_dir, "review.json"))
+        @test occursin("fresh Julia process", review["fresh_process_assumption"])
+
+        visible = GFMPerf.review_bracketed_cycles(cycles; label = "visible-under-threshold",
+            threshold = 0.10, output_dir = joinpath(dir, "reviews"))
+        visible_report = GFMPerf.JSON3.read(read(joinpath(visible, "review.json"), String), Dict{String,Any})
+        visible_row = only(visible_report["rows"])
+        @test visible_row["status"] == "positive-change-observed"
+        @test first(visible_row["cycles"])["current_vs_baseline_before"]["change_percent"] ≈ 5
+        @test_throws ArgumentError GFMPerf.review_bracketed_cycles(cycles; label = "stable-five-percent",
+            output_dir = joinpath(dir, "reviews"))
+
+        noisy = fixture_cycles(joinpath(dir, "noisy");
+            baseline_samples = [70, 80, 100, 120, 130],
+            current_samples = [74, 84, 105, 126, 137])
+        noisy_dir = GFMPerf.review_bracketed_cycles(noisy; label = "noisy-with-same-medians",
+            output_dir = joinpath(dir, "reviews"))
+        noisy_row = only(GFMPerf.JSON3.read(read(joinpath(noisy_dir, "review.json"), String), Dict{String,Any})["rows"])
+        @test noisy_row["status"] == "positive-change-observed"
+        @test all(c -> c["current_vs_baseline_before"]["status"] == "inconclusive-within-noise" &&
+            c["current_vs_baseline_after"]["status"] == "inconclusive-within-noise", noisy_row["cycles"])
+
+        varying = fixture_cycles(joinpath(dir, "varying");
+            current_samples_by_cycle = [fill(105, 5), fill(105, 5), fill(130, 5)])
+        varying_dir = GFMPerf.review_bracketed_cycles(varying; label = "between-cycle-variation",
+            output_dir = joinpath(dir, "reviews"))
+        varying_row = only(GFMPerf.JSON3.read(read(joinpath(varying_dir, "review.json"), String), Dict{String,Any})["rows"])
+        @test varying_row["status"] == "inconclusive-between-cycle-variation"
+
+        drifting_baseline = fixture_cycles(joinpath(dir, "drifting-baseline");
+            current_samples = fill(130, 5),
+            baseline_before_samples_by_cycle = fill(fill(100, 5), 3),
+            baseline_after_samples_by_cycle = fill(fill(120, 5), 3))
+        drift_dir = GFMPerf.review_bracketed_cycles(drifting_baseline; label = "baseline-bracket-drift",
+            output_dir = joinpath(dir, "reviews"))
+        drift_row = only(GFMPerf.JSON3.read(read(joinpath(drift_dir, "review.json"), String), Dict{String,Any})["rows"])
+        @test drift_row["status"] == "inconclusive-baseline-drift"
+
+        incompatible = fixture_cycles(joinpath(dir, "incompatible");
+            baseline_cuda = ["5.11.3", "6.0.0", "5.11.3"],
+            candidate_cuda = ["5.11.3", "6.0.0", "5.11.3"])
+        incompatible_dir = GFMPerf.review_bracketed_cycles(incompatible; label = "cross-cycle-environment",
+            output_dir = joinpath(dir, "reviews"))
+        incompatible_report = GFMPerf.JSON3.read(read(joinpath(incompatible_dir, "review.json"), String), Dict{String,Any})
+        @test !incompatible_report["compatible_across_all_runs"]
+        @test only(incompatible_report["rows"])["status"] == "incompatible"
+
+        changed_source = fixture_cycles(joinpath(dir, "changed-source");
+            candidate_hashes = ["candidate-source", "candidate-source", "changed-after-cycle-2"])
+        changed_dir = GFMPerf.review_bracketed_cycles(changed_source; label = "candidate-source-drift",
+            output_dir = joinpath(dir, "reviews"))
+        changed_report = GFMPerf.JSON3.read(read(joinpath(changed_dir, "review.json"), String), Dict{String,Any})
+        @test !changed_report["source_identity"]["candidate_stable"]
+        @test only(changed_report["rows"])["status"] == "incompatible-source-identity"
+
+        duplicate = copy(cycles)
+        duplicate[2] = (duplicate[1][1], duplicate[2][2], duplicate[2][3])
+        @test_throws ArgumentError GFMPerf.review_bracketed_cycles(duplicate; label = "duplicate-input",
+            output_dir = joinpath(dir, "reviews"))
     end
 end

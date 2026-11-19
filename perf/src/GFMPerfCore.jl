@@ -9,6 +9,8 @@ export CaseSpec,
     PLUQ_TOTAL_CONTRACT,
     quick_cases,
     full_cases,
+    hotpath_cases,
+    addition_diagnostic_cases,
     case_id,
     summarize_samples,
     compare_runs,
@@ -100,6 +102,34 @@ function full_cases()
     for dtype in ("Float32", "Float64"), n in (127, 128, 129, 256, 1024, 5000)
         _add!(cases, "gemm-scale", ("mul!", "*"), dtype, (n, n, n);
             seed = 907 + n)
+    end
+    return cases
+end
+
+"""Focused in-place addition, square GEMV, and total-materialized PLUQ cases."""
+function hotpath_cases()
+    cases = CaseSpec[]
+    addition_shapes = ((31, 33), (64, 64), (256, 256), (257, 255))
+    for dtype in ("Float32", "Float64"), dims in addition_shapes
+        seed = 1201 + 3 * dims[1] + dims[2]
+        push!(cases, CaseSpec("hotpath-addition", "add!", dtype, dims; seed))
+    end
+    for dtype in ("Float32", "Float64"), n in (32, 128, 256)
+        push!(cases, CaseSpec("hotpath-square-gemv", "mul!", dtype, (n, n);
+            seed = 2201 + n))
+    end
+    # Keep this literal aligned with child4's GFMPerfCore.PLUQ_TOTAL_CONTRACT.
+    push!(cases, CaseSpec("inverse-pluq", "pluq-total-materialized-factors-v1", "Float64", (8, 8);
+        seed = 607))
+    return cases
+end
+
+"""Optional allocating `+` diagnostics at the focused addition shapes."""
+function addition_diagnostic_cases()
+    cases = CaseSpec[]
+    for dtype in ("Float32", "Float64"), dims in ((31, 33), (64, 64), (256, 256), (257, 255))
+        seed = 1201 + 3 * dims[1] + dims[2]
+        push!(cases, CaseSpec("hotpath-addition-diagnostic", "+", dtype, dims; seed))
     end
     return cases
 end

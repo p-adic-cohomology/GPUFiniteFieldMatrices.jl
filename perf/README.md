@@ -56,6 +56,9 @@ as direct dependencies so the documented `Main` imports work. Setup verifies
 that these versions match across variants and repairs missing direct entries in
 an already-owned ready environment without replacing its worktrees or results.
 
+For a focused fresh-process repeat workflow covering in-place addition and square
+GEMV, see [FOCUSED-HOTPATHS.md](FOCUSED-HOTPATHS.md).
+
 Before capturing, check the driver and selected device in Julia:
 
 ```julia

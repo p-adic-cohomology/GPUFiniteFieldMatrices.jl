@@ -420,7 +420,7 @@ function _make_case(c::CaseSpec, role)
             end
             return (status = "ready", reason = "", runner = runner, reset = reset,
                 validate = validate, geometry = Dict("A" => _geometry(A), "B" => _geometry(B), "C" => _geometry(C)))
-        elseif c.group == "gemv"
+        elseif c.group in ("gemv", "hotpath-square-gemv")
             m, n = c.dims
             ah = _cpu_matrix(rng, T, m, n, N)
             xh = _cpu_vector(rng, T, n, N)
@@ -445,7 +445,7 @@ function _make_case(c::CaseSpec, role)
             end
             return (status = "ready", reason = "", runner = runner, reset = reset,
                 validate = validate, geometry = Dict("A" => _geometry(A), "x" => _geometry(x), "y" => _geometry(y)))
-        elseif c.group == "elementwise"
+        elseif c.group in ("elementwise", "hotpath-addition", "hotpath-addition-diagnostic")
             m, n = c.dims
             ah = _cpu_matrix(rng, T, m, n, N)
             bh = _cpu_matrix(rng, T, m, n, N)
@@ -756,7 +756,17 @@ function capture(label; suite = :quick, groups = nothing, case_ids = nothing,
     warmups >= 0 || throw(ArgumentError("warmups must be nonnegative"))
     label = String(label)
     occursin(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", label) || throw(ArgumentError("label must use letters, digits, dot, underscore, or dash"))
-    all_cases = suite == :quick ? quick_cases() : suite == :full ? full_cases() : throw(ArgumentError("suite must be :quick or :full"))
+    all_cases = if suite == :quick
+        quick_cases()
+    elseif suite == :full
+        full_cases()
+    elseif suite == :hotpaths
+        hotpath_cases()
+    elseif suite == :addition_diagnostic
+        addition_diagnostic_cases()
+    else
+        throw(ArgumentError("suite must be :quick, :full, :hotpaths, or :addition_diagnostic"))
+    end
     if !isnothing(groups)
         wanted = Set(String.(groups))
         all_cases = filter(c -> c.group in wanted, all_cases)
