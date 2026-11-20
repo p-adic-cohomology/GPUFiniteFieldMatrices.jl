@@ -20,6 +20,19 @@ We currently implement:
     the inverse algorithms and their modulus contract.
 - `KaratsubaMatrix`, a matrix type implementing Karatsuba matrix multiplication. This also supports addition, subtraction, and other basic operations.
 
+## Focused hot-path performance run
+
+With Julia 1.12 and an existing functional CUDA allocation, run
+`./perf/run_hotpaths.sh` from the checkout. It prepares the benchmark
+environments, then runs nine fresh-process baseline/current captures at fixed
+100-sample, 5-second, 10-warmup settings and writes the existing bracketed
+review. Use `--skip-setup` for prepared environments or `--prefix NAME` for a
+safe output prefix. Captures, review, and per-phase logs are kept under
+`perf/results/`; the runner stops on invalid captures or failed phases and
+preserves partial output. It does not submit GPU jobs or measure CPU fallbacks.
+See [the focused hot-path guide](perf/FOCUSED-HOTPATHS.md) for details and the
+manual sequence.
+
 ## Getting Started
 
 #### Installing for the first time

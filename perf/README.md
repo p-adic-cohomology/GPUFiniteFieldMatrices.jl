@@ -15,6 +15,30 @@ This branch includes main at `47d164a31a3e8c01b2adae6d293feb68468c2c46`
 (the PR #85 merge, 2026-11-18). Captures record the actual checkout commit and
 source fingerprint, so the unchanged package version cannot hide stale source.
 
+## One-command focused hot-path run
+
+With Julia 1.12 and an existing functional CUDA allocation, run this from the
+checkout:
+
+```sh
+./perf/run_hotpaths.sh
+```
+
+By default it runs `perf/setup.sh`, then launches nine fresh Julia processes
+for three baseline → current → baseline cycles. Every capture uses 100 samples,
+5 seconds, and 10 warmups; the existing reviewer writes `review.json` after all
+nine captures pass their saved case oracles. Use `--skip-setup` when the
+benchmark environments are already prepared, or `--prefix NAME` to choose a
+safe output prefix. The settings are fixed by the runner.
+
+Captures and reviews go under `perf/results/`; phase logs go under
+`perf/results/.hotpaths-runs/NAME/logs/`. Existing destinations are preserved
+and cause the run to stop. A capture or review failure stops later phases and
+leaves completed artifacts and logs in place. The runner does not pull, switch
+branches, submit GPU jobs, or replace CUDA timings with CPU timings. See
+[FOCUSED-HOTPATHS.md](FOCUSED-HOTPATHS.md) for the manual sequence and review
+details.
+
 ## 1. Clone and prepare the three environments
 
 Install Julia 1.12 and a working NVIDIA driver, then run:

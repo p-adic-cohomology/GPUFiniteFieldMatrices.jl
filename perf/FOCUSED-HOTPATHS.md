@@ -1,5 +1,30 @@
 # Focused addition, square GEMV, and PLUQ repeats
 
+## One-command workflow
+
+Prerequisites: Julia 1.12 and an existing GPU allocation where
+`CUDA.functional()` is true. From the checkout, run:
+
+```sh
+./perf/run_hotpaths.sh
+```
+
+The runner prepares the benchmark environments with `perf/setup.sh`, then
+captures three baseline → current → baseline cycles. Each of the nine captures
+runs in a fresh Julia process with 100 samples, 5 seconds, and 10 warmups. It
+checks every saved case result before starting the next phase and runs the
+existing bracketed review only after all nine captures are valid.
+
+For prepared environments, use `./perf/run_hotpaths.sh --skip-setup`. Add
+`--prefix NAME` to choose a safe unique prefix; measurement settings remain
+fixed. Captures and `review.json` are saved under `perf/results/`, and setup,
+capture, and review logs are saved under `perf/results/.hotpaths-runs/NAME/`.
+The runner refuses existing destinations, stops at the first failed phase, and
+keeps partial captures and logs. It does not pull or switch branches, schedule
+GPU jobs, or use CPU fallback timings.
+
+## Manual sequence
+
 The opt-in `:hotpaths` suite contains 15 primary cases:
 
 - `add!` at 31×33, 64×64, 256×256, and 257×255 for Float32 and Float64.

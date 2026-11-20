@@ -7,13 +7,15 @@ run_root="${1:-$repo/.perf-regressions}"
 cuda_version="${GFM_PERF_CUDA_VERSION:-5.11.3}"
 julia_bin="${GFM_JULIA:-julia}"
 remote_url="$(git -C "$repo" remote get-url origin)"
-expected_url="https://github.com/p-adic-cohomology/GPUFiniteFieldMatrices.jl"
 clean_url="${remote_url%.git}"
 
-if [[ "$clean_url" != "$expected_url" ]]; then
-    echo "origin must be $expected_url (got $remote_url)" >&2
-    exit 2
-fi
+case "$clean_url" in
+    https://github.com/p-adic-cohomology/GPUFiniteFieldMatrices.jl|https://github.com/UCSD-computational-number-theory/GPUFiniteFieldMatrices.jl) ;;
+    *)
+        echo "origin must be the p-adic-cohomology or UCSD-computational-number-theory GPUFiniteFieldMatrices.jl repository (got $remote_url)" >&2
+        exit 2
+        ;;
+esac
 
 version_output="$("$julia_bin" --version)"
 if [[ "$version_output" != *"1.12."* ]]; then
