@@ -60,6 +60,12 @@ modified or wrongly pinned baseline worktrees. It leaves existing results
 untouched; use unique capture labels. Use a new checkout or run root after
 moving the clone to another path.
 
+Paths recorded before a symlink or scratch-directory alias was resolved remain
+valid when they resolve to the same existing checkout. Setup compares those
+physical paths in the registry, environment markers, and manifests. A genuinely
+different or missing checkout is still rejected; the registry error includes
+both the recorded and current paths.
+
 For an existing clone, exit any Julia processes using it, then update and rerun
 setup from the repository root:
 

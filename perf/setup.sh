@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$script_dir/.." && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+repo="$(cd "$script_dir/.." && pwd -P)"
 run_root="${1:-$repo/.perf-regressions}"
 cuda_version="${GFM_PERF_CUDA_VERSION:-5.11.3}"
 julia_bin="${GFM_JULIA:-julia}"
@@ -23,7 +23,7 @@ if [[ "$version_output" != *"1.12."* ]]; then
     exit 2
 fi
 
-run_root="$(mkdir -p "$(dirname "$run_root")" && cd "$(dirname "$run_root")" && pwd)/$(basename "$run_root")"
+run_root="$(mkdir -p "$(dirname "$run_root")" && cd "$(dirname "$run_root")" && pwd -P)/$(basename "$run_root")"
 owner_file="$run_root/.gfm-perf-owner.toml"
 if [[ ! -e "$run_root" ]]; then
     mkdir -p "$run_root"
@@ -61,7 +61,7 @@ worktree_root="$run_root/worktrees"
 mkdir -p "$worktree_root"
 registry="$run_root/worktrees.toml"
 if [[ -f "$registry" ]]; then
-    "$julia_bin" --startup-file=no -e 'using TOML; x=TOML.parsefile(ARGS[1]); x["source_repo"] == ARGS[2] || error("worktree registry belongs to a different source checkout")' "$registry" "$repo"
+    "$julia_bin" --startup-file=no -e 'using TOML; include(ARGS[3]); using .GFMPerfSetupPaths; x=TOML.parsefile(ARGS[1]); recorded=get(x,"source_repo",nothing); same_source_path(recorded,ARGS[2]) || error("worktree registry belongs to a different source checkout: recorded=$(repr(recorded)), current=$(repr(ARGS[2])). Only paths resolving to the same existing directory can share a registry.")' "$registry" "$repo" "$script_dir/setup_paths.jl"
 else
     cat > "$registry" <<EOF
 schema_version = 1
@@ -87,10 +87,10 @@ ensure_worktree() {
             exit 2
         fi
         local common head status
-        common="$(git -C "$path" rev-parse --path-format=absolute --git-common-dir)"
+        common="$(cd "$(git -C "$path" rev-parse --path-format=absolute --git-common-dir)" && pwd -P)"
         head="$(git -C "$path" rev-parse HEAD)"
         status="$(git -C "$path" status --porcelain --untracked-files=all)"
-        if [[ "$common" != "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)" || "$head" != "$commit" || -n "$status" ]]; then
+        if [[ "$common" != "$(cd "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)" && pwd -P)" || "$head" != "$commit" || -n "$status" ]]; then
             echo "existing owned worktree does not match its pin or is dirty: $path" >&2
             exit 2
         fi

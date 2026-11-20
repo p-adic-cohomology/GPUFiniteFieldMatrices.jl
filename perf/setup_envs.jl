@@ -1,5 +1,7 @@
 using Pkg
 using TOML
+include("setup_paths.jl")
+using .GFMPerfSetupPaths
 
 length(ARGS) == 5 || error("usage: setup_envs.jl RUN_ROOT REPO V031_WORKTREE V032_WORKTREE CUDA_VERSION")
 run_root, repo, v031, v032, cuda_version = ARGS
@@ -27,8 +29,8 @@ function verify_manifest(env, target, perf_project, cuda_version)
     harness = manifest_entry(manifest, "GFMPerf")
     package = manifest_entry(manifest, "GPUFiniteFieldMatrices")
     cuda = manifest_entry(manifest, "CUDA")
-    !isnothing(harness) && get(harness, "path", nothing) == abspath(perf_project) || error("benchmark environment resolves GFMPerf from an unexpected path: $env")
-    !isnothing(package) && get(package, "path", nothing) == abspath(target) || error("benchmark environment resolves GPUFiniteFieldMatrices from an unexpected path: $env")
+    !isnothing(harness) && same_source_path(get(harness, "path", nothing), perf_project) || error("benchmark environment resolves GFMPerf from an unexpected path: $env")
+    !isnothing(package) && same_source_path(get(package, "path", nothing), target) || error("benchmark environment resolves GPUFiniteFieldMatrices from an unexpected path: $env")
     !isnothing(cuda) && get(cuda, "version", nothing) == cuda_version || error("benchmark environment CUDA.jl does not match pin $cuda_version")
 end
 
@@ -70,7 +72,9 @@ for (name, target) in variants
     if isfile(marker)
         actual = TOML.parsefile(marker)
         for (key, value) in expected
-            get(actual, key, nothing) == value || error("refusing to reuse benchmark environment with different ownership or pins: $env")
+            recorded = get(actual, key, nothing)
+            matches = key in ("target", "harness") ? same_source_path(recorded, value) : recorded == value
+            matches || error("refusing to reuse benchmark environment with different ownership or pins: $env (field=$key, recorded=$(repr(recorded)), expected=$(repr(value)))")
         end
         state = get(actual, "state", "")
         state in ("preparing", "ready") || error("invalid environment setup state at $env")
@@ -100,8 +104,8 @@ for (name, target) in variants
                 doc_manifest = TOML.parsefile(manifest)
                 harness = manifest_entry(doc_manifest, "GFMPerf")
                 package = manifest_entry(doc_manifest, "GPUFiniteFieldMatrices")
-                get(harness, "path", nothing) == abspath(perf_project) || error("interrupted environment points to an unexpected harness path: $env")
-                get(package, "path", nothing) == abspath(target) || error("interrupted environment points to an unexpected package path: $env")
+                !isnothing(harness) && same_source_path(get(harness, "path", nothing), perf_project) || error("interrupted environment points to an unexpected harness path: $env")
+                !isnothing(package) && same_source_path(get(package, "path", nothing), target) || error("interrupted environment points to an unexpected package path: $env")
             end
         elseif !isempty(env_deps)
             error("interrupted environment contains dependencies that are not this harness: $env")
