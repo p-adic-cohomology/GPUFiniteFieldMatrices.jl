@@ -1,6 +1,6 @@
 name = "GPUFiniteFieldMatrices"
 uuid = "465031f1-b347-4f72-85f6-baf667cdf853"
-version = "0.3.2"
+version = "0.4.0"
 
 [deps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
