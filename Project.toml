@@ -3,18 +3,28 @@ uuid = "465031f1-b347-4f72-85f6-baf667cdf853"
 version = "0.4.0"
 
 [deps]
-CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 DispatchDoctor = "8d63f2c5-f18a-4cf2-ba9d-b3f60fc568c8"
-IterTools = "c8e1da08-722c-5040-9ed9-7db0dc04731e"
+GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+KernelInterface = "4ee993da-d684-4d17-a7dd-4e58e78d92bf"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-Unroll = "36e64239-2ab9-4580-84fb-56737a503d36"
+
+[weakdeps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
+
+[extensions]
+GPUFiniteFieldMatricesCUDAExt = "CUDA"
+GPUFiniteFieldMatricesMetalExt = "Metal"
 
 [compat]
-CUDA = "5, 6"
+CUDA = "6.5"
 DispatchDoctor = "0.4.28"
-IterTools = "1"
+GPUArrays = "12.2"
+KernelAbstractions = "0.10.8"
+KernelInterface = "0.4.7"
+Metal = "1.12"
 SparseArrays = "1.12.0"
-Unroll = "0.1.0"
 julia = "1.12"

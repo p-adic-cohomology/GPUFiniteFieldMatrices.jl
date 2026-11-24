@@ -1,29 +1,24 @@
 @testset "CPU-safe cuBLAS scalar cache inference" begin
+    cuda_ext = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
     for T in (Float16, Float32, Float64)
         cache_name =
             T === Float16 ? :cublas_scalars_f16 :
             T === Float32 ? :cublas_scalars_f32 : :cublas_scalars_f64
-        cache_f = getfield(GPUFiniteFieldMatrices, cache_name)
+        cache_f = getfield(cuda_ext, cache_name)
         cu_ref_type = only(Base.return_types(CUDA.CuRef, Tuple{T}))
         scalar_pair_type = Tuple{cu_ref_type,cu_ref_type}
 
         @test isconcretetype(cu_ref_type)
         @test only(Base.return_types(cache_f, Tuple{})) === scalar_pair_type
-        @test only(
-            Base.return_types(GPUFiniteFieldMatrices._stripe_gemm_scalars, Tuple{Type{T}}),
-        ) === scalar_pair_type
-        @test only(
-            Base.return_types(GPUFiniteFieldMatrices._stripe_gemv_scalars, Tuple{Type{T}}),
-        ) === scalar_pair_type
+        @test only(Base.return_types(cuda_ext._stripe_gemm_scalars, Tuple{Type{T}})) ===
+              scalar_pair_type
+        @test only(Base.return_types(cuda_ext._stripe_gemv_scalars, Tuple{Type{T}})) ===
+              scalar_pair_type
 
         CU = CUDA.CuArray{T,2,CUDA.DeviceMemory}
         accumulate_signature = Tuple{CU,CU,CU,UnitRange{Int},Bool,scalar_pair_type}
-        accumulate_code = only(
-            Base.code_typed(
-                GPUFiniteFieldMatrices._stripe_accumulate_stripe!,
-                accumulate_signature,
-            ),
-        )
+        accumulate_code =
+            only(Base.code_typed(cuda_ext._stripe_accumulate_stripe!, accumulate_signature))
         accumulate_ir = sprint(show, MIME"text/plain"(), accumulate_code.first)
 
         @test accumulate_code.second === CU
@@ -37,10 +32,11 @@
 end
 
 function test_cuda_blas_compatibility()
+    cuda_ext = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
     @testset "task-local cuBLAS GEMM scalar cache" begin
         for T in (Float16, Float32, Float64)
-            zero_ptr, one_ptr = GPUFiniteFieldMatrices._stripe_gemm_scalars(T)
-            zero_ptr_again, one_ptr_again = GPUFiniteFieldMatrices._stripe_gemm_scalars(T)
+            zero_ptr, one_ptr = cuda_ext._stripe_gemm_scalars(T)
+            zero_ptr_again, one_ptr_again = cuda_ext._stripe_gemm_scalars(T)
 
             @test eltype(zero_ptr) === T
             @test eltype(one_ptr) === T
@@ -51,7 +47,7 @@ function test_cuda_blas_compatibility()
             @test zero_ptr !== one_ptr
 
             if T !== Float16
-                gemv_zero, gemv_one = GPUFiniteFieldMatrices._stripe_gemv_scalars(T)
+                gemv_zero, gemv_one = cuda_ext._stripe_gemv_scalars(T)
                 @test gemv_zero === zero_ptr
                 @test gemv_one === one_ptr
             end
@@ -60,7 +56,7 @@ function test_cuda_blas_compatibility()
         # Interleave the two supported product precisions to ensure GEMV keeps
         # selecting each task-local cuBLAS pointer pair by its actual T.
         for T in (Float32, Float64, Float32, Float64)
-            zero_ptr, one_ptr = GPUFiniteFieldMatrices._stripe_gemv_scalars(T)
+            zero_ptr, one_ptr = cuda_ext._stripe_gemv_scalars(T)
             @test eltype(zero_ptr) === T
             @test eltype(one_ptr) === T
             @test zero_ptr[] === zero(T)
@@ -617,7 +613,7 @@ function test_cuda_blas_compatibility()
     expected_nested = Float32.(mod.(BigInt.(A_host) * BigInt.(B_host), 211))
     A_parent_before = Array(A_parent)
     B_parent_before = Array(B_parent)
-    CUDA.@sync GPUFiniteFieldMatrices._stripe_mul!(
+    CUDA.@sync cuda_ext._stripe_mul!(
         C_nested,
         @view(A_outer[2:4, 2:8]),
         @view(B_outer[2:8, 3:4]);
@@ -632,7 +628,7 @@ function test_cuda_blas_compatibility()
     @test Array(B_parent) == B_parent_before
 
     alias_buffer = CUDA.zeros(Float32, 2, 2)
-    @test_throws ArgumentError GPUFiniteFieldMatrices._stripe_mul!(
+    @test_throws ArgumentError cuda_ext._stripe_mul!(
         alias_buffer,
         alias_buffer,
         alias_buffer;

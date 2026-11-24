@@ -13,6 +13,7 @@ set_preferences!(
 
 using Test
 using CUDA
+using Metal
 using LinearAlgebra
 using BenchmarkTools
 using BitIntegers
@@ -23,6 +24,7 @@ using ExplicitImports
 using GPUFiniteFieldMatrices
 
 include("api_surface_test.jl")
+include("backend_storage_test.jl")
 include("base_methods_test.jl")
 include("exceptions_test.jl")
 include("KaratsubaMatrix/api_regressions_test.jl")
@@ -53,8 +55,9 @@ end
 end
 
 @testset "CUDA BLAS binding" begin
+    cuda_ext = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
     expected_blas_name = isdefined(CUDA, :cuBLAS) ? :cuBLAS : :CUBLAS
-    @test nameof(GPUFiniteFieldMatrices._CUDA_BLAS) == expected_blas_name
+    @test nameof(cuda_ext._CUDA_BLAS) == expected_blas_name
 end
 
 include("cuda_kernel_bindings_test.jl")
@@ -77,13 +80,61 @@ include("CuModMatrix/triangular_test.jl")
 include("CuModMatrix/inverse/runtests.jl")
 
 @testset "ExplicitImports" begin
+    cuda_ext = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
+    metal_ext = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesMetalExt)
+    extensions = (cuda_ext, metal_ext)
+
     @test check_no_implicit_imports(GPUFiniteFieldMatrices) === nothing
     @test check_no_stale_explicit_imports(GPUFiniteFieldMatrices) === nothing
     @test check_all_explicit_imports_via_owners(GPUFiniteFieldMatrices) === nothing
-    @test check_all_explicit_imports_are_public(GPUFiniteFieldMatrices) === nothing
     @test check_no_self_qualified_accesses(GPUFiniteFieldMatrices) === nothing
-
     @test check_all_qualified_accesses_via_owners(GPUFiniteFieldMatrices) === nothing
+
+    # Extensions still need explicit, used imports from the modules that own
+    # each name. Their internal package hooks are private by design.
+    for extension in extensions
+        @test check_no_implicit_imports(extension) === nothing
+        @test check_no_stale_explicit_imports(extension) === nothing
+        @test check_all_explicit_imports_via_owners(extension) === nothing
+        @test check_no_self_qualified_accesses(extension) === nothing
+        @test check_all_qualified_accesses_via_owners(extension) === nothing
+    end
+
+    # These names are implementation hooks shared across the package and its
+    # extensions. Their ownership is checked above; they are intentionally not
+    # part of the stable public API.
+    private_extension_bindings = (
+        :_backend_default_component_type,
+        :_backend_default_plan_type,
+        :_karatsuba_component,
+        :_karatsuba_gemv_precision_plan,
+        :_karatsuba_gemv_validate_radices,
+        :_karatsuba_host_array,
+        :_karatsuba_matmul_product_plan,
+        :_karatsuba_plan_type,
+        :_karatsuba_zero_component,
+        :_logical_view,
+        :_padded_size,
+        :CuStorage,
+        :_modular_host_values,
+        :allocate_storage,
+        :backendof,
+        :deviceof,
+        :host_scalar,
+        :pinned_host_buffer,
+        :synchronize_backend!,
+        :with_backend_streams,
+        :divide_elements!,
+        :find_max_ops,
+        :find_max_stripe_ops,
+        :inverse_permutation,
+        :negate!,
+        :scalar_multiply!,
+    )
+    @test check_all_explicit_imports_are_public(
+        GPUFiniteFieldMatrices;
+        ignore = private_extension_bindings,
+    ) === nothing
 
     # The ignored names are non-public bindings required by supported APIs:
     #   CHOLMOD                          – SparseArrays.CHOLMOD.Dense in a copyto! signature
@@ -101,6 +152,7 @@ include("CuModMatrix/inverse/runtests.jl")
     @test check_all_qualified_accesses_are_public(
         GPUFiniteFieldMatrices;
         ignore = (
+            private_extension_bindings...,
             :CHOLMOD,
             :gemm!,
             :gemv!,

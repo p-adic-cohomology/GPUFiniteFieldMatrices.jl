@@ -1,9 +1,16 @@
 @testset "Empty stripe product budgets on CPU" begin
     G = GPUFiniteFieldMatrices
+    cuda_ext = Base.get_extension(G, :GPUFiniteFieldMatricesCUDAExt)
     @test G.find_max_stripe_ops(Float32, 8_192) == 0
-    @test G._stripe_safe_chunk(Float32, 8_192, nothing, nothing; empty_inner = true) == 1
-    @test_throws ArgumentError G._stripe_safe_chunk(Float32, 8_192, nothing, nothing)
-    @test_throws ArgumentError G._stripe_safe_chunk(
+    @test cuda_ext._stripe_safe_chunk(
+        Float32,
+        8_192,
+        nothing,
+        nothing;
+        empty_inner = true,
+    ) == 1
+    @test_throws ArgumentError cuda_ext._stripe_safe_chunk(Float32, 8_192, nothing, nothing)
+    @test_throws ArgumentError cuda_ext._stripe_safe_chunk(
         Float32,
         8_192,
         nothing,
@@ -11,7 +18,7 @@
         empty_inner = true,
     )
     for bound in (1, 0, -1)
-        @test_throws ArgumentError G._stripe_safe_chunk(
+        @test_throws ArgumentError cuda_ext._stripe_safe_chunk(
             Float32,
             8_192,
             bound,
@@ -19,7 +26,7 @@
             empty_inner = true,
         )
     end
-    @test_throws ArgumentError G._stripe_safe_chunk(
+    @test_throws ArgumentError cuda_ext._stripe_safe_chunk(
         Float32,
         0,
         8_192,
@@ -27,25 +34,34 @@
         empty_inner = true,
     )
     C = fill(7, 2, 3)
-    @test G._stripe_run!(C, zeros(Int, 2, 0), zeros(Int, 0, 3), 8_192, 1, nothing) === C
+    @test cuda_ext._stripe_run!(
+        C,
+        zeros(Int, 2, 0),
+        zeros(Int, 0, 3),
+        8_192,
+        1,
+        nothing,
+    ) === C
     @test C == zeros(Int, 2, 3)
     z = fill(7, 2)
-    @test G._stripe_run!(z, zeros(Int, 2, 0), Int[], 8_192, 1, nothing) === z
+    @test cuda_ext._stripe_run!(z, zeros(Int, 2, 0), Int[], 8_192, 1, nothing) === z
     @test z == zeros(Int, 2)
 end
 
 @testset "Empty stripe device identity policy on CPU" begin
     # Exercise the pure identity predicate, not CUDA arrays or device execution.
     G = GPUFiniteFieldMatrices
-    @test G._stripe_require_same_device(0, 0, 0) === nothing
-    @test G._stripe_require_same_device(1, 1, 1) === nothing
+    cuda_ext = Base.get_extension(G, :GPUFiniteFieldMatricesCUDAExt)
+    @test cuda_ext._stripe_require_same_device(0, 0, 0) === nothing
+    @test cuda_ext._stripe_require_same_device(1, 1, 1) === nothing
     for devices in ((0, 1, 0), (0, 0, 1), (0, 1, 1))
-        @test_throws ArgumentError G._stripe_require_same_device(devices...)
+        @test_throws ArgumentError cuda_ext._stripe_require_same_device(devices...)
     end
 end
 
 function test_empty_stripe_products()
     G = GPUFiniteFieldMatrices
+    cuda_ext = Base.get_extension(G, :GPUFiniteFieldMatricesCUDAExt)
     N = 8_192
     A = CuModMatrix{Float32}(zeros(Int, 2, 0); modulus = N)
     B = CuModMatrix{Float32}(zeros(Int, 0, 3); modulus = N)
@@ -91,7 +107,7 @@ function test_empty_stripe_products()
         @test Array(parent(destination)) == snapshot
     end
     raw = CUDA.zeros(Float32, 0, 0)
-    @test_throws ArgumentError G._stripe_mul!(raw, raw, raw; modulus = N)
+    @test_throws ArgumentError cuda_ext._stripe_mul!(raw, raw, raw; modulus = N)
     @test (Array(parent(A)), Array(parent(B)), Array(parent(x))) == input_snapshots
     test_empty_stripe_device_preflight()
     test_karatsuba_global_device_preflight()
@@ -99,6 +115,7 @@ end
 
 function test_empty_stripe_device_preflight()
     G = GPUFiniteFieldMatrices
+    cuda_ext = Base.get_extension(G, :GPUFiniteFieldMatricesCUDAExt)
     devices = collect(CUDA.devices())
     if length(devices) < 2
         @info "Empty stripe mixed-device regressions require two CUDA devices."
@@ -137,7 +154,7 @@ function test_empty_stripe_device_preflight()
                 @test (size(destination), G.modulus(destination), parent(destination)) ===
                       metadata
                 @test CUDA.device() == devices[1]
-                @test_throws ArgumentError G._stripe_mul!(
+                @test_throws ArgumentError cuda_ext._stripe_mul!(
                     nested_logical(destination),
                     nested_logical(left.A),
                     nested_logical(operand);
@@ -153,6 +170,7 @@ end
 
 function test_karatsuba_global_device_preflight()
     G = GPUFiniteFieldMatrices
+    cuda_ext = Base.get_extension(G, :GPUFiniteFieldMatricesCUDAExt)
     devices = collect(CUDA.devices())
     if length(devices) < 2
         @info "Karatsuba mixed-device regressions require two CUDA devices."
@@ -227,21 +245,31 @@ function test_karatsuba_global_device_preflight()
                 C = karatsuba_matrix((2, 3), devices[1], devices[2], devices[1], 30)
                 @test G.modulus(A) == G.modulus(B) == G.modulus(C) == 100
 
-                data = G._karatsuba_prepare_gemm_views(A, B, C)
+                data = (
+                    a_low = cuda_ext._stripe_logical_data(G.low_part(A)),
+                    a_high = cuda_ext._stripe_logical_data(G.high_part(A)),
+                    a_plan = cuda_ext._stripe_logical_data(A.plan),
+                    b_low = cuda_ext._stripe_logical_data(G.low_part(B)),
+                    b_high = cuda_ext._stripe_logical_data(G.high_part(B)),
+                    b_plan = cuda_ext._stripe_logical_data(B.plan),
+                    c_low = cuda_ext._stripe_logical_data(G.low_part(C)),
+                    c_high = cuda_ext._stripe_logical_data(G.high_part(C)),
+                    c_plan = cuda_ext._stripe_logical_data(C.plan),
+                )
                 @test (
-                    CUDA.device(G._stripe_storage_root(data.c_low)),
-                    CUDA.device(G._stripe_storage_root(data.a_low)),
-                    CUDA.device(G._stripe_storage_root(data.b_low)),
+                    CUDA.device(cuda_ext._stripe_storage_root(data.c_low)),
+                    CUDA.device(cuda_ext._stripe_storage_root(data.a_low)),
+                    CUDA.device(cuda_ext._stripe_storage_root(data.b_low)),
                 ) == (devices[1], devices[1], devices[1])
                 @test (
-                    CUDA.device(G._stripe_storage_root(data.c_high)),
-                    CUDA.device(G._stripe_storage_root(data.a_plan)),
-                    CUDA.device(G._stripe_storage_root(data.b_plan)),
+                    CUDA.device(cuda_ext._stripe_storage_root(data.c_high)),
+                    CUDA.device(cuda_ext._stripe_storage_root(data.a_plan)),
+                    CUDA.device(cuda_ext._stripe_storage_root(data.b_plan)),
                 ) == (devices[2], devices[2], devices[2])
                 @test (
-                    CUDA.device(G._stripe_storage_root(data.c_plan)),
-                    CUDA.device(G._stripe_storage_root(data.a_high)),
-                    CUDA.device(G._stripe_storage_root(data.b_high)),
+                    CUDA.device(cuda_ext._stripe_storage_root(data.c_plan)),
+                    CUDA.device(cuda_ext._stripe_storage_root(data.a_high)),
+                    CUDA.device(cuda_ext._stripe_storage_root(data.b_high)),
                 ) == (devices[1], devices[1], devices[1])
                 products = G._karatsuba_matmul_product_plan(
                     G.low_modulus(A),
@@ -251,19 +279,19 @@ function test_karatsuba_global_device_preflight()
                     G.low_modulus(C),
                     G.high_modulus(C),
                 )
-                @test G._karatsuba_preflight_stripe_product(
+                @test cuda_ext._karatsuba_preflight_stripe_product(
                     data.c_low,
                     data.a_low,
                     data.b_low,
                     products.low,
                 ) > 0
-                @test G._karatsuba_preflight_stripe_product(
+                @test cuda_ext._karatsuba_preflight_stripe_product(
                     data.c_high,
                     data.a_plan,
                     data.b_plan,
                     products.middle,
                 ) > 0
-                @test G._karatsuba_preflight_stripe_product(
+                @test cuda_ext._karatsuba_preflight_stripe_product(
                     data.c_plan,
                     data.a_high,
                     data.b_high,

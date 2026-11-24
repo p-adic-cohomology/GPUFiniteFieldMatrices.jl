@@ -73,7 +73,9 @@ function _missing_cuda_global_bindings(root::Module, cuda::Module)
 end
 
 @testset "CUDA kernel globals resolve on CPU" begin
-    missing = _missing_cuda_global_bindings(GPUFiniteFieldMatrices, CUDA)
+    cuda_ext = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
+    @test cuda_ext !== nothing
+    missing = _missing_cuda_global_bindings(cuda_ext, CUDA)
     isempty(missing) || @error "Unbound CUDA globals in package methods" missing
     @test isempty(missing)
 end
