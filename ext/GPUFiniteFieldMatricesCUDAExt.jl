@@ -12,11 +12,8 @@ import GPUFiniteFieldMatrices: GPUModArray, CuModArray, CuModMatrix, CuModVector
 import GPUFiniteFieldMatrices: KaratsubaArray
 import GPUFiniteFieldMatrices: PLUQ, PLUQOptions, ModulusMismatchError
 import GPUFiniteFieldMatrices: modulus, low_modulus, high_modulus, low_part, high_part
-import GPUFiniteFieldMatrices:
-    add!, sub!, neg!, scalar_add!, scalar_sub!, elementwise_multiply!
-import GPUFiniteFieldMatrices: mul_elementwise!, rscalar_sub!, div!, mod!
-import GPUFiniteFieldMatrices: mod_elements!, similar_with_modulus, change_modulus
-import GPUFiniteFieldMatrices: change_modulus!!, stripe_mul, stripe_mul!, karatsuba_gemv!
+import GPUFiniteFieldMatrices: add!, sub!, rscalar_sub!, mod!
+import GPUFiniteFieldMatrices: similar_with_modulus, stripe_mul, stripe_mul!, karatsuba_gemv!
 import GPUFiniteFieldMatrices: scalar_multiply!, negate!, divide_elements!, pluq, pluq!
 import GPUFiniteFieldMatrices: inverse_pluq, pluq_batched!, pluq_batched, inverse_batched
 import GPUFiniteFieldMatrices: pluq_batched_4x4!, pluq_batched_8x8!, pluq_batched_16x16!
@@ -34,7 +31,7 @@ import GPUFiniteFieldMatrices:
 import GPUFiniteFieldMatrices: _karatsuba_plan_type
 import GPUFiniteFieldMatrices: _backend_default_component_type, _backend_default_plan_type
 import GPUFiniteFieldMatrices: find_max_ops, find_max_stripe_ops
-import GPUFiniteFieldMatrices: inverse_permutation, mod_inv, zero!
+import GPUFiniteFieldMatrices: inverse_permutation, mod_inv
 import GPUFiniteFieldMatrices: _padded_extent, _padded_size
 import GPUFiniteFieldMatrices: _pluq_extract_L, _pluq_extract_U
 import GPUFiniteFieldMatrices:
