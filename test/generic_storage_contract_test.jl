@@ -77,7 +77,10 @@ STORAGE_CONTRACT_KI.device(
     @test G.deviceof(device_one) != G.deviceof(device_two)
     @test G.deviceof(device_one) != G.deviceof(other_backend)
 
-    for backend in (:cuda, :metal)
+    backends = Symbol[]
+    GFM_TEST_CUDA_LOADED && push!(backends, :cuda)
+    GFM_TEST_METAL_LOADED && push!(backends, :metal)
+    for backend in backends
         backend_name = backend === :cuda ? "CUDA" : "Metal"
         err = try
             G._validate_backend_storage(Val(backend), Int32, 7)
@@ -91,51 +94,57 @@ STORAGE_CONTRACT_KI.device(
             @test occursin("16777216", sprint(showerror, err))
         end
     end
-    @test_throws ArgumentError G._validate_backend_storage(Val(:metal), Float64, 7)
-
-    cuda_modulus_error = try
-        G._validate_backend_storage(Val(:cuda), Float32, 2^24 + 1)
-        nothing
-    catch exception
-        exception
-    end
-    @test cuda_modulus_error isa DomainError
-    if cuda_modulus_error isa Exception
-        @test occursin("CUDA", sprint(showerror, cuda_modulus_error))
-        @test occursin("16777216", sprint(showerror, cuda_modulus_error))
+    if GFM_TEST_METAL_LOADED
+        @test_throws ArgumentError G._validate_backend_storage(Val(:metal), Float64, 7)
     end
 
-    # These host wrappers exercise CUDA-specific factory preflight without
-    # constructing a CuArray or claiming CUDA device execution.
-    fake_cuda_storage = G.CuStorage{Float32,2,Nothing,Matrix{Float32}}(
-        Float32[1 3 0 0; 2 4 0 0; 0 0 0 0; 0 0 0 0],
-    )
-    fake_cuda =
-        G.GPUModArray{Float32,2,typeof(fake_cuda_storage)}(fake_cuda_storage, (2, 2), 7)
-    @test_throws DomainError G.similar_with_modulus(fake_cuda, 2^24 + 1)
-    @test_throws DomainError G.change_modulus(fake_cuda, 2^24 + 1)
-    before = copy(parent(fake_cuda))
-    @test_throws DomainError G.change_modulus!!(fake_cuda, 2^24 + 1)
-    @test parent(fake_cuda) == before
+    if GFM_TEST_CUDA_LOADED
+        cuda_modulus_error = try
+            G._validate_backend_storage(Val(:cuda), Float32, 2^24 + 1)
+            nothing
+        catch exception
+            exception
+        end
+        @test cuda_modulus_error isa DomainError
+        if cuda_modulus_error isa Exception
+            @test occursin("CUDA", sprint(showerror, cuda_modulus_error))
+            @test occursin("16777216", sprint(showerror, cuda_modulus_error))
+        end
 
-    indexed = fake_cuda[[2, 1], [1, 2]]
-    row = fake_cuda[[2, 1], 1]
-    column = fake_cuda[1, [2, 1]]
-    @test indexed isa G.CuModMatrix{Float32}
-    @test row isa G.CuModMatrix{Float32}
-    @test column isa G.CuModMatrix{Float32}
-    @test size(indexed) == (2, 2)
-    @test size(row) == (2, 1)
-    @test size(column) == (1, 2)
-    @test modulus(indexed) == modulus(row) == modulus(column) == modulus(fake_cuda)
-    @test Array(indexed) == Float32[2 4; 1 3]
-    @test Array(row) == reshape(Float32[2, 1], 2, 1)
-    @test Array(column) == Float32[3 1]
+        # These host wrappers exercise CUDA-specific factory preflight without
+        # constructing a CuArray or claiming CUDA device execution.
+        fake_cuda_storage = G.CuStorage{Float32,2,Nothing,Matrix{Float32}}(
+            Float32[1 3 0 0; 2 4 0 0; 0 0 0 0; 0 0 0 0],
+        )
+        fake_cuda =
+            G.GPUModArray{Float32,2,typeof(fake_cuda_storage)}(fake_cuda_storage, (2, 2), 7)
+        @test_throws DomainError G.similar_with_modulus(fake_cuda, 2^24 + 1)
+        @test_throws DomainError G.change_modulus(fake_cuda, 2^24 + 1)
+        before = copy(parent(fake_cuda))
+        @test_throws DomainError G.change_modulus!!(fake_cuda, 2^24 + 1)
+        @test parent(fake_cuda) == before
+
+        indexed = fake_cuda[[2, 1], [1, 2]]
+        row = fake_cuda[[2, 1], 1]
+        column = fake_cuda[1, [2, 1]]
+        @test indexed isa G.CuModMatrix{Float32}
+        @test row isa G.CuModMatrix{Float32}
+        @test column isa G.CuModMatrix{Float32}
+        @test size(indexed) == (2, 2)
+        @test size(row) == (2, 1)
+        @test size(column) == (1, 2)
+        @test modulus(indexed) == modulus(row) == modulus(column) == modulus(fake_cuda)
+        @test Array(indexed) == Float32[2 4; 1 3]
+        @test Array(row) == reshape(Float32[2, 1], 2, 1)
+        @test Array(column) == Float32[3 1]
+    end
 
     @test which(LinearAlgebra.rank, Tuple{G.GPUModMatrix{Float32}}).module === G
-    @test fieldtype(G.PLUQ{Float32,typeof(fake_cuda)}, :LU) === typeof(fake_cuda)
+    if GFM_TEST_CUDA_LOADED
+        @test fieldtype(G.PLUQ{Float32,typeof(fake_cuda)}, :LU) === typeof(fake_cuda)
+    end
 
-    if !CUDA.functional()
+    if GFM_TEST_CUDA_LOADED && !GFM_TEST_CUDA_FUNCTIONAL
         @test_throws DomainError zeros(G.CuModMatrix{Float32}, 1, 1; modulus = 2^24 + 1)
         @test_throws DomainError zeros(G.CuModVector{Float32}, 1; modulus = 2^24 + 1)
         @test_throws DomainError rand(G.CuModMatrix{Float32}, 1, 1; modulus = 2^24 + 1)

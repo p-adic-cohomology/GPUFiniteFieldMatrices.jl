@@ -1,8 +1,66 @@
-# Flip the package's `@stable` wrap (src/GPUFiniteFieldMatrices.jl) from its
-# downstream-safe `disable` default to an enforcing mode for the test run only.
-# This MUST run before `using GPUFiniteFieldMatrices` so the package compiles in
-# with the gate active. `codegen_level="min"` keeps the `@stable` precompile
-# overhead low.
+using Test
+using TOML
+using Pkg
+
+include("backend_test_driver.jl")
+const GFM_TEST_BACKEND_DEPENDENCIES =
+    TOML.parsefile(joinpath(@__DIR__, "backend_optional_dependencies.toml"))
+const GFM_TEST_BACKEND_REQUEST = BackendTestDriver.parse_backend_selector(ARGS)
+
+function _gfm_test_provision_backend!(backend::Symbol)
+    dependency = GFM_TEST_BACKEND_DEPENDENCIES[string(backend)]
+    Base.find_package(dependency["name"]) === nothing || return nothing
+
+    version = VersionNumber(dependency["version"])
+    @info "Provisioning selected optional backend" backend package=dependency["name"] version project=Base.active_project()
+    Pkg.add(Pkg.PackageSpec(name = dependency["name"], version = version))
+    return nothing
+end
+
+GFM_TEST_BACKEND_REQUEST === nothing ||
+    _gfm_test_provision_backend!(GFM_TEST_BACKEND_REQUEST)
+const GFM_TEST_OPTIONAL_BACKENDS =
+    BackendTestDriver.optional_backends(GFM_TEST_BACKEND_REQUEST)
+
+for backend in GFM_TEST_OPTIONAL_BACKENDS
+    if backend === :cuda
+        @eval import CUDA
+    else
+        @eval import Metal
+    end
+    dependency = GFM_TEST_BACKEND_DEPENDENCIES[string(backend)]
+    actual_version = Base.pkgversion(getfield(Main, Symbol(dependency["name"])))
+    expected_version = VersionNumber(dependency["version"])
+    actual_version == expected_version || error(
+        "Selected $backend test vendor version is $actual_version; expected $expected_version",
+    )
+end
+
+_gfm_test_backend_functional(::Val{:cuda}) = CUDA.functional()
+_gfm_test_backend_functional(::Val{:metal}) = Metal.functional()
+const GFM_TEST_BACKEND_FUNCTIONAL = Dict(
+    backend => _gfm_test_backend_functional(Val(backend)) for
+    backend in GFM_TEST_OPTIONAL_BACKENDS
+)
+
+if GFM_TEST_BACKEND_REQUEST !== nothing &&
+   !GFM_TEST_BACKEND_FUNCTIONAL[GFM_TEST_BACKEND_REQUEST]
+    error(
+        "Requested backend $(GFM_TEST_BACKEND_REQUEST) is installed but not functional on this host; " *
+        "no backend tests were run.",
+    )
+end
+
+const GFM_TEST_CUDA_LOADED = :cuda in GFM_TEST_OPTIONAL_BACKENDS
+const GFM_TEST_METAL_LOADED = :metal in GFM_TEST_OPTIONAL_BACKENDS
+const GFM_TEST_CUDA_FUNCTIONAL = get(GFM_TEST_BACKEND_FUNCTIONAL, :cuda, false)
+const GFM_TEST_METAL_FUNCTIONAL = get(GFM_TEST_BACKEND_FUNCTIONAL, :metal, false)
+const GFM_TEST_FUNCTIONAL_BACKENDS = Tuple(
+    backend for
+    backend in GFM_TEST_OPTIONAL_BACKENDS if GFM_TEST_BACKEND_FUNCTIONAL[backend]
+)
+
+# Flip the package's `@stable` wrap to an enforcing mode before loading it.
 using Preferences: set_preferences!
 set_preferences!(
     (Base.UUID("465031f1-b347-4f72-85f6-baf667cdf853"), "GPUFiniteFieldMatrices"),
@@ -11,9 +69,6 @@ set_preferences!(
     force = true,
 )
 
-using Test
-using CUDA
-using Metal
 using LinearAlgebra
 using BenchmarkTools
 using BitIntegers
@@ -22,17 +77,56 @@ using Unroll
 using Aqua
 using ExplicitImports
 using GPUFiniteFieldMatrices
+include("backend_test_support.jl")
+const GFM_TEST_CAPABILITIES = BackendTestSupport.capability_fixture(;
+    cuda_loaded = GFM_TEST_CUDA_LOADED,
+    cuda_functional = GFM_TEST_CUDA_FUNCTIONAL,
+    metal_loaded = GFM_TEST_METAL_LOADED,
+    metal_functional = GFM_TEST_METAL_FUNCTIONAL,
+)
 
-include("api_surface_test.jl")
+include("core_api_surface_test.jl")
+include("backend_test_driver_test.jl")
+@testset "Only requested optional vendor is imported" begin
+    if GFM_TEST_BACKEND_REQUEST === :metal
+        @test !isdefined(Main, :CUDA)
+    elseif GFM_TEST_BACKEND_REQUEST === :cuda
+        @test !isdefined(Main, :Metal)
+    end
+end
 include("backend_storage_test.jl")
 include("generic_storage_contract_test.jl")
-include("metal_storage_test.jl")
 include("base_methods_test.jl")
 include("exceptions_test.jl")
-include("KaratsubaMatrix/api_regressions_test.jl")
-include("KaratsubaMatrix/basic_operations_test.jl")
-include("KaratsubaMatrix/allocations_test.jl")
-include("KaratsubaMatrix/raw_unary_test.jl")
+
+if GFM_TEST_METAL_LOADED
+    include("metal_storage_test.jl")
+end
+
+if GFM_TEST_CUDA_LOADED
+    include("api_surface_test.jl")
+    include("cuda_kernel_bindings_test.jl")
+    include("KaratsubaMatrix/api_regressions_test.jl")
+    include("KaratsubaMatrix/basic_operations_test.jl")
+    include("KaratsubaMatrix/allocations_test.jl")
+    include("KaratsubaMatrix/raw_unary_test.jl")
+    include("CuModMatrix/display_test.jl")
+    include("CuModMatrix/basic_operations_test.jl")
+    include("CuModMatrix/modulus_caller_bindings_test.jl")
+    include("CuModMatrix/inplace_operations_test.jl")
+    include("CuModMatrix/matmul_operations_test.jl")
+    include("CuModMatrix/benchmark_test.jl")
+    include("CuModMatrix/stripe_mul_test.jl")
+    include("CuModMatrix/empty_stripe_test.jl")
+    include("CuModMatrix/cuda_blas_compat_test.jl")
+    include("CuModMatrix/padding_contract_test.jl")
+    include("CuModMatrix/elementwise_preflight_test.jl")
+    include("CuModMatrix/allocations_test.jl")
+    include("CuModMatrix/timing_test.jl")
+    include("CuModMatrix/de_rham_test.jl")
+    include("CuModMatrix/triangular_test.jl")
+    include("CuModMatrix/inverse/runtests.jl")
+end
 
 @testset "Stripe budget input validation" begin
     for input_bound in (1, 0, -1)
@@ -51,40 +145,28 @@ end
 end
 
 # Aqua quality gate — CPU-runnable, so it runs unconditionally (outside the
-# CUDA.functional() guard below).
+# Functional CUDA tests below).
 @testset "Aqua" begin
     Aqua.test_all(GPUFiniteFieldMatrices; stale_deps = false, deps_compat = false)
 end
 
-@testset "CUDA BLAS binding" begin
-    cuda_ext = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
-    expected_blas_name = isdefined(CUDA, :cuBLAS) ? :cuBLAS : :CUBLAS
-    @test nameof(cuda_ext._CUDA_BLAS) == expected_blas_name
+if GFM_TEST_CUDA_LOADED
+    @testset "CUDA BLAS binding" begin
+        cuda_ext =
+            Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
+        expected_blas_name = isdefined(CUDA, :cuBLAS) ? :cuBLAS : :CUBLAS
+        @test nameof(cuda_ext._CUDA_BLAS) == expected_blas_name
+    end
 end
 
-include("cuda_kernel_bindings_test.jl")
-include("CuModMatrix/display_test.jl")
-
-include("CuModMatrix/basic_operations_test.jl")
-include("CuModMatrix/modulus_caller_bindings_test.jl")
-include("CuModMatrix/inplace_operations_test.jl")
-include("CuModMatrix/matmul_operations_test.jl")
-include("CuModMatrix/benchmark_test.jl")
-include("CuModMatrix/stripe_mul_test.jl")
-include("CuModMatrix/empty_stripe_test.jl")
-include("CuModMatrix/cuda_blas_compat_test.jl")
-include("CuModMatrix/padding_contract_test.jl")
-include("CuModMatrix/elementwise_preflight_test.jl")
-include("CuModMatrix/allocations_test.jl")
-include("CuModMatrix/timing_test.jl")
-include("CuModMatrix/de_rham_test.jl")
-include("CuModMatrix/triangular_test.jl")
-include("CuModMatrix/inverse/runtests.jl")
-
 @testset "ExplicitImports" begin
-    cuda_ext = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
-    metal_ext = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesMetalExt)
-    extensions = (cuda_ext, metal_ext)
+    extensions = filter(
+        !isnothing,
+        (
+            Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt),
+            Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesMetalExt),
+        ),
+    )
 
     @test check_no_implicit_imports(GPUFiniteFieldMatrices) === nothing
     @test check_no_stale_explicit_imports(GPUFiniteFieldMatrices) === nothing
@@ -185,7 +267,7 @@ include("CuModMatrix/inverse/runtests.jl")
     ) === nothing
 end
 
-if CUDA.functional()
+if GFM_TEST_CUDA_FUNCTIONAL
     @testset "CuModMatrix.jl" begin
         @testset "Triangular Inverse" begin
             println(stderr, "START test_triangular_destination_helpers")
@@ -318,7 +400,7 @@ if CUDA.functional()
             flush(stderr)
         end
     end
-else
+elseif GFM_TEST_CUDA_LOADED
     @testset "CuModMatrix.jl" begin
         @info "CUDA is not functional on this machine; skipping GPU-dependent tests."
     end

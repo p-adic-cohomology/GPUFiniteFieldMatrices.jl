@@ -1,0 +1,149 @@
+schema_version = 1
+stage = "E2 backend test scaffolding and acceptance accounting"
+full_metal_parity = false
+source_base = "ef0a438dde71ad46447af4918410537051466c82"
+measured_default_suite_assertions = 2299
+measured_default_suite_passes = 2299
+measured_default_suite_testsets = 30
+count_semantics = "assertion_count and pass_count record assertions from named testsets. skip_count records unexecuted backend-family runs, once per applicable backend, not skipped assertions. Family-specific rows with rollup_include=false are subsets of another row and must not be added to the suite total."
+default_run_notes = "Default selector loaded CUDA 6.5.1 and Metal 1.12.1. Metal storage/factory tests executed on Apple M3 Max using SharedStorage and PrivateStorage with scalar indexing disabled. CUDA.functional() was false; CUDA device coverage did not execute."
+
+[[families]]
+name = "backend selection and capability reporting"
+applies_to = ["core", "cuda", "metal"]
+owner = "E2 integration"
+status = "scaffolding"
+assertion_count = 9
+pass_count = 9
+skip_count = 0
+host_assertion_count = 9
+device_assertion_count = 0
+evidence = "Backend test driver selection"
+
+[[families]]
+name = "modular array constructors, storage, views, and factories"
+applies_to = ["cuda", "metal"]
+owner = "E2 integration; Metal storage/factory subset accepted in E1a"
+status = "storage_factory_subset"
+assertion_count = 229
+pass_count = 229
+skip_count = 1
+host_assertion_count = 97
+device_assertion_count = 132
+evidence = "Generic storage wrapper and CUDA extension boundary (40), Generic modular storage contracts (57), Metal modular storage and backend selection (132)"
+notes = "The CUDA device storage run is unavailable on this host. The 132 Metal assertions include actual SharedStorage and PrivateStorage device operations and bulk host-reference comparisons."
+
+[[families]]
+name = "CPU host API, array interface, and exact modular references"
+applies_to = ["core", "cuda", "metal"]
+owner = "E2 integration"
+status = "host_coverage_preserved; Metal device parity pending"
+assertion_count = 721
+pass_count = 721
+skip_count = 0
+host_assertion_count = 721
+device_assertion_count = 0
+evidence = "Core API and host Karatsuba contracts (9), CPU API surface and dispatch (695), Base method CPU dispatch (6), Consistent exceptions on CPU (11)"
+
+[[families]]
+name = "elementwise add, subtract, negate, scalar, and modular mutation"
+applies_to = ["cuda", "metal"]
+owner = "coordinator dispatch after E2 acceptance"
+status = "host_preflight_only; device parity pending"
+assertion_count = 19
+pass_count = 19
+skip_count = 2
+host_assertion_count = 19
+device_assertion_count = 0
+evidence = "Elementwise host preflight metadata"
+notes = "One CUDA device-family run is unavailable and one Metal device-family run remains unported."
+
+[[families]]
+name = "matrix and vector multiplication, including stripe multiplication"
+applies_to = ["cuda", "metal"]
+owner = "coordinator dispatch after E2 acceptance"
+status = "host_budget_and_geometry_only; device parity pending"
+assertion_count = 30
+pass_count = 30
+skip_count = 2
+host_assertion_count = 30
+device_assertion_count = 0
+evidence = "Empty stripe product budgets on CPU (12), Empty stripe device identity policy on CPU (5), Padding geometry helpers (10), Stripe budget input validation (3)"
+notes = "The device identity testset runs only CPU policy checks; it is not device arithmetic acceptance."
+
+[[families]]
+name = "Karatsuba conversion, precision planning, and arithmetic"
+applies_to = ["core", "cuda", "metal"]
+owner = "coordinator dispatch after E2 acceptance"
+status = "CPU_contracts_pass; device parity pending"
+assertion_count = 1202
+pass_count = 1202
+skip_count = 2
+host_assertion_count = 1202
+device_assertion_count = 0
+evidence = "CPU Karatsuba Float32 and Float64 product precision plans (64), CPU typed scalar Karatsuba negation helper (874), CPU constructor and exact Karatsuba conversion (51), Fixed-width precision budgets (179), Strict CPU Karatsuba storage and inference (25), CPU Karatsuba GEMV batch dispatch contract (9)"
+
+[[families]]
+name = "PLUQ, rank, invertibility, and rectangular inverses"
+applies_to = ["cuda", "metal"]
+owner = "coordinator dispatch after E2 acceptance"
+status = "host_oracle_only; device parity pending"
+assertion_count = 2
+pass_count = 2
+skip_count = 2
+host_assertion_count = 2
+device_assertion_count = 0
+evidence = "Tiny inverse host modular oracle"
+
+[[families]]
+name = "batched PLUQ, batched inverse, and stream behavior"
+applies_to = ["cuda", "metal"]
+owner = "coordinator dispatch after E2 acceptance"
+status = "host_oracle_only; device parity pending"
+assertion_count = 27
+pass_count = 27
+skip_count = 2
+host_assertion_count = 27
+device_assertion_count = 0
+evidence = "Batched PLUQ exact host oracle"
+notes = "Metal single-stream and multi-stream capability assertions are counted in the overlapping Metal capability row."
+
+[[families]]
+name = "CUDA Float64, large-modulus, and cuBLAS compatibility"
+applies_to = ["cuda"]
+owner = "CUDA-only existing tests; hardware acceptance requires CUDA"
+status = "CPU_safe_checks_pass; CUDA_device_acceptance_pending"
+assertion_count = 34
+pass_count = 34
+skip_count = 1
+host_assertion_count = 34
+device_assertion_count = 0
+evidence = "CUDA kernel globals resolve on CPU (2), Modulus GPU test callers resolve on CPU (7), CPU-safe cuBLAS scalar cache inference (24), CUDA BLAS binding (1)"
+notes = "The explicit CUDA selection fails clearly because CUDA is installed but nonfunctional; the default run logs that CUDA-dependent device tests were skipped."
+
+[[families]]
+name = "Metal unsupported precision and multi-stream capability errors"
+applies_to = ["metal"]
+owner = "E2 capability fixtures; extend with future backend-family owners"
+status = "negative_capability_checks_pass"
+assertion_count = 6
+pass_count = 6
+skip_count = 0
+host_assertion_count = 0
+device_assertion_count = 6
+rollup_include = false
+included_in = "modular array constructors, storage, views, and factories"
+evidence = "Within Metal modular storage and backend selection: one accepted single-stream context, rejected multi-stream request, Int32 rejection, Float64 rejection, unsupported Float32 modulus rejection, and storage-mode mismatch rejection."
+
+[[families]]
+name = "display, Aqua, ExplicitImports, and package hygiene"
+applies_to = ["core", "cuda", "metal"]
+owner = "E2 integration"
+status = "hygiene_checks_pass; CUDA display check unavailable"
+assertion_count = 26
+pass_count = 26
+skip_count = 1
+host_assertion_count = 26
+device_assertion_count = 0
+evidence = "DispatchDoctor return type stability (3), Aqua (6), ExplicitImports (17)"
+notes = "CUDA-dependent display testset ran with zero assertions because CUDA was nonfunctional."

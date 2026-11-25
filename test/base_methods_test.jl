@@ -474,6 +474,6 @@ function test_base_methods_gpu()
     end
 end
 
-if CUDA.functional()
+if GFM_TEST_CUDA_FUNCTIONAL
     test_base_methods_gpu()
 end

@@ -20,14 +20,16 @@
     @test_throws DimensionMismatch G.KaratsubaMatrix(zeros(2, 2), zeros(2, 3); modulus = 3)
     @test_throws ArgumentError G.KaratsubaMatrix(zeros(2, 2), zeros(2, 2); modulus = 2^52)
     @test_throws OverflowError G._karatsuba_checked_sum_bound(typemax(Int), 1, "sum")
-    @test_throws DimensionMismatch cuda_ext._stripe_mul(
-        zeros(2, 3),
-        zeros(2, 2);
-        modulus = 101,
-    )
-    @test_throws OverflowError cuda_ext._stripe_mul(
-        zeros(2, 2),
-        zeros(2, 2);
-        modulus = 2^52,
-    )
+    if GFM_TEST_CUDA_LOADED
+        @test_throws DimensionMismatch cuda_ext._stripe_mul(
+            zeros(2, 3),
+            zeros(2, 2);
+            modulus = 101,
+        )
+        @test_throws OverflowError cuda_ext._stripe_mul(
+            zeros(2, 2),
+            zeros(2, 2);
+            modulus = 2^52,
+        )
+    end
 end
