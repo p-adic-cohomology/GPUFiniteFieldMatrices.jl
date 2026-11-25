@@ -10,6 +10,7 @@ const _CUBLAS_SCALAR_PAIR{T} = Tuple{_CUDA_CU_REF_VALUE{T},_CUDA_CU_REF_VALUE{T}
 
 const _cublas_scalar_cache_f64 = IdDict{Task,Tuple}()
 const _cublas_scalar_cache_f32 = IdDict{Task,Tuple}()
+const _cublas_scalar_cache_f16 = IdDict{Task,Tuple}()
 
 """
 returns (0, 1) as pointers that can be used with low-level cuBLAS APIs
@@ -31,6 +32,31 @@ returns (0, 1) as pointers that can be used with low-level cuBLAS APIs
     end
 end
 
+"""
+returns (0, 1) as pointers that can be used with low-level cuBLAS APIs
+"""
+@inline function cublas_scalars_f16()::_CUBLAS_SCALAR_PAIR{Float16}
+    t = current_task()
+    get!(_cublas_scalar_cache_f16, t) do
+        (CuRef(Float16(0.0)), CuRef(Float16(1.0)))
+    end
+end
+
+# The same-type GEMM entry points used below take scalars in the default compute
+# type. Float16 therefore uses Float16 scalars here; no alternate compute type is
+# requested by this call.
+@inline function _stripe_gemm_scalars(::Type{Float64})::_CUBLAS_SCALAR_PAIR{Float64}
+    return cublas_scalars_f64()
+end
+
+@inline function _stripe_gemm_scalars(::Type{Float32})::_CUBLAS_SCALAR_PAIR{Float32}
+    return cublas_scalars_f32()
+end
+
+@inline function _stripe_gemm_scalars(::Type{Float16})::_CUBLAS_SCALAR_PAIR{Float16}
+    return cublas_scalars_f16()
+end
+
 function _stripe_gemv_scalars(::Type{Float64})
     return cublas_scalars_f64()
 end
@@ -41,6 +67,47 @@ end
 
 function _stripe_gemv_scalars(::Type{T}) where {T}
     return (CuRef(zero(T)), CuRef(one(T)))
+end
+
+@inline function _stripe_accumulate_stripe!(
+    Cdata::AbstractMatrix,
+    Adata::AbstractMatrix,
+    Bdata::AbstractMatrix,
+    stripe,
+    first_stripe,
+    scalars,
+)
+    zero_ptr, one_ptr = scalars
+    _CUDA_BLAS.gemm!(
+        'N',
+        'N',
+        one_ptr,
+        @view(Adata[:, stripe]),
+        @view(Bdata[stripe, :]),
+        first_stripe ? zero_ptr : one_ptr,
+        Cdata,
+    )
+    return Cdata
+end
+
+@inline function _stripe_accumulate_stripe!(
+    zdata::AbstractVector,
+    Adata::AbstractMatrix,
+    xdata::AbstractVector,
+    stripe,
+    first_stripe,
+    scalars,
+)
+    zero_ptr, one_ptr = scalars
+    _CUDA_BLAS.gemv!(
+        'N',
+        one_ptr,
+        @view(Adata[:, stripe]),
+        @view(xdata[stripe]),
+        first_stripe ? zero_ptr : one_ptr,
+        zdata,
+    )
+    return zdata
 end
 
 # Legacy CUDA inverse and Karatsuba callers use these algorithm helpers.
@@ -94,7 +161,22 @@ function _stripe_preflight(Cdata, Adata, Bdata, modulus, input_bound, max_ops)
     return chunk
 end
 
-# Existing CUDA callers operate on native views and only write those views.
+function _legacy_cuda_stripe_run!(Cdata, Adata, Bdata, modulus, chunk)
+    isempty(Cdata) && return Cdata
+    k = size(Adata, 2)
+    k == 0 && return fill!(Cdata, zero(eltype(Cdata)))
+
+    T = eltype(Cdata)
+    scalars = Cdata isa AbstractVector ? _stripe_gemv_scalars(T) : _stripe_gemm_scalars(T)
+    for stripe in FFM._stripe_ranges(k, chunk)
+        _stripe_accumulate_stripe!(Cdata, Adata, Bdata, stripe, first(stripe) == 1, scalars)
+        FFM._stripe_reduce!(Cdata, modulus)
+    end
+    return Cdata
+end
+
+# The legacy inverse and Karatsuba consumers retain their task-local device
+# scalars and only write the native destination view.
 function _stripe_mul!(
     Cdata::Union{AbstractMatrix,AbstractVector},
     Adata::AbstractMatrix,
@@ -105,7 +187,7 @@ function _stripe_mul!(
 )
     chunk = _stripe_preflight(Cdata, Adata, Bdata, modulus, input_bound, max_ops)
     return _with_cuda_device(CUDA.device(_cuda_root(Cdata))) do
-        FFM._stripe_run!(Cdata, Adata, Bdata, modulus, chunk)
+        _legacy_cuda_stripe_run!(Cdata, Adata, Bdata, modulus, chunk)
     end
 end
 

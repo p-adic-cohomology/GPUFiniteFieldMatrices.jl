@@ -92,7 +92,11 @@ function _stripe_check_alias(Cdata, Adata, Bdata)
 end
 
 function _stripe_logical_data(A::GPUModArray)
-    return _logical_view(parent(A), size(A))
+    storage = parent(A)
+    dims = size(A)
+    all(i -> size(storage, i) >= dims[i], eachindex(dims)) ||
+        throw(DimensionMismatch("array storage is smaller than its logical dimensions"))
+    return _logical_view(storage, dims)
 end
 
 function _stripe_effective_modulus(stored_modulus, modulus_override)
@@ -142,7 +146,8 @@ function _stripe_product_args(
     )
     Cdata, Adata, Bdata =
         _stripe_logical_data(C), _stripe_logical_data(A), _stripe_logical_data(B)
-    _stripe_check_alias(Cdata, Adata, Bdata)
+    # Public products also clear physical destination padding.
+    _stripe_check_alias(parent(C), parent(A), parent(B))
 
     bound = input_bound === nothing ? modulus(A) : input_bound
     chunk = _stripe_safe_chunk(
@@ -198,6 +203,7 @@ Multiply into an existing modular matrix or vector. For matrices, the default
 reduction modulus is `modulus(C)`. For vectors, the destination and inputs must
 have the same stored modulus unless a positive `modulus_override` is supplied.
 Input moduli must agree and the destination retains its stored modulus.
+Products use the logical input extents and clear destination padding.
 
 Each nonnegative input entry must be below `input_bound`, which defaults to
 the input modulus. The product is reduced after each stripe. `max_ops` limits
