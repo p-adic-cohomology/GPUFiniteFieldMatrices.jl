@@ -117,6 +117,7 @@ end
 
 if GFM_TEST_METAL_FUNCTIONAL
     include("metal_products_test.jl")
+    include("metal_ordinary_inverse_test.jl")
     include("CuModMatrix/inverse/test_ordinary_ka.jl")
     MetalOrdinaryPLUQTests.run_tests()
     include("CuModMatrix/inverse/metal_subgroup_pivot_test.jl")
