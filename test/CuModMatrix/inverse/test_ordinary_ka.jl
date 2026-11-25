@@ -303,12 +303,12 @@ function test_complete(S)
     @test Array(parent16) == host16
 end
 
-function test_blocked(S, large_blocked)
+function test_blocked(S, large_blocked; options = PANEL_OPTIONS)
     rng = MersenneTwister(92817)
     for (m, n) in ((13, 13), (15, 23), (21, 14))
         p = 101
         regular = rand(rng, 0:(p-1), m, n)
-        check_blocked(regular, p, S)
+        check_blocked(regular, p, S; options)
 
         # The first two pivots succeed, but their local Schur complement
         # contains no pivot. Correct recovery must update all three outer
@@ -321,7 +321,7 @@ function test_blocked(S, large_blocked)
         late[5, 3] += 7
         late[3, 6] += 11
         late[9, 9] += 13
-        rows, _, rank = check_blocked(late, p, S)
+        rows, _, rank = check_blocked(late, p, S; options)
         @test rows[1:3] == [1, 2, 5]
         @test rank == 5
 
@@ -330,13 +330,13 @@ function test_blocked(S, large_blocked)
         very_late = zeros(Int, m, n)
         very_late[m, 1] = 5
         very_late[1, n] = 7
-        rows, cols, rank = check_blocked(very_late, p, S)
+        rows, cols, rank = check_blocked(very_late, p, S; options)
         @test (rows[1], cols[2], rank) == (m, n, 2)
     end
 
     if large_blocked
         large = rand(rng, 0:(LARGE_PRIME-1), 7, 11)
-        check_blocked(large, LARGE_PRIME, S)
+        check_blocked(large, LARGE_PRIME, S; options)
     end
 end
 
@@ -353,6 +353,16 @@ function run_tests(; blocked = true, large_blocked = true)
                     @testset "Blocked Schur integration" test_blocked(
                         storage,
                         large_blocked,
+                    )
+                    subgroup_options = PLUQOptions(
+                        PANEL_OPTIONS;
+                        trsm_mode = :warp,
+                        pivot_warp_kernel = :shfl,
+                    )
+                    @testset "Blocked subgroup driver" test_blocked(
+                        storage,
+                        false;
+                        options = subgroup_options,
                     )
                 end
             end

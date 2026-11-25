@@ -152,13 +152,17 @@ end
 
 # For a very large trailing rectangle, scan consecutive column windows so the
 # atomic position still fits Int32. Windows and positions are in pivot order.
-function _pluq_ka_complete_pivot(A, slot, minima, host, k, m, n, N)
+function _pluq_ka_complete_pivot(A, slot, minima, host, k, m, n, N, mode, subgroup_width)
     rows = m - k + 1
     max_cols = (Int(_PLUQ_KA_NO_CANDIDATE) - 1) ÷ rows
     for first_col = k:max_cols:n
         cols = min(max_cols, n - first_col + 1)
         area = rows * cols
-        _pluq_ka_launch_pivot!(slot, A, k, first_col, rows, area, N, minima)
+        if rows <= subgroup_width && cols == n - k + 1
+            _pluq_subgroup_pivot!(slot, A, k, m, n, N, mode)
+        else
+            _pluq_ka_launch_pivot!(slot, A, k, first_col, rows, area, N, minima)
+        end
         copyto!(host, slot)
         position = Int(host[1])
         if position <= area
@@ -169,7 +173,7 @@ function _pluq_ka_complete_pivot(A, slot, minima, host, k, m, n, N)
     return 0, 0
 end
 
-function _pluq_ka_complete!(A, N, p, q, slot, host, start, m, n)
+function _pluq_ka_complete!(A, N, p, q, slot, host, start, m, n; options = PLUQOptions())
     backend = KernelAbstractions.get_backend(A)
     group = _PLUQ_KA_GROUP_SIZE
     swap = _pluq_ka_swap_kernel!(backend, group)
@@ -178,9 +182,13 @@ function _pluq_ka_complete!(A, N, p, q, slot, host, start, m, n)
     minima =
         KernelInterface.supports_atomics(backend) ? nothing :
         similar(slot, Int32, _PLUQ_KA_PIVOT_GROUPS)
+    mode = options.pivot_warp_kernel
+    subgroup_width =
+        _storage_backend(A) === Val(:metal) ? _pluq_pivot_subgroup_width(backend, mode) : 0
     rank = start - 1
     for k = start:min(m, n)
-        prow, pcol = _pluq_ka_complete_pivot(A, slot, minima, host, k, m, n, N)
+        prow, pcol =
+            _pluq_ka_complete_pivot(A, slot, minima, host, k, m, n, N, mode, subgroup_width)
         prow == 0 && break
         if prow != k
             swap(A, p, k, prow, Val(true); ndrange = n)
@@ -213,7 +221,7 @@ function pluq_rectangular_rank_reference_gpu!(
     _launch_mod_arrays!(logical, logical, N, _PLUQ_KA_GROUP_SIZE)
     p, q = _pluq_ka_device_permutations(A, m, n)
     slot = similar(_elementwise_native_root(A), Int32, 1)
-    rank = _pluq_ka_complete!(A, N, p, q, slot, Vector{Int32}(undef, 1), 1, m, n)
+    rank = _pluq_ka_complete!(A, N, p, q, slot, Vector{Int32}(undef, 1), 1, m, n; options)
     return Int.(Array(p)), Int.(Array(q)), rank
 end
 

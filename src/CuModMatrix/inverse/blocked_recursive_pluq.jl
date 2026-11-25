@@ -2,8 +2,42 @@
 # inside kend. Finish the missing outer solves, then restore that small
 # portion after the ordinary Schur update over the whole trailing rectangle.
 function _pluq_ka_finish_panel!(A, N, opts, start, last, kend, m, n, dinv)
-    _pluq_ka_trsm_left!(A, N, start, last, kend + 1, n)
-    _pluq_ka_trsm_right!(A, N, start, last, kend + 1, m, dinv)
+    depth = last - start + 1
+    use_subgroup =
+        last == kend &&
+        eltype(A) === Float32 &&
+        _storage_backend(A) === Val(:metal) &&
+        (
+            opts.trsm_mode === :warp ||
+            (opts.trsm_mode === :auto && depth <= opts.trsm_warp_threshold)
+        ) &&
+        _ki_trsm_supports_subgroups(KernelInterface.get_backend(A))
+    if use_subgroup
+        _ki_trsm_panel!(
+            A,
+            N,
+            start,
+            last,
+            n;
+            side = :left,
+            uplo = :lower,
+            unit_diagonal = true,
+        )
+        _ki_trsm_panel!(
+            A,
+            N,
+            start,
+            last,
+            m;
+            side = :right,
+            uplo = :upper,
+            unit_diagonal = false,
+        )
+    else
+        # Partial panels already solved the right-hand sides within kend.
+        _pluq_ka_trsm_left!(A, N, start, last, kend + 1, n)
+        _pluq_ka_trsm_right!(A, N, start, last, kend + 1, m, dinv)
+    end
     if last == min(m, n) || kend == max(m, n)
         return A
     end
@@ -48,7 +82,8 @@ function _pluq_ka_blocked!(A, N, m, n, opts, rectangular::Val)
         if rank < kend
             # A zero diagonal panel does not imply zero rank outside it.
             # Continue from the fully updated remainder, with complete pivots.
-            rank = _pluq_ka_complete!(A, N, p, q, slot, host, rank + 1, m, n)
+            rank =
+                _pluq_ka_complete!(A, N, p, q, slot, host, rank + 1, m, n; options = opts)
             break
         end
         start = kend + 1

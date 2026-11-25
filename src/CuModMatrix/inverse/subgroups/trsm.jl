@@ -83,10 +83,14 @@ function _ki_trsm_panel_kernel!(
     return nothing
 end
 
+function _ki_trsm_supports_subgroups(backend)
+    return KernelInterface.supports_subgroups(backend) &&
+           KernelInterface.supports_linear_subgroups(backend) &&
+           KernelInterface.supports_shuffle(backend, UInt32)
+end
+
 function _ki_trsm_workgroupsize(backend, N)
-    if !KernelInterface.supports_subgroups(backend) ||
-       !KernelInterface.supports_linear_subgroups(backend) ||
-       !KernelInterface.supports_shuffle(backend, UInt32)
+    if !_ki_trsm_supports_subgroups(backend)
         throw(
             ArgumentError(
                 "subgroup TRSM requires linear subgroups with UInt32 shuffle support",
