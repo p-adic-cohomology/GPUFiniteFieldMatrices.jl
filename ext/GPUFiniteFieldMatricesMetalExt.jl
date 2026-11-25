@@ -58,6 +58,7 @@ end
 
 include("GPUFiniteFieldMatricesMetalExt/storage.jl")
 include("GPUFiniteFieldMatricesMetalExt/karatsuba_storage.jl")
+include("GPUFiniteFieldMatricesMetalExt/karatsuba_products.jl")
 include("GPUFiniteFieldMatricesMetalExt/products.jl")
 
 end

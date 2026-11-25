@@ -664,16 +664,6 @@ import Base: *
 _karatsuba_output_like(source::KaratsubaArray, dims::Dims) =
     FFM._karatsuba_output_like(source, dims)
 
-function _karatsuba_product_workspace_like(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
-    return KaratsubaArray{T,D,S,P}(
-        low_part(K),
-        high_part(K);
-        low_modulus = low_modulus(K),
-        high_modulus = high_modulus(K),
-        modulus = modulus(K),
-    )
-end
-
 function _karatsuba_validate_allocating_product_storage(K::KaratsubaArray{T,D}) where {T,D}
     (T === Float32 || T === Float64) || throw(
         ArgumentError("allocating Karatsuba products support Float32 or Float64 storage"),
@@ -705,11 +695,7 @@ function *(A::KaratsubaArray{TA,2}, B::KaratsubaArray{TB,2}) where {TA,TB}
     _karatsuba_validate_allocating_product_storage(A)
     _karatsuba_validate_allocating_product_storage(B)
 
-    A_work = _karatsuba_product_workspace_like(A)
-    B_work = _karatsuba_product_workspace_like(B)
-    C = _karatsuba_output_like(A, (size(A, 1), size(B, 2)))
-    foreach(initialize_plan!, (A_work, B_work, C))
-    return LinearAlgebra.mul!(C, A_work, B_work)
+    return FFM._karatsuba_allocating_product(A, B)
 end
 
 function *(A::KaratsubaArray{TA,2}, x::KaratsubaArray{TB,1}) where {TA,TB}
@@ -717,11 +703,7 @@ function *(A::KaratsubaArray{TA,2}, x::KaratsubaArray{TB,1}) where {TA,TB}
     _karatsuba_validate_allocating_product_storage(A)
     _karatsuba_validate_allocating_product_storage(x)
 
-    A_work = _karatsuba_product_workspace_like(A)
-    x_work = _karatsuba_product_workspace_like(x)
-    y = _karatsuba_output_like(A, (size(A, 1),))
-    foreach(initialize_plan!, (A_work, x_work, y))
-    return LinearAlgebra.mul!(y, A_work, x_work)
+    return FFM._karatsuba_allocating_product(A, x)
 end
 
 function *(A::KaratsubaArray, B::KaratsubaArray)
