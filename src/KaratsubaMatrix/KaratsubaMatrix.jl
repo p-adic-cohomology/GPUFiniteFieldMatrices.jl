@@ -35,7 +35,13 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
             throw(ArgumentError("Karatsuba plans require a concrete storage type"))
         size(A) == size(B) || throw(DimensionMismatch("Dimensions of matrices must match"))
         N1, N2, M = _karatsuba_parameters(size(A), T; low_modulus, high_modulus, modulus)
-        _karatsuba_validate_component_type(T, _storage_backend(A))
+        backend = _storage_backend(A)
+        _karatsuba_validate_component_type(T, backend)
+        # Preserve the established represented-modulus limit for host and CUDA components.
+        if T <: AbstractFloat && backend !== Val(:metal)
+            M < (BigInt(1) << (get_bits(T) - 2)) ||
+                throw(ArgumentError("Modulus too large for $T Karatsuba arithmetic"))
+        end
 
         return new{T,D,component_type,plan_type}(A, B, nothing, N1, N2, M)
     end
