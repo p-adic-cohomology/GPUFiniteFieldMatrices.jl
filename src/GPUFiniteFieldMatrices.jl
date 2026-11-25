@@ -71,6 +71,7 @@ end
 
 # Device kernels must not contain DispatchDoctor host-side instrumentation.
 include("CuModMatrix/kernel_ops/elementwise.jl")
+include("CuModMatrix/inverse/subgroups/pivot.jl")
 
 export GPUModArray, GPUModMatrix, GPUModVector, CuModArray, CuModMatrix, CuModVector
 export MtlModArray, MtlModMatrix, MtlModVector
