@@ -223,6 +223,8 @@ end
         :_karatsuba_host_array,
         :_karatsuba_matmul_product_plan,
         :_karatsuba_plan_type,
+        :_karatsuba_resolve_requested_component_type,
+        :_karatsuba_validate_component_type,
         :_karatsuba_zero_component,
         :_logical_view,
         :_normalize_logical_size,
@@ -262,15 +264,10 @@ end
     #   AbstractSparseMatrixCSC          – host sparse source dispatch for copyto!
     #   mightalias                       – raw-array overlap preflight via Base.mightalias
     #   gemm!, gemv!, gemv_batched!      – CUDA cuBLAS low-level BLAS entry points
-    #   @atomic, FAST_MATH, fill, math_mode, pin, rand, zeros
-    #                                    – CUDA 5.11.3 owns these names in CUDA
-    #                                      without public markers. CUDA 6 moves
-    #                                      @atomic, FAST_MATH, fill, math_mode,
-    #                                      pin, and zeros to CUDACore and marks
-    #                                      them public; CUDA 6 also publicly
-    #                                      forwards rand from cuRAND.
-    #                                      Keep the precise CUDA 5 names ignored
-    #                                      to preserve the supported 5.11 line.
+    #   @atomic                          – Atomix's documented macro lacks a public marker
+    #   DefaultStorageMode               – Metal's default array storage type
+    #   FAST_MATH, fill, math_mode, pin, rand, zeros
+    #                                    – native CUDA controls and allocation
     # The separate owner check remains enabled for all of these accesses.
     @test check_all_qualified_accesses_are_public(
         GPUFiniteFieldMatrices;
@@ -283,6 +280,7 @@ end
             :gemv!,
             :gemv_batched!,
             Symbol("@atomic"),
+            :DefaultStorageMode,
             :FAST_MATH,
             :fill,
             :math_mode,

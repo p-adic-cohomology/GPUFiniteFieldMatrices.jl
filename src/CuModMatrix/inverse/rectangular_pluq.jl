@@ -1,3 +1,5 @@
+import Atomix
+
 # Reduce one 1-based column-major index per workgroup. Only group leaders
 # update the common slot, and only when independent groups are launched.
 @kernel unsafe_indices = true inbounds = true function _pluq_ka_pivot_kernel!(
@@ -26,7 +28,7 @@
     if lane == 1
         position = min(candidates[1], Int32(area + 1))
         if Mode === :atomic
-            @atomic :monotonic min(slot[1], position)
+            Atomix.@atomic :monotonic min(slot[1], position)
         else
             slot[group] = position
         end

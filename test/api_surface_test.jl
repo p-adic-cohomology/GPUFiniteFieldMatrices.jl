@@ -105,12 +105,12 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
     internal_triangular_helpers = (
         :_lower_triangular_inv_32!,
         :_upper_triangular_inv_32!,
-        :_lower_triangular_inv_32_kernel!,
-        :_upper_triangular_inv_32_kernel!,
+        :_triangular_inverse_tile_kernel!,
+        :_triangular_inverse_diagonal_kernel!,
     )
-    @test all(name -> isdefined(CUDA_EXT, name), internal_triangular_helpers)
-    @test all(name -> !Base.ispublic(CUDA_EXT, name), internal_triangular_helpers)
-    @test all(name -> !Base.isexported(CUDA_EXT, name), internal_triangular_helpers)
+    @test all(name -> isdefined(mod, name), internal_triangular_helpers)
+    @test all(name -> !Base.ispublic(mod, name), internal_triangular_helpers)
+    @test all(name -> !Base.isexported(mod, name), internal_triangular_helpers)
     extension_hooks = (
         :_backend_available,
         :_backend_instance,

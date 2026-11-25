@@ -1,4 +1,3 @@
-import Atomix: @atomic
 import KernelAbstractions: @localmem, @synchronize
 
 const _PLUQ_KA_GROUP_SIZE = 128
