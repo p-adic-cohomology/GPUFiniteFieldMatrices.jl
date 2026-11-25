@@ -1,5 +1,4 @@
-const _ELEMENTWISE_PREFLIGHT =
-    GPUFiniteFieldMatrices
+const _ELEMENTWISE_PREFLIGHT = GPUFiniteFieldMatrices
 
 @testset "Elementwise host preflight metadata" begin
     mod = _ELEMENTWISE_PREFLIGHT

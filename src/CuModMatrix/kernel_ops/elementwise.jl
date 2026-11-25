@@ -73,12 +73,10 @@ end
 @inline function _check_elementwise_backend(A, B)
     native_A = parent(A)
     native_B = parent(B)
-    _storage_backend(native_A) === nothing && throw(
-        ArgumentError("Elementwise modular kernels require CUDA or Metal storage"),
-    )
-    _storage_backend(native_B) === nothing && throw(
-        ArgumentError("Elementwise modular kernels require CUDA or Metal storage"),
-    )
+    _storage_backend(native_A) === nothing &&
+        throw(ArgumentError("Elementwise modular kernels require CUDA or Metal storage"))
+    _storage_backend(native_B) === nothing &&
+        throw(ArgumentError("Elementwise modular kernels require CUDA or Metal storage"))
     interface_A = _elementwise_interface_storage(A, native_A)
     interface_B = _elementwise_interface_storage(B, native_B)
     backend_A = KernelInterface.get_backend(interface_A)
@@ -225,7 +223,11 @@ function _elementwise_working_modulus(
     return _elementwise_working_modulus(A, selected)
 end
 
-function _normalize_elementwise_scalar(::Type{T}, scalar::Number, modulus_value::Int) where {T<:AbstractFloat}
+function _normalize_elementwise_scalar(
+    ::Type{T},
+    scalar::Number,
+    modulus_value::Int,
+) where {T<:AbstractFloat}
     scalar isa Real || throw(ArgumentError("finite-field scalars must be real integers"))
     if scalar isa AbstractFloat
         (isfinite(scalar) && isinteger(scalar)) ||
@@ -236,8 +238,10 @@ function _normalize_elementwise_scalar(::Type{T}, scalar::Number, modulus_value:
 end
 
 @inline function _is_exact_integer_input(value::T) where {T<:AbstractFloat}
-    return isfinite(value) && trunc(value) == value &&
-           value >= T(typemin(Int64)) && value < T(typemax(Int64))
+    return isfinite(value) &&
+           trunc(value) == value &&
+           value >= T(typemin(Int64)) &&
+           value < T(typemax(Int64))
 end
 
 function _validate_elementwise_values(A::GPUModArray)
@@ -273,8 +277,7 @@ end
     while !iszero(multiplier)
         isodd(multiplier) && (result = _add_mod_u64(result, addend, modulus_value))
         multiplier >>= 1
-        iszero(multiplier) ||
-            (addend = _add_mod_u64(addend, addend, modulus_value))
+        iszero(multiplier) || (addend = _add_mod_u64(addend, addend, modulus_value))
     end
     return result
 end
@@ -336,18 +339,21 @@ end
     index = @index(Global, Linear)
     if index <= length(output)
         value = @inbounds input[index]
-        result = _scalar_integer(
-            operation,
-            _residue_u64(value, modulus_i),
-            scalar_u,
-            modulus_u,
-        )
+        result =
+            _scalar_integer(operation, _residue_u64(value, modulus_i), scalar_u, modulus_u)
         @inbounds output[index] = convert(T, result)
     end
     return
 end
 
-function _launch_binary_arrays!(output, left, right, modulus_value::Int, operation, threads::Int)
+function _launch_binary_arrays!(
+    output,
+    left,
+    right,
+    modulus_value::Int,
+    operation,
+    threads::Int,
+)
     count = length(output)
     count == 0 && return output
     T = eltype(output)
@@ -374,15 +380,7 @@ function _launch_scalar_arrays!(
     modulus_u = UInt64(modulus_i)
     backend = KernelInterface.get_backend(output)
     kernel = _elementwise_scalar_kernel!(backend, threads)
-    kernel(
-        output,
-        input,
-        modulus_i,
-        modulus_u,
-        scalar_u,
-        operation;
-        ndrange = count,
-    )
+    kernel(output, input, modulus_i, modulus_u, scalar_u, operation; ndrange = count)
     return output
 end
 
@@ -408,14 +406,7 @@ end
 
 function _launch_mod_arrays!(output, input, modulus_value::Int, threads::Int)
     T = eltype(output)
-    _launch_scalar_arrays!(
-        output,
-        input,
-        modulus_value,
-        zero(UInt64),
-        Val(:mod),
-        threads,
-    )
+    _launch_scalar_arrays!(output, input, modulus_value, zero(UInt64), Val(:mod), threads)
     return output
 end
 
@@ -433,7 +424,12 @@ function _check_raw_array_compatible(C::AbstractArray, A::AbstractArray)
     return nothing
 end
 
-function mod!(C::GPUModArray, A::GPUModArray, modulus_value::Integer; threads::Int = _ELEMENTWISE_WORKGROUP_SIZE)
+function mod!(
+    C::GPUModArray,
+    A::GPUModArray,
+    modulus_value::Integer;
+    threads::Int = _ELEMENTWISE_WORKGROUP_SIZE,
+)
     _check_elementwise_compatible(C, A)
     _validate_elementwise_values(A)
     checked_modulus = _elementwise_working_modulus(C, modulus_value)
@@ -441,11 +437,18 @@ function mod!(C::GPUModArray, A::GPUModArray, modulus_value::Integer; threads::I
     return _launch_mod!(C, A, checked_modulus, checked_threads)
 end
 
-function mod!(C::AbstractArray{T,D}, A::AbstractArray{T,D}, modulus_value::Integer; threads::Int = _ELEMENTWISE_WORKGROUP_SIZE) where {T<:AbstractFloat,D}
+function mod!(
+    C::AbstractArray{T,D},
+    A::AbstractArray{T,D},
+    modulus_value::Integer;
+    threads::Int = _ELEMENTWISE_WORKGROUP_SIZE,
+) where {T<:AbstractFloat,D}
     _check_raw_array_compatible(C, A)
     _check_elementwise_backend(C, A)
     all(_is_exact_integer_input, A) || throw(
-        ArgumentError("elementwise arithmetic requires finite integer entries representable as Int64"),
+        ArgumentError(
+            "elementwise arithmetic requires finite integer entries representable as Int64",
+        ),
     )
     checked_modulus = _validate_elementwise_modulus(T, C, modulus_value)
     checked_threads = _validate_elementwise_threads(threads)
@@ -557,11 +560,19 @@ function rscalar_sub!(
     return _elementwise_scalar!(C, A, scalar, Val(:rsub), modulus_override, threads)
 end
 
-function rscalar_sub!(C::AbstractArray{T,D}, A::AbstractArray{T,D}, scalar::Number, modulus_value::Integer; threads::Int = _ELEMENTWISE_WORKGROUP_SIZE) where {T<:AbstractFloat,D}
+function rscalar_sub!(
+    C::AbstractArray{T,D},
+    A::AbstractArray{T,D},
+    scalar::Number,
+    modulus_value::Integer;
+    threads::Int = _ELEMENTWISE_WORKGROUP_SIZE,
+) where {T<:AbstractFloat,D}
     _check_raw_array_compatible(C, A)
     _check_elementwise_backend(C, A)
     all(_is_exact_integer_input, A) || throw(
-        ArgumentError("elementwise arithmetic requires finite integer entries representable as Int64"),
+        ArgumentError(
+            "elementwise arithmetic requires finite integer entries representable as Int64",
+        ),
     )
     checked_modulus = _validate_elementwise_modulus(T, C, modulus_value)
     scalar_u = _normalize_elementwise_scalar(T, scalar, checked_modulus)
@@ -683,10 +694,8 @@ function _copyto_modular_array!(
     return destination
 end
 
-Base.copyto!(
-    destination::GPUModArray{T,D},
-    source::AbstractArray{S,D},
-) where {T,S,D} = _copyto_modular_array!(destination, source)
+Base.copyto!(destination::GPUModArray{T,D}, source::AbstractArray{S,D}) where {T,S,D} =
+    _copyto_modular_array!(destination, source)
 
 # These intersections keep the broad wrapper copy method unambiguous with the
 # sparse and CHOLMOD matrix copy methods. Materialize these host-only formats
@@ -735,10 +744,7 @@ end
 
 zero!(A::GPUModArray) = fill!(A, zero(eltype(A)))
 
-function mod_elements!(
-    A::GPUModArray;
-    modulus_override::Union{Nothing,Integer} = nothing,
-)
+function mod_elements!(A::GPUModArray; modulus_override::Union{Nothing,Integer} = nothing)
     _validate_positive_modulus_override(modulus_override)
     _check_elementwise_backend(A, A)
     _validate_elementwise_values(A)
@@ -755,7 +761,12 @@ function change_modulus(A::GPUModArray, new_modulus::Integer)
         source = _logical_view(parent(A), size(A))
         destination = _logical_view(parent(result), size(result))
         if checked_modulus < modulus(A)
-            _launch_mod_arrays!(destination, source, checked_modulus, _ELEMENTWISE_WORKGROUP_SIZE)
+            _launch_mod_arrays!(
+                destination,
+                source,
+                checked_modulus,
+                _ELEMENTWISE_WORKGROUP_SIZE,
+            )
         else
             copyto!(destination, source)
         end

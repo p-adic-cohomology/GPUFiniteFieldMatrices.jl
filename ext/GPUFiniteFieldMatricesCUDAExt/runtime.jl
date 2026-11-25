@@ -32,7 +32,7 @@ function _with_cuda_streams(f::F, storage, n::Int) where {F}
         streams = CuStream[]
         sizehint!(streams, n)
         try
-            for _ in 1:n
+            for _ = 1:n
                 push!(streams, CuStream())
             end
             context = _CUDAStreamBatch(streams, target)

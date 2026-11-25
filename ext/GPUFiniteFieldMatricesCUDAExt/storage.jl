@@ -188,8 +188,10 @@ function (::Type{CuModArray{T,D}})(
         _, logical_size, N = _cuda_factory_preflight(T, size(values), modulus, new_size)
         _cuda_storage_mode(storage)
         requested_device === nothing ||
-            requested_device ==
-            KernelInterface.device(KernelInterface.get_backend(values), _cuda_root(values)) ||
+            requested_device == KernelInterface.device(
+                KernelInterface.get_backend(values),
+                _cuda_root(values),
+            ) ||
             throw(
                 ArgumentError(
                     "raw CUDA storage belongs to a different device than the requested device",

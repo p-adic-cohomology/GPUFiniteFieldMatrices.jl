@@ -68,7 +68,8 @@
                 )
                 for transformed in transformed_wrappers
                     backend = mod.KernelInterface.get_backend(transformed)
-                    @test typeof(backend) === typeof(mod.KernelInterface.get_backend(raw_cuda))
+                    @test typeof(backend) ===
+                          typeof(mod.KernelInterface.get_backend(raw_cuda))
                     @test mod.KernelInterface.device(
                         backend,
                         cuda_ext._cuda_root(transformed),
