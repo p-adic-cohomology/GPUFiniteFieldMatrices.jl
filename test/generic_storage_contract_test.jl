@@ -26,10 +26,26 @@ STORAGE_CONTRACT_KI.device(
     @test Base.isexported(G, :GPUModVector)
     @test G.GPUModMatrix{Float32} <: G.GPUModArray{Float32,2}
     @test G.GPUModVector{Float32} <: G.GPUModArray{Float32,1}
-    generic_matrix = G.GPUModMatrix{Float32}(Float32[1 2; 3 4]; modulus = 7)
-    generic_vector = G.GPUModVector(Float32[1, 2]; modulus = 7)
-    @test generic_matrix isa G.GPUModMatrix{Float32}
-    @test generic_vector isa G.GPUModVector{Float32}
+    selected_backend = try
+        G.default_backend()
+    catch err
+        @test err isa ArgumentError
+        :none
+    end
+    if selected_backend === :none
+        @test_throws ArgumentError G.GPUModMatrix{Float32}(Float32[1 2; 3 4]; modulus = 7)
+    else
+        generic_matrix = G.GPUModMatrix{Float32}(Float32[1 2; 3 4]; modulus = 7)
+        generic_vector = G.GPUModVector(Float32[1, 2]; modulus = 7)
+        @test generic_matrix isa G.GPUModMatrix{Float32}
+        @test generic_vector isa G.GPUModVector{Float32}
+        @test G._storage_backend(parent(generic_matrix)) === Val(selected_backend)
+        @test Array(generic_matrix) == Float32[1 2; 3 4]
+        @test Array(generic_vector) == Float32[1, 2]
+
+        exact_integer = G.GPUModArray{Float32,1}(Int[2^24+1]; modulus = 7, mod = true)
+        @test Array(exact_integer) == Float32[2]
+    end
 
     raw = reshape(Float32.(1:16), 4, 4)
     backing = @view raw[2:3, 2:3]

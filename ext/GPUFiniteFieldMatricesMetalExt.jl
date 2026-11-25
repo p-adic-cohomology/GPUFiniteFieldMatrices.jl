@@ -1,14 +1,16 @@
 module GPUFiniteFieldMatricesMetalExt
 
 import Metal
+import LinearAlgebra: I, UniformScaling
 import GPUFiniteFieldMatrices
-import GPUFiniteFieldMatrices:
-    _backend_available,
-    _backend_instance,
-    _validate_backend_storage,
-    _validate_storage_modulus
+import GPUFiniteFieldMatrices: _backend_available, _backend_instance
+import GPUFiniteFieldMatrices: _validate_backend_storage, _validate_storage_modulus
 import GPUFiniteFieldMatrices: _storage_modulus_limit
-import KernelInterface
+import GPUFiniteFieldMatrices: GPUModArray, MtlModArray, MtlModMatrix, MtlModVector
+import GPUFiniteFieldMatrices: identity_matrix, modulus, similar_with_modulus
+
+const FFM = GPUFiniteFieldMatrices
+const DEFAULT_TYPE = Float32
 
 _backend_available(::Val{:metal}) = Metal.functional()
 _backend_instance(::Val{:metal}) = Metal.MetalBackend()
@@ -45,5 +47,8 @@ function _validate_backend_storage(::Val{:metal}, ::Type{T}, modulus::Integer) w
     end
     return nothing
 end
+
+include("GPUFiniteFieldMatricesMetalExt/storage.jl")
+include("GPUFiniteFieldMatricesMetalExt/runtime.jl")
 
 end

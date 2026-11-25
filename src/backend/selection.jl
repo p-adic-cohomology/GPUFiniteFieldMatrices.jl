@@ -10,8 +10,21 @@ function _check_backend_symbol(backend::Symbol)
     return backend
 end
 
-"""Set the process default GPU backend to `:cuda` or `:metal`."""
+_backend_symbol(::Val{:cuda}) = :cuda
+_backend_symbol(::Val{:metal}) = :metal
+
+function _auto_backend(cuda_available::Bool, metal_available::Bool)
+    cuda_available && return :cuda
+    metal_available && return :metal
+    throw(ArgumentError("no functional CUDA or Metal backend is loaded"))
+end
+
+"""Set the process default GPU backend to `:cuda`, `:metal`, or automatic selection."""
 function set_default_backend!(backend::Symbol)
+    if backend === :auto
+        _DEFAULT_BACKEND[] = :auto
+        return backend
+    end
     _check_backend_symbol(backend)
     _DEFAULT_BACKEND[] = backend
     return backend
@@ -30,9 +43,7 @@ function default_backend()
     selected = _DEFAULT_BACKEND[]
     selected === :auto || return selected
 
-    _backend_available(Val(:cuda)) && return :cuda
-    _backend_available(Val(:metal)) && return :metal
-    throw(ArgumentError("no functional CUDA or Metal backend is loaded"))
+    return _auto_backend(_backend_available(Val(:cuda)), _backend_available(Val(:metal)))
 end
 
 function _backend_object(backend::Symbol = default_backend())
@@ -40,4 +51,11 @@ function _backend_object(backend::Symbol = default_backend())
     _backend_available(Val(backend)) ||
         throw(ArgumentError("the selected $backend backend is not loaded and functional"))
     return _backend_instance(Val(backend))
+end
+
+function _require_backend(backend::Symbol)
+    _check_backend_symbol(backend)
+    _backend_available(Val(backend)) ||
+        throw(ArgumentError("the selected $backend backend is not loaded and functional"))
+    return backend
 end

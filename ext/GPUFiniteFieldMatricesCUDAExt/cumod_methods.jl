@@ -141,11 +141,16 @@ function Base.zeros(
     length::Integer;
     modulus::Integer,
     new_size = nothing,
+    storage = :default,
+    device = nothing,
 ) where {T}
     dims, logical_dims, N = _cuda_factory_preflight(T, (length,), modulus, new_size)
+    _cuda_storage_mode(storage)
     padded_entries = _padded_extent(dims[1])
-    data = CUDA.zeros(T, padded_entries)
-    return CuModArray{T,1}(data; modulus = N, mod = false, new_size = logical_dims)
+    return _with_cuda_device(device) do
+        data = CUDA.zeros(T, padded_entries)
+        CuModArray{T,1}(data; modulus = N, mod = false, new_size = logical_dims)
+    end
 end
 
 function Base.zeros(
@@ -154,12 +159,17 @@ function Base.zeros(
     cols::Integer;
     modulus::Integer,
     new_size = nothing,
+    storage = :default,
+    device = nothing,
 ) where {T}
     dims, logical_dims, N = _cuda_factory_preflight(T, (rows, cols), modulus, new_size)
+    _cuda_storage_mode(storage)
     padded_rows = _padded_extent(dims[1])
     padded_cols = _padded_extent(dims[2])
-    data = CUDA.zeros(T, padded_rows, padded_cols)
-    return CuModArray{T,2}(data; modulus = N, mod = false, new_size = logical_dims)
+    return _with_cuda_device(device) do
+        data = CUDA.zeros(T, padded_rows, padded_cols)
+        CuModArray{T,2}(data; modulus = N, mod = false, new_size = logical_dims)
+    end
 end
 
 """
@@ -169,18 +179,28 @@ end
 Creates a random vector or matrix in the finite field modulo `modulus`.
 Only logical entries are sampled; the zero-initialized padding is untouched.
 """
-function Base.rand(::Type{CuModArray{T,1}}, length::Integer; modulus::Integer) where {T}
-    dims, logical_dims, N = _cuda_factory_preflight(T, (length,), modulus)
-    data = CUDA.zeros(T, _padded_size(dims)...)
-    if !isempty(data)
-        logical_data = CUDA.rand(T, dims...)
-        if T <: AbstractFloat
-            logical_data .= floor.(logical_data .* N)
+function Base.rand(
+    ::Type{CuModArray{T,1}},
+    length::Integer;
+    modulus::Integer,
+    new_size = nothing,
+    storage = :default,
+    device = nothing,
+) where {T}
+    dims, logical_dims, N = _cuda_factory_preflight(T, (length,), modulus, new_size)
+    _cuda_storage_mode(storage)
+    return _with_cuda_device(device) do
+        data = CUDA.zeros(T, _padded_size(dims)...)
+        if !any(iszero, logical_dims)
+            logical_data = CUDA.rand(T, logical_dims...)
+            if T <: AbstractFloat
+                logical_data .= mod.(floor.(logical_data .* N), N)
+            end
+            mod!(logical_data, logical_data, N)
+            copyto!(_logical_view(data, logical_dims), logical_data)
         end
-        mod!(logical_data, logical_data, N)
-        copyto!(_logical_view(data, logical_dims), logical_data)
+        CuModArray{T,1}(data; modulus = N, mod = false, new_size = logical_dims)
     end
-    return CuModArray{T,1}(data; modulus = N, mod = false, new_size = logical_dims)
 end
 
 function Base.rand(
@@ -188,18 +208,24 @@ function Base.rand(
     rows::Integer,
     cols::Integer;
     modulus::Integer,
+    new_size = nothing,
+    storage = :default,
+    device = nothing,
 ) where {T}
-    dims, logical_dims, N = _cuda_factory_preflight(T, (rows, cols), modulus)
-    data = CUDA.zeros(T, _padded_size(dims)...)
-    if !isempty(data)
-        logical_data = CUDA.rand(T, dims...)
-        if T <: AbstractFloat
-            logical_data .= floor.(logical_data .* N)
+    dims, logical_dims, N = _cuda_factory_preflight(T, (rows, cols), modulus, new_size)
+    _cuda_storage_mode(storage)
+    return _with_cuda_device(device) do
+        data = CUDA.zeros(T, _padded_size(dims)...)
+        if !any(iszero, logical_dims)
+            logical_data = CUDA.rand(T, logical_dims...)
+            if T <: AbstractFloat
+                logical_data .= mod.(floor.(logical_data .* N), N)
+            end
+            mod!(logical_data, logical_data, N)
+            copyto!(_logical_view(data, logical_dims), logical_data)
         end
-        mod!(logical_data, logical_data, N)
-        copyto!(_logical_view(data, logical_dims), logical_data)
+        CuModArray{T,2}(data; modulus = N, mod = false, new_size = logical_dims)
     end
-    return CuModArray{T,2}(data; modulus = N, mod = false, new_size = logical_dims)
 end
 
 """

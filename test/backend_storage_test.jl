@@ -6,7 +6,7 @@
     @test metal_ext !== nothing
 
     raw = reshape(Float32[1, 2, 3, 4], 2, 2)
-    wrapped = mod.GPUModArray(raw; modulus = 7)
+    wrapped = mod.GPUModArray{Float32,2,typeof(raw)}(raw, size(raw), 7)
     @test parent(wrapped) === raw
     @test size(wrapped) == size(raw)
     @test axes(wrapped) == axes(raw)

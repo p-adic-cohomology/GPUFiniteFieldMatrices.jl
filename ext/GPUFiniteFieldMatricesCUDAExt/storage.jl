@@ -1,5 +1,28 @@
-function _cuda_storage(array::CuArray{T,D,M}) where {T,D,M}
-    return FFM.CuStorage{T,D,M,typeof(array)}(array)
+_cuda_root(array::CuArray) = array
+_cuda_root(array::SubArray) = _cuda_root(parent(array))
+_cuda_memory_type(::CuArray{T,D,M}) where {T,D,M} = M
+
+function _cuda_storage(array::AbstractArray{T,D}) where {T,D}
+    memory_type = _cuda_memory_type(_cuda_root(array))
+    return FFM.CuStorage{T,D,memory_type,typeof(array)}(array)
+end
+
+FFM._storage_backend(::CuArray) = Val(:cuda)
+
+function _cuda_storage_mode(storage)
+    storage === :default ||
+        throw(ArgumentError("CUDA modular storage supports only the default storage mode"))
+    return nothing
+end
+
+function _with_cuda_device(f::Function, device)
+    device === nothing && return f()
+    device isa Integer && return CUDA.device!(Int(device) - 1) do
+        f()
+    end
+    return CUDA.device!(device) do
+        f()
+    end
 end
 
 function _validate_backend_storage(::Val{:cuda}, ::Type{T}, modulus::Integer) where {T}
@@ -52,10 +75,10 @@ end
 
 function _construct_cuda_storage(
     ::Type{T},
-    array::CUDA.CuArray{T,D,M},
+    array::AbstractArray{T,D},
     logical_size::Dims{D},
     modulus::Integer,
-) where {T,D,M}
+) where {T,D}
     _validate_backend_storage(Val(:cuda), T, modulus)
     normalized_size = _normalize_logical_size(size(array), logical_size)
     storage = _cuda_storage(array)
@@ -67,18 +90,39 @@ function (::Type{CuModArray{T,D}})(
     modulus::Integer,
     mod::Bool = false,
     new_size = nothing,
+    storage = :default,
+    device = nothing,
 ) where {T,D,M}
     _, dims, N = _cuda_factory_preflight(T, size(array), modulus, new_size)
+    _cuda_storage_mode(storage)
+    device === nothing ||
+        Int(device) == KernelInterface.device(KernelInterface.get_backend(array), array) ||
+        throw(
+            ArgumentError(
+                "raw CUDA storage belongs to a different device than the requested device",
+            ),
+        )
     return _construct_cuda_storage(T, array, dims, N)
 end
 
-function (::Type{CuModArray})(
-    array::CUDA.CuArray{T,D,M};
+function (::Type{CuModArray{T,D}})(
+    array::SubArray{T,D,P};
     modulus::Integer,
     mod::Bool = false,
     new_size = nothing,
-) where {T,D,M}
-    return CuModArray{T,D}(array; modulus, mod, new_size)
+    storage = :default,
+    device = nothing,
+) where {T,D,P<:CUDA.CuArray}
+    _, dims, N = _cuda_factory_preflight(T, size(array), modulus, new_size)
+    _cuda_storage_mode(storage)
+    device === nothing ||
+        Int(device) == KernelInterface.device(KernelInterface.get_backend(array), array) ||
+        throw(
+            ArgumentError(
+                "raw CUDA storage belongs to a different device than the requested device",
+            ),
+        )
+    return _construct_cuda_storage(T, array, dims, N)
 end
 
 function (::Type{CuModArray{T,D}})(
@@ -86,11 +130,40 @@ function (::Type{CuModArray{T,D}})(
     modulus::Integer,
     mod::Bool = true,
     new_size = nothing,
+    storage = :default,
+    device = nothing,
 ) where {T,D,S}
+    source_backend = FFM._storage_backend(values)
+    if source_backend !== nothing
+        source_backend === Val(:cuda) || throw(
+            ArgumentError(
+                "CuModArray cannot wrap storage from the $(FFM._backend_symbol(source_backend)) backend",
+            ),
+        )
+        T === S || throw(
+            ArgumentError(
+                "raw CUDA storage has element type $S and cannot be converted to $T without copying",
+            ),
+        )
+        _, logical_size, N = _cuda_factory_preflight(T, size(values), modulus, new_size)
+        _cuda_storage_mode(storage)
+        device === nothing ||
+            Int(device) ==
+            KernelInterface.device(KernelInterface.get_backend(values), values) ||
+            throw(
+                ArgumentError(
+                    "raw CUDA storage belongs to a different device than the requested device",
+                ),
+            )
+        return _construct_cuda_storage(T, values, logical_size, N)
+    end
+    _cuda_storage_mode(storage)
     dims, logical_size, N = _cuda_factory_preflight(T, size(values), modulus, new_size)
     padded = FFM._padded_size(dims)
     converted = FFM._modular_host_values(T, values, N, mod)
-    data = CUDA.zeros(T, padded...)
+    data = _with_cuda_device(device) do
+        CUDA.zeros(T, padded...)
+    end
     if !isempty(values)
         inds = CartesianIndices(values)
         copyto!(data, inds, converted, inds)
@@ -103,8 +176,25 @@ function (::Type{CuModArray})(
     modulus::Integer,
     mod::Bool = true,
     new_size = nothing,
+    storage = :default,
+    device = nothing,
 ) where {S,D}
-    return CuModArray{DEFAULT_TYPE,D}(values; modulus, mod, new_size)
+    return CuModArray{DEFAULT_TYPE,D}(values; modulus, mod, new_size, storage, device)
+end
+
+function (::Type{CuModArray})(array::CUDA.CuArray{T,D,M}; kwargs...) where {T,D,M}
+    return CuModArray{T,D}(array; kwargs...)
+end
+
+function (::Type{CuModArray})(array::SubArray{T,D,P}; kwargs...) where {T,D,P<:CUDA.CuArray}
+    return CuModArray{T,D}(array; kwargs...)
+end
+
+function (::Type{CuModArray})(array::SubArray{T,D}; kwargs...) where {T,D}
+    if FFM._storage_backend(array) === Val(:cuda)
+        return CuModArray{T,D}(array; kwargs...)
+    end
+    return CuModArray{DEFAULT_TYPE,D}(array; kwargs...)
 end
 
 CuModMatrix(values::AbstractMatrix; kwargs...) =
@@ -116,6 +206,22 @@ CuModMatrix(array::CUDA.CuArray{T,2}; kwargs...) where {T} =
     CuModArray{T,2}(array; kwargs...)
 CuModVector(array::CUDA.CuArray{T,1}; kwargs...) where {T} =
     CuModArray{T,1}(array; kwargs...)
+CuModMatrix(array::SubArray{T,2,P}; kwargs...) where {T,P<:CUDA.CuArray} =
+    CuModArray{T,2}(array; kwargs...)
+CuModVector(array::SubArray{T,1,P}; kwargs...) where {T,P<:CUDA.CuArray} =
+    CuModArray{T,1}(array; kwargs...)
+function CuModMatrix(array::SubArray{T,2}; kwargs...) where {T}
+    if FFM._storage_backend(array) === Val(:cuda)
+        return CuModArray{T,2}(array; kwargs...)
+    end
+    return CuModArray{DEFAULT_TYPE,2}(array; kwargs...)
+end
+function CuModVector(array::SubArray{T,1}; kwargs...) where {T}
+    if FFM._storage_backend(array) === Val(:cuda)
+        return CuModArray{T,1}(array; kwargs...)
+    end
+    return CuModArray{DEFAULT_TYPE,1}(array; kwargs...)
+end
 
 function (::Type{CuModArray{T,2}})(
     ::LinearAlgebra.UniformScaling,

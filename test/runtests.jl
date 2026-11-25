@@ -26,6 +26,7 @@ using GPUFiniteFieldMatrices
 include("api_surface_test.jl")
 include("backend_storage_test.jl")
 include("generic_storage_contract_test.jl")
+include("metal_storage_test.jl")
 include("base_methods_test.jl")
 include("exceptions_test.jl")
 include("KaratsubaMatrix/api_regressions_test.jl")
@@ -109,6 +110,7 @@ include("CuModMatrix/inverse/runtests.jl")
         :_backend_instance,
         :_backend_default_component_type,
         :_backend_default_plan_type,
+        :_backend_symbol,
         :_karatsuba_component,
         :_karatsuba_gemv_precision_plan,
         :_karatsuba_gemv_validate_radices,
@@ -123,9 +125,13 @@ include("CuModMatrix/inverse/runtests.jl")
         :_pluq_extract_L,
         :_pluq_extract_U,
         :_storage_modulus_limit,
+        :_storage_backend,
         :_validate_backend_storage,
         :_validate_storage_modulus,
         :CuStorage,
+        :MtlStorage,
+        :copy_storage!,
+        :fill_storage!,
         :_modular_host_values,
         :allocate_storage,
         :backendof,

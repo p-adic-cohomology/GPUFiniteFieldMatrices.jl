@@ -36,7 +36,6 @@ _storage_modulus_limit(::Type{T}) where {T} =
 
 function _validate_storage_modulus(::Type{T}, modulus::Integer) where {T}
     modulus > 0 || throw(ArgumentError("modulus must be positive, got $modulus"))
-    modulus <= typemax(Int) || throw(OverflowError("modulus $modulus does not fit Int"))
     limit = _storage_modulus_limit(T)
     BigInt(modulus) <= limit || throw(
         DomainError(
@@ -44,6 +43,7 @@ function _validate_storage_modulus(::Type{T}, modulus::Integer) where {T}
             "modulus $modulus is not exactly representable in $T storage; supported maximum is $limit",
         ),
     )
+    modulus <= typemax(Int) || throw(OverflowError("modulus $modulus does not fit Int"))
     return Int(modulus)
 end
 
@@ -118,22 +118,160 @@ const MtlModArray{T,D,S} = GPUModArray{T,D,A} where {A<:MtlStorage{T,D,S}}
 const MtlModMatrix{T} = MtlModArray{T,2}
 const MtlModVector{T} = MtlModArray{T,1}
 
+function _requested_backend(backend)
+    backend === nothing && return default_backend()
+    backend === :auto && return default_backend()
+    backend isa Symbol || throw(ArgumentError("backend must be :cuda, :metal, or :auto"))
+    return _check_backend_symbol(backend)
+end
+
+function _constructor_backend(values::AbstractArray, backend)
+    source = _storage_backend(values)
+    if source !== nothing
+        source_backend = _backend_symbol(source)
+        if backend !== nothing && backend !== :auto
+            requested = _requested_backend(backend)
+            requested === source_backend || throw(
+                ArgumentError(
+                    "cannot wrap $source_backend storage with backend=$requested; raw backend storage is wrapped without migration",
+                ),
+            )
+        end
+        return source_backend, true
+    end
+    selected = _requested_backend(backend)
+    _require_backend(selected)
+    return selected, false
+end
+
+function _construct_backend_array(
+    ::Val{:cuda},
+    ::Type{T},
+    values::AbstractArray{S,D};
+    kwargs...,
+) where {T,S,D}
+    return CuModArray{T,D}(values; kwargs...)
+end
+
+function _construct_backend_array(
+    ::Val{:metal},
+    ::Type{T},
+    values::AbstractArray{S,D};
+    kwargs...,
+) where {T,S,D}
+    return MtlModArray{T,D}(values; kwargs...)
+end
+
+function _construct_modular_array(
+    ::Type{T},
+    values::AbstractArray{S,D};
+    backend = nothing,
+    modulus::Integer,
+    mod::Bool = true,
+    new_size = nothing,
+    storage = :default,
+    device = nothing,
+) where {T,S,D}
+    selected, is_backend_storage = _constructor_backend(values, backend)
+    if is_backend_storage && T !== S
+        throw(
+            ArgumentError(
+                "raw $selected storage has element type $S and cannot be converted to $T without copying",
+            ),
+        )
+    end
+    return _construct_backend_array(
+        Val(selected),
+        T,
+        values;
+        modulus,
+        mod = is_backend_storage ? false : mod,
+        new_size,
+        storage,
+        device,
+    )
+end
+
 function GPUModArray(
-    storage::AbstractArray{T,D};
+    values::AbstractArray{T,D};
     modulus::Integer,
     new_size = nothing,
+    backend = nothing,
+    mod::Bool = true,
+    storage = :default,
+    device = nothing,
 ) where {T,D}
-    logical_size = _normalize_logical_size(size(storage), new_size)
-    return GPUModArray{T,D,typeof(storage)}(storage, logical_size, modulus)
+    return _construct_modular_array(
+        T,
+        values;
+        modulus,
+        new_size,
+        backend,
+        mod,
+        storage,
+        device,
+    )
 end
 
 function (::Type{GPUModArray{T,D}})(
-    storage::AbstractArray{T,D};
+    values::AbstractArray{S,D};
     modulus::Integer,
     new_size = nothing,
+    backend = nothing,
+    mod::Bool = true,
+    storage = :default,
+    device = nothing,
+) where {T,S,D}
+    return _construct_modular_array(
+        T,
+        values;
+        modulus,
+        new_size,
+        backend,
+        mod,
+        storage,
+        device,
+    )
+end
+
+_backend_zeros(::Val{:cuda}, ::Type{T}, dims::Dims{D}; kwargs...) where {T,D} =
+    Base.zeros(CuModArray{T,D}, dims...; kwargs...)
+_backend_zeros(::Val{:metal}, ::Type{T}, dims::Dims{D}; kwargs...) where {T,D} =
+    Base.zeros(MtlModArray{T,D}, dims...; kwargs...)
+
+_backend_rand(::Val{:cuda}, ::Type{T}, dims::Dims{D}; kwargs...) where {T,D} =
+    Base.rand(CuModArray{T,D}, dims...; kwargs...)
+_backend_rand(::Val{:metal}, ::Type{T}, dims::Dims{D}; kwargs...) where {T,D} =
+    Base.rand(MtlModArray{T,D}, dims...; kwargs...)
+
+function Base.zeros(
+    ::Type{GPUModArray{T,D}},
+    dims::Vararg{Integer,D};
+    modulus::Integer,
+    backend = nothing,
+    kwargs...,
 ) where {T,D}
-    logical_size = _normalize_logical_size(size(storage), new_size)
-    return GPUModArray{T,D,typeof(storage)}(storage, logical_size, modulus)
+    selected = _requested_backend(backend)
+    _require_backend(selected)
+    return _backend_zeros(
+        Val(selected),
+        T,
+        ntuple(i -> Int(dims[i]), D);
+        modulus,
+        kwargs...,
+    )
+end
+
+function Base.rand(
+    ::Type{GPUModArray{T,D}},
+    dims::Vararg{Integer,D};
+    modulus::Integer,
+    backend = nothing,
+    kwargs...,
+) where {T,D}
+    selected = _requested_backend(backend)
+    _require_backend(selected)
+    return _backend_rand(Val(selected), T, ntuple(i -> Int(dims[i]), D); modulus, kwargs...)
 end
 
 (::Type{GPUModMatrix})(storage::AbstractMatrix; kwargs...) = GPUModArray(storage; kwargs...)
@@ -147,6 +285,8 @@ _native_storage(storage) = storage
 
 """Return the native storage or view backing `A`, preserving object identity."""
 Base.parent(A::GPUModArray) = _native_storage(getfield(A, :storage))
+backendof(A::GPUModArray) = backendof(getfield(A, :storage))
+deviceof(A::GPUModArray) = deviceof(getfield(A, :storage))
 
 Base.size(A::GPUModArray) = getfield(A, :logical_size)
 Base.size(A::GPUModArray, i::Int) = i > ndims(A) ? 1 : size(A)[i]
