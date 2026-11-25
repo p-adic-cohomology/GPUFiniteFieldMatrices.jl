@@ -285,7 +285,8 @@ end
     #   mightalias                       – raw-array overlap preflight via Base.mightalias
     #   gemm!, gemv!, gemv_batched!      – CUDA cuBLAS low-level BLAS entry points
     #   @atomic                          – Atomix's documented macro lacks a public marker
-    #   DefaultStorageMode               – Metal's default array storage type
+    #   DefaultStorageMode, default_memory
+    #                                    – native default array storage types
     #   FAST_MATH, fill, math_mode, pin, rand, zeros
     #                                    – native CUDA controls and allocation
     # The separate owner check remains enabled for all of these accesses.
@@ -301,6 +302,7 @@ end
             :gemv_batched!,
             Symbol("@atomic"),
             :DefaultStorageMode,
+            :default_memory,
             :FAST_MATH,
             :fill,
             :math_mode,

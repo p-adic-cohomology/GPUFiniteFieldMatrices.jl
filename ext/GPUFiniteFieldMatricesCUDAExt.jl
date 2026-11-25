@@ -24,7 +24,6 @@ import GPUFiniteFieldMatrices: is_invertible, is_invertible_with_inverse
 import GPUFiniteFieldMatrices: right_inverse, left_inverse, identity_matrix
 import GPUFiniteFieldMatrices:
     upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
-import GPUFiniteFieldMatrices: initialize_plan!
 import GPUFiniteFieldMatrices: _logical_view, _validate_storage_modulus
 import GPUFiniteFieldMatrices:
     _validate_backend_storage, _normalize_logical_size, _storage_modulus_limit
