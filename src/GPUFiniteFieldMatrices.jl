@@ -65,7 +65,7 @@ function lower_triangular_inverse_no_copy end
     include("base_methods.jl")
 end
 
-export GPUModArray, CuModArray, CuModMatrix, CuModVector
+export GPUModArray, GPUModMatrix, GPUModVector, CuModArray, CuModMatrix, CuModVector
 export MtlModArray, MtlModMatrix, MtlModVector
 export KaratsubaArray, KaratsubaMatrix, KaratsubaVector
 export to_karatsuba, from_karatsuba
@@ -85,9 +85,5 @@ public inverse_batched_4x4!,
     inverse_batched_8x8!, inverse_batched_16x16!, inverse_batched_32x32!
 public pluq_batched_NxN!, upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
 public stripe_mul, stripe_mul!, TILE_WIDTH, ModulusMismatchError
-
-# Backend extensions implement these shared storage and selection hooks.
-public _backend_available,
-    _backend_instance, _validate_backend_storage, _validate_storage_modulus
 
 end

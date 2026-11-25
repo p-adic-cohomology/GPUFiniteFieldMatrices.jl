@@ -47,6 +47,24 @@ function _validate_storage_modulus(::Type{T}, modulus::Integer) where {T}
     return Int(modulus)
 end
 
+function _normalize_logical_size(backing_dims::Dims{D}, requested) where {D}
+    requested === nothing && return backing_dims
+    requested isa Tuple ||
+        throw(ArgumentError("logical size must be a tuple, got $(typeof(requested))"))
+    length(requested) == D || throw(
+        DimensionMismatch(
+            "logical dimensions $(length(requested)) do not match array rank $D",
+        ),
+    )
+    logical_dims = ntuple(i -> Int(requested[i]), D)
+    all(i -> 0 <= logical_dims[i] <= backing_dims[i], 1:D) || throw(
+        DimensionMismatch(
+            "logical dimensions $logical_dims must fit backing storage $backing_dims",
+        ),
+    )
+    return logical_dims
+end
+
 _validate_backend_storage(::Any, ::Type, ::Integer) = nothing
 
 function _modular_host_values(
@@ -82,17 +100,16 @@ struct GPUModArray{T,D,A<:AbstractArray{T,D}} <: AbstractArray{T,D}
         logical_size::Dims{D},
         modulus::Integer,
     ) where {T,D,A<:AbstractArray{T,D}}
+        backend = _storage_backend(storage)
+        backend === nothing || _validate_backend_storage(backend, T, modulus)
         N = _validate_storage_modulus(T, modulus)
-        all(i -> 0 <= logical_size[i] <= size(storage, i), 1:D) || throw(
-            DimensionMismatch(
-                "logical dimensions $logical_size must fit backing storage $(size(storage))",
-            ),
-        )
-        _validate_backend_storage(_storage_backend(storage), T, N)
-        return new{T,D,A}(storage, logical_size, N)
+        normalized_size = _normalize_logical_size(size(storage), logical_size)
+        return new{T,D,A}(storage, normalized_size, N)
     end
 end
 
+const GPUModMatrix{T} = GPUModArray{T,2}
+const GPUModVector{T} = GPUModArray{T,1}
 const CuModArray{T,D,M} = GPUModArray{T,D,A} where {A<:CuStorage{T,D,M}}
 const CuModMatrix{T} = CuModArray{T,2}
 const CuModVector{T} = CuModArray{T,1}
@@ -101,22 +118,64 @@ const MtlModArray{T,D,S} = GPUModArray{T,D,A} where {A<:MtlStorage{T,D,S}}
 const MtlModMatrix{T} = MtlModArray{T,2}
 const MtlModVector{T} = MtlModArray{T,1}
 
-GPUModArray(storage::AbstractArray{T,D}; modulus::Integer) where {T,D} =
-    GPUModArray{T,D,typeof(storage)}(storage, size(storage), modulus)
+function GPUModArray(
+    storage::AbstractArray{T,D};
+    modulus::Integer,
+    new_size = nothing,
+) where {T,D}
+    logical_size = _normalize_logical_size(size(storage), new_size)
+    return GPUModArray{T,D,typeof(storage)}(storage, logical_size, modulus)
+end
+
+function (::Type{GPUModArray{T,D}})(
+    storage::AbstractArray{T,D};
+    modulus::Integer,
+    new_size = nothing,
+) where {T,D}
+    logical_size = _normalize_logical_size(size(storage), new_size)
+    return GPUModArray{T,D,typeof(storage)}(storage, logical_size, modulus)
+end
+
+(::Type{GPUModMatrix})(storage::AbstractMatrix; kwargs...) = GPUModArray(storage; kwargs...)
+(::Type{GPUModVector})(storage::AbstractVector; kwargs...) = GPUModArray(storage; kwargs...)
 
 """Return the modulus associated with `A`."""
 modulus(A::GPUModArray) = getfield(A, :N)
 
+_native_storage(storage::BackendStorage) = parent(storage)
+_native_storage(storage) = storage
+
 """Return the native storage or view backing `A`, preserving object identity."""
-Base.parent(A::GPUModArray) = parent(getfield(A, :storage))
+Base.parent(A::GPUModArray) = _native_storage(getfield(A, :storage))
 
 Base.size(A::GPUModArray) = getfield(A, :logical_size)
-Base.size(A::GPUModArray, i::Int) = size(A)[i]
+Base.size(A::GPUModArray, i::Int) = i > ndims(A) ? 1 : size(A)[i]
 Base.axes(A::GPUModArray) = ntuple(i -> Base.OneTo(size(A, i)), ndims(A))
 Base.IndexStyle(::Type{<:GPUModArray}) = IndexLinear()
-Base.getindex(A::GPUModArray, i::Int) = getindex(parent(A), i)
-Base.setindex!(A::GPUModArray, value, i::Int) = setindex!(parent(A), value, i)
+
+@inline function Base.getindex(A::GPUModArray, i::Int)
+    return getindex(_logical_view(parent(A), size(A)), i)
+end
+
+@inline function Base.getindex(A::GPUModArray{T,D}, I::Vararg{Int,D}) where {T,D}
+    return getindex(_logical_view(parent(A), size(A)), I...)
+end
+
+@inline function Base.setindex!(A::GPUModArray, value, i::Int)
+    setindex!(_logical_view(parent(A), size(A)), mod(value, modulus(A)), i)
+    return A
+end
+
+@inline function Base.setindex!(A::GPUModArray{T,D}, value, I::Vararg{Int,D}) where {T,D}
+    setindex!(_logical_view(parent(A), size(A)), mod(value, modulus(A)), I...)
+    return A
+end
+
 Base.length(A::GPUModArray) = prod(size(A))
+
+function Base.Array(A::GPUModArray)
+    return Array(_logical_view(parent(A), size(A)))
+end
 
 function Base.getproperty(A::GPUModArray, name::Symbol)
     name === :data && return parent(A)

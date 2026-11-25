@@ -28,11 +28,14 @@ import GPUFiniteFieldMatrices:
     upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
 import GPUFiniteFieldMatrices: from_karatsuba, initialize_plan!
 import GPUFiniteFieldMatrices: _logical_view, _validate_storage_modulus
-import GPUFiniteFieldMatrices: _validate_backend_storage, _karatsuba_plan_type
+import GPUFiniteFieldMatrices:
+    _validate_backend_storage, _normalize_logical_size, _storage_modulus_limit
+import GPUFiniteFieldMatrices: _karatsuba_plan_type, similar_storage
 import GPUFiniteFieldMatrices: _backend_default_component_type, _backend_default_plan_type
 import GPUFiniteFieldMatrices: find_max_ops, find_max_stripe_ops
 import GPUFiniteFieldMatrices: inverse_permutation, mod_inv, zero!
-import GPUFiniteFieldMatrices: _padded_size
+import GPUFiniteFieldMatrices: _padded_extent, _padded_size
+import GPUFiniteFieldMatrices: _pluq_extract_L, _pluq_extract_U
 import GPUFiniteFieldMatrices:
     _karatsuba_matmul_product_plan, _karatsuba_gemv_validate_radices
 import GPUFiniteFieldMatrices: _karatsuba_gemv_precision_plan

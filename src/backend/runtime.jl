@@ -17,13 +17,21 @@ backendof(storage::BackendStorage) = KernelInterface.get_backend(parent(storage)
 backendof(storage::AbstractArray) = KernelInterface.get_backend(storage)
 
 similar_storage(template::AbstractArray, ::Type{T}, dims::Dims) where {T} =
-    similar(parent(template), T, dims)
+    similar(template, T, dims)
+similar_storage(template::SubArray, ::Type{T}, dims::Dims) where {T} =
+    similar_storage(parent(template), T, dims)
+similar_storage(template::BackendStorage, ::Type{T}, dims::Dims) where {T} =
+    similar_storage(parent(template), T, dims)
 copy_storage!(dest, src) = copyto!(dest, src)
 fill_storage!(dest, value) = fill!(dest, value)
 rand_storage!(dest, rng = nothing) = rng === nothing ? rand!(dest) : rand!(rng, dest)
 synchronize_backend!(storage::AbstractArray) =
     KernelInterface.synchronize(backendof(storage))
-deviceof(storage::AbstractArray) = KernelInterface.device(backendof(storage))
+function deviceof(storage::AbstractArray)
+    backend = backendof(storage)
+    native_storage = storage isa BackendStorage ? parent(storage) : storage
+    return (typeof(backend), KernelInterface.device(backend, native_storage))
+end
 host_scalar(value) = value
 pinned_host_buffer(::KernelInterface.Backend, ::Type{T}, dims::Dims) where {T} =
     Array{T}(undef, dims)

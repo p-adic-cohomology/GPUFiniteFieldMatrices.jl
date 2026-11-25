@@ -26,17 +26,37 @@ end
 
 rows(A::CuModMatrix) = size(A, 1)
 cols(A::CuModMatrix) = size(A, 2)
-Base.getindex(A::CuModArray, i::Int, j::Int) = parent(A)[i, j]
-Base.setindex!(A::CuModArray, value, i::Int, j::Int) =
-    (parent(A)[i, j] = mod(value, modulus(A)))
-Base.setindex!(A::CuModArray, value, i::Int) = (parent(A)[i] = mod(value, modulus(A)))
-
-function Base.Array(A::CuModArray)
-    data = Array(parent(A))
-    return data[CartesianIndices(map(d -> 1:d, size(A)))]
-end
 
 unsafe_Array(A::CuModArray) = Array(parent(A))
+
+_is_cuda_storage(::CUDA.CuArray) = true
+_is_cuda_storage(::SubArray{T,D,P}) where {T,D,P<:CUDA.CuArray} = true
+_is_cuda_storage(::Any) = false
+
+_cuda_storage_device(storage::CUDA.CuArray) = CUDA.device(storage)
+_cuda_storage_device(storage::SubArray{T,D,P}) where {T,D,P<:CUDA.CuArray} =
+    CUDA.device(parent(storage))
+
+function _wrap_cuda_slice(A::CuModArray{T,2,M}, values::AbstractArray{T,2}) where {T,M}
+    if _is_cuda_storage(parent(A))
+        host_values = Array(values)
+        return CUDA.device!(_cuda_storage_device(parent(A))) do
+            CuModArray{T,2}(host_values; modulus = modulus(A), mod = false)
+        end
+    end
+
+    storage = FFM.CuStorage{T,2,M,typeof(values)}(values)
+    return GPUModArray{T,2,typeof(storage)}(storage, size(values), modulus(A))
+end
+
+Base.getindex(A::CuModArray{T,2}, I::AbstractArray{Int}, J::AbstractArray{Int}) where {T} =
+    _wrap_cuda_slice(A, _logical_view(parent(A), size(A))[I, J])
+
+Base.getindex(A::CuModArray{T,2}, I::AbstractArray{Int}, j::Int) where {T} =
+    _wrap_cuda_slice(A, reshape(_logical_view(parent(A), size(A))[I, j], length(I), 1))
+
+Base.getindex(A::CuModArray{T,2}, i::Int, J::AbstractArray{Int}) where {T} =
+    _wrap_cuda_slice(A, reshape(_logical_view(parent(A), size(A))[i, J], 1, length(J)))
 
 function _show_cumod_header(io::IO, name::AbstractString, A::CuModArray)
     print(io, join(size(A), "×"), " ", name, " modulo ", modulus(A))
@@ -116,23 +136,30 @@ function _inverse_permutation_kernel!(
     return
 end
 
-function Base.zeros(::Type{CuModArray{T,1}}, length::Integer; modulus::Int) where {T}
-    padded_entries = _padded_extent(length)
+function Base.zeros(
+    ::Type{CuModArray{T,1}},
+    length::Integer;
+    modulus::Integer,
+    new_size = nothing,
+) where {T}
+    dims, logical_dims, N = _cuda_factory_preflight(T, (length,), modulus, new_size)
+    padded_entries = _padded_extent(dims[1])
     data = CUDA.zeros(T, padded_entries)
-    return CuModArray{T,1}(data; modulus = modulus, mod = false, new_size = (length,))
+    return CuModArray{T,1}(data; modulus = N, mod = false, new_size = logical_dims)
 end
 
 function Base.zeros(
     ::Type{CuModArray{T,2}},
     rows::Integer,
     cols::Integer;
-    modulus::Int,
-    new_size::Tuple{Int,Int} = (rows, cols),
+    modulus::Integer,
+    new_size = nothing,
 ) where {T}
-    padded_rows = _padded_extent(rows)
-    padded_cols = _padded_extent(cols)
+    dims, logical_dims, N = _cuda_factory_preflight(T, (rows, cols), modulus, new_size)
+    padded_rows = _padded_extent(dims[1])
+    padded_cols = _padded_extent(dims[2])
     data = CUDA.zeros(T, padded_rows, padded_cols)
-    return CuModArray{T,2}(data; modulus = modulus, mod = false, new_size = new_size)
+    return CuModArray{T,2}(data; modulus = N, mod = false, new_size = logical_dims)
 end
 
 """
@@ -142,37 +169,37 @@ end
 Creates a random vector or matrix in the finite field modulo `modulus`.
 Only logical entries are sampled; the zero-initialized padding is untouched.
 """
-function Base.rand(::Type{CuModArray{T,1}}, length::Integer; modulus::Int) where {T}
-    dims = (Int(length),)
+function Base.rand(::Type{CuModArray{T,1}}, length::Integer; modulus::Integer) where {T}
+    dims, logical_dims, N = _cuda_factory_preflight(T, (length,), modulus)
     data = CUDA.zeros(T, _padded_size(dims)...)
     if !isempty(data)
         logical_data = CUDA.rand(T, dims...)
         if T <: AbstractFloat
-            logical_data .= floor.(logical_data .* modulus)
+            logical_data .= floor.(logical_data .* N)
         end
-        mod!(logical_data, logical_data, modulus)
-        copyto!(_logical_view(data, dims), logical_data)
+        mod!(logical_data, logical_data, N)
+        copyto!(_logical_view(data, logical_dims), logical_data)
     end
-    return CuModArray{T,1}(data; modulus = modulus, mod = false, new_size = dims)
+    return CuModArray{T,1}(data; modulus = N, mod = false, new_size = logical_dims)
 end
 
 function Base.rand(
     ::Type{CuModArray{T,2}},
     rows::Integer,
     cols::Integer;
-    modulus::Int,
+    modulus::Integer,
 ) where {T}
-    dims = (Int(rows), Int(cols))
+    dims, logical_dims, N = _cuda_factory_preflight(T, (rows, cols), modulus)
     data = CUDA.zeros(T, _padded_size(dims)...)
     if !isempty(data)
         logical_data = CUDA.rand(T, dims...)
         if T <: AbstractFloat
-            logical_data .= floor.(logical_data .* modulus)
+            logical_data .= floor.(logical_data .* N)
         end
-        mod!(logical_data, logical_data, modulus)
-        copyto!(_logical_view(data, dims), logical_data)
+        mod!(logical_data, logical_data, N)
+        copyto!(_logical_view(data, logical_dims), logical_data)
     end
-    return CuModArray{T,2}(data; modulus = modulus, mod = false, new_size = dims)
+    return CuModArray{T,2}(data; modulus = N, mod = false, new_size = logical_dims)
 end
 
 """
@@ -362,21 +389,28 @@ function change_modulus(A::CuModArray, new_N::Integer)
     T = eltype(parent(A))
     D = ndims(A)
     dims = size(A)
-    new_modulus = Int(new_N)
-    data = CUDA.zeros(T, _padded_size(dims)...)
-    result = CuModArray{T,D}(data; modulus = new_modulus, mod = false, new_size = dims)
+    _, logical_dims, new_modulus = _cuda_factory_preflight(T, dims, new_N, dims)
+    return CUDA.device!(CUDA.device(parent(A))) do
+        data = CUDA.zeros(T, _padded_size(dims)...)
+        result = CuModArray{T,D}(
+            data;
+            modulus = new_modulus,
+            mod = false,
+            new_size = logical_dims,
+        )
 
-    if !isempty(A)
-        logical_source = _logical_view(parent(A), dims)
-        logical_result = _logical_view(parent(result), dims)
-        if new_N < modulus(A)
-            logical_result .= mod.(logical_source, new_N)
-        else
-            copyto!(logical_result, logical_source)
+        if !isempty(A)
+            logical_source = _logical_view(parent(A), dims)
+            logical_result = _logical_view(parent(result), logical_dims)
+            if new_modulus < modulus(A)
+                logical_result .= mod.(logical_source, new_modulus)
+            else
+                copyto!(logical_result, logical_source)
+            end
         end
-    end
 
-    return result
+        return result
+    end
 end
 
 """
@@ -393,14 +427,13 @@ Equal or larger moduli leave values unchanged and reinterpret them.
 The wrapper may allocate small host metadata; no GPU storage is allocated.
 """
 function change_modulus!!(A::CuModArray{T,D}, new_N::Integer) where {T,D}
-    new_N > 0 || throw(ArgumentError("new_N must be positive"))
-    new_modulus = Int(new_N)
+    _, logical_dims, new_modulus = _cuda_factory_preflight(T, size(A), new_N, size(A))
 
     if new_modulus < modulus(A)
         mod!(parent(A), parent(A), new_modulus)
     end
 
-    return CuModArray{T,D}(parent(A); modulus = new_modulus, new_size = size(A))
+    return CuModArray{T,D}(parent(A); modulus = new_modulus, new_size = logical_dims)
 end
 
 """

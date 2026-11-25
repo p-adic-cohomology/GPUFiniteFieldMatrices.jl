@@ -24,10 +24,10 @@ end
 """
     A == B
 
-Compare the logical entries and stored moduli of two `CuModArray`s. Physical
+Compare the logical entries and stored moduli of two `GPUModArray`s. Physical
 padding and backing layouts are ignored.
 """
-function Base.:(==)(A::CuModArray, B::CuModArray)
+function Base.:(==)(A::GPUModArray, B::GPUModArray)
     size(A) == size(B) || return false
     modulus(A) == modulus(B) || return false
     isempty(A) && return true
@@ -46,6 +46,6 @@ LinearAlgebra.rank(F::PLUQ) = getfield(F, :rank)
 Return the rank of `A` over its stored modulus using the nonmutating PLUQ
 path and the supplied options.
 """
-function LinearAlgebra.rank(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
+function LinearAlgebra.rank(A::GPUModMatrix; options::PLUQOptions = PLUQOptions())
     return LinearAlgebra.rank(pluq(A; options = options))
 end

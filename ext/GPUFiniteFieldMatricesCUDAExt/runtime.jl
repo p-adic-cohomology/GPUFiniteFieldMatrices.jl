@@ -27,6 +27,24 @@ FFM.backendof(storage::FFM.CuStorage) = KernelInterface.get_backend(parent(stora
 FFM.backendof(storage::CUDA.CuArray) = KernelInterface.get_backend(storage)
 FFM.deviceof(storage::Union{FFM.CuStorage,CUDA.CuArray}) =
     (:cuda, KernelInterface.device(FFM.backendof(storage), parent(storage)))
+FFM.deviceof(storage::SubArray{T,D,P}) where {T,D,P<:CUDA.CuArray} =
+    (:cuda, KernelInterface.device(FFM.backendof(storage), storage))
+
+function similar_storage(template::CUDA.CuArray, ::Type{T}, dims::Dims) where {T}
+    return CUDA.device!(CUDA.device(template)) do
+        similar(template, T, dims)
+    end
+end
+
+function similar_storage(
+    template::SubArray{S,D,P},
+    ::Type{T},
+    dims::Dims,
+) where {S,D,P<:CUDA.CuArray,T}
+    return CUDA.device!(CUDA.device(parent(template))) do
+        similar(parent(template), T, dims)
+    end
+end
 FFM.host_scalar(value::CUDA.CuArray) = CUDA.scalar(value)
 FFM.pinned_host_buffer(::CUDA.CUDABackend, ::Type{T}, dims::Dims) where {T} =
     CUDA.pin(Array{T}(undef, dims))

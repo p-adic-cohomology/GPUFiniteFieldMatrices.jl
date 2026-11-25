@@ -25,6 +25,7 @@ using GPUFiniteFieldMatrices
 
 include("api_surface_test.jl")
 include("backend_storage_test.jl")
+include("generic_storage_contract_test.jl")
 include("base_methods_test.jl")
 include("exceptions_test.jl")
 include("KaratsubaMatrix/api_regressions_test.jl")
@@ -104,6 +105,8 @@ include("CuModMatrix/inverse/runtests.jl")
     # extensions. Their ownership is checked above; they are intentionally not
     # part of the stable public API.
     private_extension_bindings = (
+        :_backend_available,
+        :_backend_instance,
         :_backend_default_component_type,
         :_backend_default_plan_type,
         :_karatsuba_component,
@@ -114,7 +117,14 @@ include("CuModMatrix/inverse/runtests.jl")
         :_karatsuba_plan_type,
         :_karatsuba_zero_component,
         :_logical_view,
+        :_normalize_logical_size,
+        :_padded_extent,
         :_padded_size,
+        :_pluq_extract_L,
+        :_pluq_extract_U,
+        :_storage_modulus_limit,
+        :_validate_backend_storage,
+        :_validate_storage_modulus,
         :CuStorage,
         :_modular_host_values,
         :allocate_storage,
@@ -122,6 +132,7 @@ include("CuModMatrix/inverse/runtests.jl")
         :deviceof,
         :host_scalar,
         :pinned_host_buffer,
+        :similar_storage,
         :synchronize_backend!,
         :with_backend_streams,
         :divide_elements!,

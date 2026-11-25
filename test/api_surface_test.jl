@@ -9,6 +9,8 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
 
     exported = (
         :GPUModArray,
+        :GPUModMatrix,
+        :GPUModVector,
         :CuModArray,
         :CuModMatrix,
         :CuModVector,
@@ -111,13 +113,14 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
     @test all(name -> isdefined(CUDA_EXT, name), internal_triangular_helpers)
     @test all(name -> !Base.ispublic(CUDA_EXT, name), internal_triangular_helpers)
     @test all(name -> !Base.isexported(CUDA_EXT, name), internal_triangular_helpers)
-    extension_hooks = Set((
+    extension_hooks = (
         :_backend_available,
         :_backend_instance,
         :_validate_backend_storage,
         :_validate_storage_modulus,
-    ))
-    expected_public = union(Set(exported), Set(public_names), extension_hooks)
+    )
+    @test all(name -> !Base.ispublic(mod, name), extension_hooks)
+    expected_public = union(Set(exported), Set(public_names))
     @test Set(filter(name -> Base.ispublic(mod, name), module_names)) == expected_public
     @test !Base.ispublic(mod, :pluq_check_identity)
     @test !Base.isexported(mod, :pluq_check_identity)

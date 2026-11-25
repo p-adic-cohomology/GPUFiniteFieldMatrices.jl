@@ -3,8 +3,51 @@ function _cuda_storage(array::CuArray{T,D,M}) where {T,D,M}
 end
 
 function _validate_backend_storage(::Val{:cuda}, ::Type{T}, modulus::Integer) where {T}
-    FFM._validate_storage_modulus(T, modulus)
+    if !(T === Float16 || T === Float32 || T === Float64)
+        throw(
+            ArgumentError(
+                "CUDA modular storage supports Float16 (modulus ≤ 2048), Float32 (modulus ≤ 16777216), and Float64 (modulus ≤ 9007199254740992); got $T",
+            ),
+        )
+    end
+    try
+        _validate_storage_modulus(T, modulus)
+    catch err
+        if err isa DomainError
+            limit = _storage_modulus_limit(T)
+            throw(
+                DomainError(
+                    modulus,
+                    "modulus $modulus is not exactly representable in CUDA $T storage; supported maximum is $limit",
+                ),
+            )
+        end
+        rethrow()
+    end
     return nothing
+end
+
+function _cuda_dimensions(dims::Tuple)
+    return ntuple(length(dims)) do i
+        dim = Int(dims[i])
+        dim >= 0 || throw(
+            ArgumentError("CUDA modular storage dimensions must be nonnegative, got $dims"),
+        )
+        dim
+    end
+end
+
+function _cuda_factory_preflight(
+    ::Type{T},
+    dims::Tuple,
+    modulus::Integer,
+    logical_size = nothing,
+) where {T}
+    normalized_dims = _cuda_dimensions(dims)
+    _validate_backend_storage(Val(:cuda), T, modulus)
+    N = _validate_storage_modulus(T, modulus)
+    normalized_logical_size = _normalize_logical_size(normalized_dims, logical_size)
+    return normalized_dims, normalized_logical_size, N
 end
 
 function _construct_cuda_storage(
@@ -13,8 +56,10 @@ function _construct_cuda_storage(
     logical_size::Dims{D},
     modulus::Integer,
 ) where {T,D,M}
+    _validate_backend_storage(Val(:cuda), T, modulus)
+    normalized_size = _normalize_logical_size(size(array), logical_size)
     storage = _cuda_storage(array)
-    return GPUModArray{T,D,typeof(storage)}(storage, logical_size, modulus)
+    return GPUModArray{T,D,typeof(storage)}(storage, normalized_size, modulus)
 end
 
 function (::Type{CuModArray{T,D}})(
@@ -23,8 +68,8 @@ function (::Type{CuModArray{T,D}})(
     mod::Bool = false,
     new_size = nothing,
 ) where {T,D,M}
-    dims = new_size === nothing ? size(array) : Tuple(Int.(new_size))
-    return _construct_cuda_storage(T, array, dims, modulus)
+    _, dims, N = _cuda_factory_preflight(T, size(array), modulus, new_size)
+    return _construct_cuda_storage(T, array, dims, N)
 end
 
 function (::Type{CuModArray})(
@@ -42,8 +87,7 @@ function (::Type{CuModArray{T,D}})(
     mod::Bool = true,
     new_size = nothing,
 ) where {T,D,S}
-    N = _validate_storage_modulus(T, modulus)
-    dims = size(values)
+    dims, logical_size, N = _cuda_factory_preflight(T, size(values), modulus, new_size)
     padded = FFM._padded_size(dims)
     converted = FFM._modular_host_values(T, values, N, mod)
     data = CUDA.zeros(T, padded...)
@@ -51,7 +95,6 @@ function (::Type{CuModArray{T,D}})(
         inds = CartesianIndices(values)
         copyto!(data, inds, converted, inds)
     end
-    logical_size = new_size === nothing ? dims : Tuple(Int.(new_size))
     return _construct_cuda_storage(T, data, logical_size, N)
 end
 
