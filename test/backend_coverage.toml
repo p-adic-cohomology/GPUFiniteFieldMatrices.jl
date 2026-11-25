@@ -2,21 +2,27 @@ schema_version = 1
 stage = "E2 backend test scaffolding and acceptance accounting"
 full_metal_parity = false
 source_base = "ef0a438dde71ad46447af4918410537051466c82"
-measured_default_suite_assertions = 2299
-measured_default_suite_passes = 2299
+measured_default_suite_assertions = 2303
+measured_default_suite_passes = 2303
 measured_default_suite_testsets = 30
+measured_default_suite_source = "review-fix clean raw Pkg.test() run without selectors"
+previous_reviewed_head_default_suite_assertions = 2299
+previous_reviewed_head_default_suite_passes = 2299
+previous_reviewed_head_default_suite_testsets = 30
 count_semantics = "assertion_count and pass_count record assertions from named testsets. skip_count records unexecuted backend-family runs, once per applicable backend, not skipped assertions. Family-specific rows with rollup_include=false are subsets of another row and must not be added to the suite total."
-default_run_notes = "Default selector loaded CUDA 6.5.1 and Metal 1.12.1. Metal storage/factory tests executed on Apple M3 Max using SharedStorage and PrivateStorage with scalar indexing disabled. CUDA.functional() was false; CUDA device coverage did not execute."
+measurement_scope = "Family counts describe the latest no-selector composite run, which provisions both configured vendors. Selected-run counts are listed separately below so Metal-only and no-vendor coverage are not inferred from the composite total."
+default_run_notes = "Raw Pkg.test() started from a clean view with no Manifest or LocalPreferences and no selector. It provisioned CUDA 6.5.1 and Metal 1.12.1. Metal was functional; CUDA.functional() was false. Metal storage/factory tests ran on Apple M3 Max using SharedStorage and PrivateStorage with scalar indexing disabled."
+previous_reviewed_head_run_notes = "At 77cb310, the default wrapper measured 2299 assertions across 30 testsets; CUDA was nonfunctional and Metal storage/factory tests used SharedStorage and PrivateStorage."
 
 [[families]]
 name = "backend selection and capability reporting"
 applies_to = ["core", "cuda", "metal"]
 owner = "E2 integration"
 status = "scaffolding"
-assertion_count = 9
-pass_count = 9
+assertion_count = 13
+pass_count = 13
 skip_count = 0
-host_assertion_count = 9
+host_assertion_count = 13
 device_assertion_count = 0
 evidence = "Backend test driver selection"
 
@@ -28,10 +34,11 @@ status = "storage_factory_subset"
 assertion_count = 229
 pass_count = 229
 skip_count = 1
-host_assertion_count = 97
-device_assertion_count = 132
+generic_host_assertion_count = 97
+metal_storage_testset_assertion_count = 132
 evidence = "Generic storage wrapper and CUDA extension boundary (40), Generic modular storage contracts (57), Metal modular storage and backend selection (132)"
-notes = "The CUDA device storage run is unavailable on this host. The 132 Metal assertions include actual SharedStorage and PrivateStorage device operations and bulk host-reference comparisons."
+device_execution_assertion_subcount = "not isolated"
+notes = "The 132 count is the whole Metal storage-family testset and mixes policy, metadata, negative checks, and SharedStorage/PrivateStorage operations. The exact number of assertions that directly execute device operations is not isolated. CUDA device storage acceptance is unavailable on this host."
 
 [[families]]
 name = "CPU host API, array interface, and exact modular references"
@@ -129,11 +136,44 @@ status = "negative_capability_checks_pass"
 assertion_count = 6
 pass_count = 6
 skip_count = 0
-host_assertion_count = 0
-device_assertion_count = 6
+classification = "Metal runtime capability and policy checks; device-execution assertion subcount not isolated"
 rollup_include = false
 included_in = "modular array constructors, storage, views, and factories"
 evidence = "Within Metal modular storage and backend selection: one accepted single-stream context, rejected multi-stream request, Int32 rejection, Float64 rejection, unsupported Float32 modulus rejection, and storage-mode mismatch rejection."
+notes = "These are capability and policy assertions, not a count of direct GPU operations."
+
+[[selected_run_coverage]]
+name = "Raw no-selector Pkg.test() from clean view"
+selected_backends = ["cuda", "metal"]
+functional_backends = ["metal"]
+assertion_count = 2303
+pass_count = 2303
+testset_count = 30
+metal_storage_testset_assertion_count = 132
+device_execution_assertion_subcount = "not isolated"
+evidence = "The E2 review-fix raw-default log records absent root/test Manifest and LocalPreferences at launch, default provisioning of both pinned vendors, and a passing Pkg.test() run."
+
+[[selected_run_coverage]]
+name = "Explicit Metal fresh wrapper"
+selected_backends = ["metal"]
+functional_backends = ["metal"]
+assertion_count = 527
+pass_count = 527
+testset_count = 16
+vendor_free_host_karatsuba_assertions = 285
+metal_storage_testset_assertion_count = 132
+device_execution_assertion_subcount = "not isolated"
+evidence = "The Metal-only review-fix log reports CUDA absent from the selected environment and passes the host Karatsuba sets plus Metal storage/factory family."
+
+[[selected_run_coverage]]
+name = "Vendor-free core smoke"
+selected_backends = []
+functional_backends = []
+assertion_count = 294
+pass_count = 294
+testset_count = 5
+vendor_free_host_karatsuba_assertions = 285
+evidence = "The core smoke log verifies CUDA and Metal are absent and passes the core API and host Karatsuba tests."
 
 [[families]]
 name = "display, Aqua, ExplicitImports, and package hygiene"

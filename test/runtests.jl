@@ -17,8 +17,11 @@ function _gfm_test_provision_backend!(backend::Symbol)
     return nothing
 end
 
-GFM_TEST_BACKEND_REQUEST === nothing ||
-    _gfm_test_provision_backend!(GFM_TEST_BACKEND_REQUEST)
+const GFM_TEST_BACKENDS_TO_PROVISION =
+    BackendTestDriver.backends_to_provision(GFM_TEST_BACKEND_REQUEST)
+for backend in GFM_TEST_BACKENDS_TO_PROVISION
+    _gfm_test_provision_backend!(backend)
+end
 const GFM_TEST_OPTIONAL_BACKENDS =
     BackendTestDriver.optional_backends(GFM_TEST_BACKEND_REQUEST)
 
@@ -59,6 +62,12 @@ const GFM_TEST_FUNCTIONAL_BACKENDS = Tuple(
     backend for
     backend in GFM_TEST_OPTIONAL_BACKENDS if GFM_TEST_BACKEND_FUNCTIONAL[backend]
 )
+const GFM_TEST_PENDING_METAL_FAMILIES = Tuple(
+    family["name"] for
+    family in TOML.parsefile(joinpath(@__DIR__, "backend_coverage.toml"))["families"] if
+    "metal" in family["applies_to"] && occursin("pending", family["status"])
+)
+@info "Backend coverage selection" selected=GFM_TEST_OPTIONAL_BACKENDS functional=GFM_TEST_FUNCTIONAL_BACKENDS pending_metal_families=GFM_TEST_PENDING_METAL_FAMILIES
 
 # Flip the package's `@stable` wrap to an enforcing mode before loading it.
 using Preferences: set_preferences!
@@ -86,6 +95,7 @@ const GFM_TEST_CAPABILITIES = BackendTestSupport.capability_fixture(;
 )
 
 include("core_api_surface_test.jl")
+include("core_karatsuba_host_test.jl")
 include("backend_test_driver_test.jl")
 @testset "Only requested optional vendor is imported" begin
     if GFM_TEST_BACKEND_REQUEST === :metal

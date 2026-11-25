@@ -1,5 +1,8 @@
 using Test
+using BitIntegers
 using GPUFiniteFieldMatrices
+
+const GFM_TEST_CUDA_LOADED = false
 
 @testset "Minimal core environment has no optional GPU vendors" begin
     G = GPUFiniteFieldMatrices
@@ -17,3 +20,5 @@ using GPUFiniteFieldMatrices
     @test_throws ArgumentError G.default_backend()
     @test_throws MethodError G._check_backend_symbol(G.KernelAbstractions.CPU())
 end
+
+include("core_karatsuba_host_test.jl")

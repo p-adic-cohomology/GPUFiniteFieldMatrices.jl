@@ -18,9 +18,26 @@ trap 'rm -rf "$PACKAGE_VIEW"' EXIT HUP INT TERM
 cp "$ROOT/Project.toml" "$PACKAGE_VIEW/Project.toml"
 ln -s "$ROOT/src" "$PACKAGE_VIEW/src"
 ln -s "$ROOT/ext" "$PACKAGE_VIEW/ext"
-cp -R "$ROOT/test" "$PACKAGE_VIEW/test"
-if [ -e "$PACKAGE_VIEW/Manifest.toml" ]; then
-    echo "Package view unexpectedly contains a Manifest.toml" >&2
+mkdir "$PACKAGE_VIEW/test"
+rsync -a \
+    --exclude='Manifest*.toml' \
+    --exclude='LocalPreferences*.toml' \
+    --exclude='.julia/' \
+    --exclude='.cache/' \
+    --exclude='compiled/' \
+    --exclude='build/' \
+    --exclude='artifacts/' \
+    "$ROOT/test/" "$PACKAGE_VIEW/test/"
+if find "$PACKAGE_VIEW" \( \
+    -name 'Manifest*.toml' -o \
+    -name 'LocalPreferences*.toml' -o \
+    -name '.julia' -o \
+    -name '.cache' -o \
+    -name compiled -o \
+    -name build -o \
+    -name artifacts \
+\) -print | grep -q .; then
+    echo "Package view unexpectedly contains a lockfile or local state" >&2
     exit 1
 fi
 

@@ -16,6 +16,6 @@ ln -s "$ROOT/src" "$PACKAGE_VIEW/src"
 ln -s "$ROOT/ext" "$PACKAGE_VIEW/ext"
 
 GPUFFM_PACKAGE_VIEW="$PACKAGE_VIEW" "$JULIA_BIN" $JULIA_VERSION_ARG --startup-file=no --project="$TEST_ENV" \
-    -e 'using Pkg; Pkg.develop(path=ENV["GPUFFM_PACKAGE_VIEW"]; io=devnull); Pkg.add([Pkg.PackageSpec(name="KernelAbstractions", version=v"0.10.8"), Pkg.PackageSpec(name="KernelInterface", version=v"0.4.7")]; io=devnull); Pkg.instantiate(; io=devnull)'
+    -e 'using Pkg; Pkg.develop(path=ENV["GPUFFM_PACKAGE_VIEW"]; io=devnull); Pkg.add([Pkg.PackageSpec(name="KernelAbstractions", version=v"0.10.8"), Pkg.PackageSpec(name="KernelInterface", version=v"0.4.7"), Pkg.PackageSpec(name="BitIntegers", version=v"0.3.7")]; io=devnull); Pkg.instantiate(; io=devnull)'
 "$JULIA_BIN" $JULIA_VERSION_ARG --startup-file=no --project="$TEST_ENV" \
     "$ROOT/test/core_environment_smoke.jl"

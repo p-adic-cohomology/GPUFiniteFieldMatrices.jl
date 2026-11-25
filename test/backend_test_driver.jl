@@ -3,6 +3,13 @@ module BackendTestDriver
 const OPTIONAL_BACKENDS = (:cuda, :metal)
 const VENDOR_PACKAGES = Dict(:cuda => "CUDA", :metal => "Metal")
 
+"""Return the optional vendors a default or explicitly selected test run provisions."""
+function backends_to_provision(requested::Union{Nothing,Symbol})
+    requested === nothing && return OPTIONAL_BACKENDS
+    requested in OPTIONAL_BACKENDS || throw(ArgumentError("unsupported backend $requested"))
+    return (requested,)
+end
+
 function parse_backend_selector(args::Vector{String})
     selectors = filter(arg -> startswith(arg, "--backend="), args)
     length(selectors) <= 1 || throw(ArgumentError("pass at most one --backend selector"))

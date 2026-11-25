@@ -41,5 +41,8 @@ jobs:
       - name: Verify minimal core environment
         run: sh test/run-core-environment-smoke.sh
 
+      - name: Verify fresh package view isolation
+        run: sh test/test-run-pkg-test-isolation.sh
+
       - name: Run package tests in a fresh project view
         run: sh test/run-pkg-test.sh
