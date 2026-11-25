@@ -285,8 +285,6 @@ _native_storage(storage) = storage
 
 """Return the native storage or view backing `A`, preserving object identity."""
 Base.parent(A::GPUModArray) = _native_storage(getfield(A, :storage))
-backendof(A::GPUModArray) = backendof(getfield(A, :storage))
-deviceof(A::GPUModArray) = deviceof(getfield(A, :storage))
 
 Base.size(A::GPUModArray) = getfield(A, :logical_size)
 Base.size(A::GPUModArray, i::Int) = i > ndims(A) ? 1 : size(A)[i]

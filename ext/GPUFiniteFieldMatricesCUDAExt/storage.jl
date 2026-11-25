@@ -6,6 +6,11 @@ function _cuda_root(array::AbstractArray)
 end
 _cuda_memory_type(::CuArray{T,D,M}) where {T,D,M} = M
 
+KernelInterface.get_backend(storage::FFM.CuStorage) =
+    KernelInterface.get_backend(parent(storage))
+KernelInterface.device(backend::CUDA.CUDABackend, storage::FFM.CuStorage) =
+    KernelInterface.device(backend, _cuda_root(parent(storage)))
+
 function _cuda_storage(array::AbstractArray{T,D}) where {T,D}
     memory_type = _cuda_memory_type(_cuda_root(array))
     return FFM.CuStorage{T,D,memory_type,typeof(array)}(array)
@@ -128,7 +133,7 @@ function (::Type{CuModArray{T,D}})(
     _cuda_storage_mode(storage)
     requested_device === nothing ||
         requested_device ==
-        KernelInterface.device(KernelInterface.get_backend(array), array) ||
+        KernelInterface.device(KernelInterface.get_backend(array), _cuda_root(array)) ||
         throw(
             ArgumentError(
                 "raw CUDA storage belongs to a different device than the requested device",
@@ -150,7 +155,7 @@ function (::Type{CuModArray{T,D}})(
     _cuda_storage_mode(storage)
     requested_device === nothing ||
         requested_device ==
-        KernelInterface.device(KernelInterface.get_backend(array), array) ||
+        KernelInterface.device(KernelInterface.get_backend(array), _cuda_root(array)) ||
         throw(
             ArgumentError(
                 "raw CUDA storage belongs to a different device than the requested device",
@@ -184,7 +189,7 @@ function (::Type{CuModArray{T,D}})(
         _cuda_storage_mode(storage)
         requested_device === nothing ||
             requested_device ==
-            KernelInterface.device(KernelInterface.get_backend(values), values) ||
+            KernelInterface.device(KernelInterface.get_backend(values), _cuda_root(values)) ||
             throw(
                 ArgumentError(
                     "raw CUDA storage belongs to a different device than the requested device",

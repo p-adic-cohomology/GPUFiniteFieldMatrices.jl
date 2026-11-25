@@ -4,6 +4,7 @@ import Metal
 import Random
 import LinearAlgebra
 import LinearAlgebra: I, UniformScaling
+import KernelInterface
 import GPUFiniteFieldMatrices
 import GPUFiniteFieldMatrices: _backend_available, _backend_instance
 import GPUFiniteFieldMatrices: _validate_backend_storage, _validate_storage_modulus
@@ -16,6 +17,12 @@ const DEFAULT_TYPE = Float32
 
 _backend_available(::Val{:metal}) = Metal.functional()
 _backend_instance(::Val{:metal}) = Metal.MetalBackend()
+
+function _metal_device_index(device)
+    index = findfirst(candidate -> candidate == device, Metal.devices())
+    index === nothing && throw(ArgumentError("Metal array belongs to an unknown device"))
+    return index
+end
 
 function _validate_backend_storage(::Val{:metal}, ::Type{Float64}, modulus::Integer)
     throw(
@@ -51,6 +58,5 @@ function _validate_backend_storage(::Val{:metal}, ::Type{T}, modulus::Integer) w
 end
 
 include("GPUFiniteFieldMatricesMetalExt/storage.jl")
-include("GPUFiniteFieldMatricesMetalExt/runtime.jl")
 
 end

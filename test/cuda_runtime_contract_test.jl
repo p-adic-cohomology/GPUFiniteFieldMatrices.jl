@@ -1,81 +1,64 @@
-using Random
-
-@testset "CUDA native runtime edge contracts" begin
+@testset "CUDA modular wrapper methods and native batch streams" begin
     G = GPUFiniteFieldMatrices
-    CUDA.allowscalar(false)
-    try
-        current_device = CUDA.device()
-        current_stream = CUDA.stream()
-        backing = CUDA.CuArray(fill(9.0f0, 4))
-        selected = SubArray(backing, (2:3,))
-        memory_type = typeof(backing).parameters[3]
-        adapted = G.CuStorage{Float32,1,memory_type,typeof(selected)}(selected)
+    ext = Base.get_extension(G, :GPUFiniteFieldMatricesCUDAExt)
+    device = CUDA.device()
 
-        @test G.fill_storage!(selected, 6.0f0) === selected
-        @test Array(backing) == Float32[9, 6, 6, 9]
-        @test G.copy_storage!(selected, Float32[2, 3]) === selected
-        @test Array(backing) == Float32[9, 2, 3, 9]
+    source = G.CuModArray{Float32,2}(
+        Float32[1 2 91; 3 4 92; 93 94 95];
+        modulus = 7,
+        new_size = (2, 2),
+    )
+    copied = copy(source)
+    @test copied isa G.CuModArray{Float32,2}
+    @test copied !== source
+    @test parent(copied) !== parent(source)
+    @test size(copied) == size(source)
+    @test G.modulus(copied) == G.modulus(source)
+    @test CUDA.device(parent(copied)) == device
+    @test Array(copied) == Float32[1 2; 3 4]
+    @test all(iszero, Array(parent(copied))[3:end, :])
+    @test all(iszero, Array(parent(copied))[:, 3:end])
 
-        for unsupported_destination in (backing, selected, adapted)
-            copyto!(backing, fill(9.0f0, 4))
-            before = Array(backing)
-            @test_throws ArgumentError G.rand_storage!(
-                unsupported_destination,
-                Random.MersenneTwister(19),
-            )
-            @test Array(backing) == before
+    destination = similar(source)
+    @test destination isa G.CuModArray{Float32,2}
+    @test CUDA.device(parent(destination)) == device
+    @test all(iszero, Array(destination))
+    @test fill!(destination, 5) === destination
+    @test Array(destination) == fill(5.0f0, 2, 2)
+    @test G.modulus(destination) == 7
+    @test copyto!(destination, Float32[6 0; 2 1]) === destination
+    @test Array(destination) == Float32[6 0; 2 1]
+    @test Array(parent(destination))[3, 1] == 0
+
+    random = rand(G.CuModVector{Float32}, 33; modulus = 7)
+    values = Array(random)
+    @test CUDA.device(parent(random)) == device
+    @test all(value -> 0 <= value < 7 && isinteger(value), values)
+
+    one_stream_context = Ref(:unset)
+    one_stream_result = ext._with_cuda_streams(parent(source), 1) do context
+        one_stream_context[] = context
+        ext._with_cuda_stream(context, 1) do
+            :current_queue
         end
-
-        @test G.rand_storage!(backing) === backing
-        @test all(value -> 0.0f0 <= value < 1.0f0, Array(backing))
-        copyto!(backing, fill(9.0f0, 4))
-        @test G.rand_storage!(selected, CUDA.default_rng()) === selected
-        after = Array(backing)
-        @test after[1] == 9.0f0
-        @test after[4] == 9.0f0
-        @test all(value -> 0.0f0 <= value < 1.0f0, after[2:3])
-        @test G.rand_storage!(adapted) === adapted
-        @test all(value -> 0.0f0 <= value < 1.0f0, Array(backing)[2:3])
-
-        copyto!(backing, Float32[1, 2, 3, 4])
-        scalar_view = SubArray(backing, (2:2,))
-        scalar_wrappers = (
-            scalar_view,
-            reshape(scalar_view, (1,)),
-            transpose(scalar_view),
-            adjoint(scalar_view),
-        )
-        for scalar_wrapper in scalar_wrappers
-            @test G.host_scalar(scalar_wrapper) === 2.0f0
-        end
-        adapted_scalar_view =
-            G.CuStorage{Float32,1,memory_type,typeof(scalar_view)}(scalar_view)
-        @test G.host_scalar(adapted_scalar_view) === 2.0f0
-        nonsingleton_view = SubArray(backing, (1:2,))
-        @test_throws ArgumentError G.host_scalar(nonsingleton_view)
-
-        # Copy failures happen inside the selected-device scope and must restore it.
-        before_copy_error = Array(backing)
-        @test_throws DimensionMismatch G.copy_storage!(selected, Float32[1])
-        @test CUDA.device() == current_device
-        @test Array(backing) == before_copy_error
-
-        @test G.with_backend_streams(backing, 1) do context
-            @test context === nothing
-            G.with_backend_stream(context, 1) do
-                @test CUDA.stream() == current_stream
-                :current_stream
-            end
-        end === :current_stream
-
-        @test_throws ErrorException G.with_backend_streams(backing, 2) do context
-            G.with_backend_stream(context, 1) do
-                error("CUDA stream callback cleanup")
-            end
-        end
-        @test CUDA.device() == current_device
-        @test CUDA.stream() == current_stream
-    finally
-        CUDA.allowscalar(true)
     end
+    @test one_stream_context[] === nothing
+    @test one_stream_result === :current_queue
+
+    stream_result = ext._with_cuda_streams(parent(source), 2) do context
+        foreach(1:2) do index
+            ext._with_cuda_stream(context, index) do
+                @test CUDA.stream() == context.streams[index]
+            end
+        end
+        :streams_finished
+    end
+    @test stream_result === :streams_finished
+
+    @test_throws ErrorException ext._with_cuda_streams(parent(source), 2) do context
+        ext._with_cuda_stream(context, 1) do
+            error("exercise CUDA batch stream cleanup")
+        end
+    end
+    @test CUDA.device() == device
 end

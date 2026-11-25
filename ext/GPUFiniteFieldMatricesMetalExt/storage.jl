@@ -17,6 +17,11 @@ end
 
 FFM._storage_backend(::Metal.MtlArray) = Val(:metal)
 
+KernelInterface.get_backend(storage::FFM.MtlStorage) =
+    KernelInterface.get_backend(parent(storage))
+KernelInterface.device(backend::Metal.MetalBackend, storage::FFM.MtlStorage) =
+    _metal_device_index(Metal.device(_metal_root(parent(storage))))
+
 function _metal_mode(storage)
     storage === :default && return :default
     (storage === Metal.SharedStorage || storage === Metal.PrivateStorage) && return storage

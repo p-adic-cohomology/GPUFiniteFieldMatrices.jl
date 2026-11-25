@@ -16,9 +16,6 @@ function modular_array(backend::Symbol, values::AbstractArray; modulus::Integer,
     throw(ArgumentError("unsupported test backend $backend"))
 end
 
-"""Wait for work queued by a modular wrapper to finish."""
-synchronize_array!(array) = G.synchronize_backend!(array)
-
 """Compute exact modular results on the host with unbounded integers."""
 function exact_modular_reference(values, modulus::Integer)
     q = BigInt(modulus)

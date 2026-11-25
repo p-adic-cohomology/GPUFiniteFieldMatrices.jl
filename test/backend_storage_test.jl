@@ -38,12 +38,6 @@
                 modulus = 7,
                 device = "cuda:0",
             )
-            @test_throws ArgumentError mod.allocate_storage(
-                CUDA.CUDABackend(),
-                Float32,
-                (1,);
-                device = "cuda:0",
-            )
         end
 
         if GFM_TEST_CUDA_FUNCTIONAL
@@ -73,9 +67,13 @@
                     adjoint(reshape(raw_cuda, 1, length(raw_cuda))),
                 )
                 for transformed in transformed_wrappers
-                    @test mod.backendof(transformed) == mod.backendof(raw_cuda)
-                    @test mod.deviceof(transformed) == mod.deviceof(raw_cuda)
-                    similar_transformed = mod.similar_storage(transformed, Float32, (2, 3))
+                    backend = mod.KernelInterface.get_backend(transformed)
+                    @test typeof(backend) === typeof(mod.KernelInterface.get_backend(raw_cuda))
+                    @test mod.KernelInterface.device(
+                        backend,
+                        cuda_ext._cuda_root(transformed),
+                    ) == target_index
+                    similar_transformed = similar(transformed, Float32, (2, 3))
                     @test CUDA.device(similar_transformed) == target
                     wrapped_transformed = mod.CuModArray{Float32,ndims(transformed)}(
                         transformed;
@@ -83,7 +81,10 @@
                         device = target,
                     )
                     @test parent(wrapped_transformed) === transformed
-                    @test mod.deviceof(wrapped_transformed) == mod.deviceof(raw_cuda)
+                    @test mod.KernelInterface.device(
+                        mod.KernelInterface.get_backend(parent(wrapped_transformed)),
+                        cuda_ext._cuda_root(parent(wrapped_transformed)),
+                    ) == target_index
                 end
                 native_view_wrapped =
                     mod.CuModVector(raw_view; modulus = 7, device = target)
@@ -108,10 +109,18 @@
                 @test CUDA.device(parent(factory_zero)) == target
                 @test CUDA.device() == caller
 
-                allocated =
-                    mod.allocate_storage(CUDA.CUDABackend(), Float32, (3,); device = target)
-                @test CUDA.device(allocated) == target
-                @test CUDA.device() == caller
+                if length(devices) >= 2
+                    other = devices[2]
+                    CUDA.device!(other) do
+                        copied_source = copy(native_wrapped)
+                        similar_source = mod.similar_with_modulus(native_wrapped, 11)
+                        @test CUDA.device(parent(copied_source)) == target
+                        @test CUDA.device(parent(similar_source)) == target
+                        @test Array(copied_source) == Array(native_wrapped)
+                        @test CUDA.device() == other
+                    end
+                    @test CUDA.device() == caller
+                end
 
                 if length(devices) >= 2
                     other = devices[2]

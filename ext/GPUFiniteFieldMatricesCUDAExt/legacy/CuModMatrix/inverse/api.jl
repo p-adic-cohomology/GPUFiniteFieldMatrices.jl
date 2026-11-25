@@ -982,15 +982,15 @@ _empty_pluq_batch(::Type) = PLUQ[]
 function _pluq_batched_fallback!(mats::AbstractVector{<:CuModMatrix}, options::PLUQOptions)
     opts = _resolve_options(options, first(mats))
     nstreams = min(opts.batch_streams, length(mats))
-    return FFM.with_backend_streams(parent(first(mats)), nstreams) do stream_context
-        firstF = FFM.with_backend_stream(stream_context, 1) do
+    return _with_cuda_streams(parent(first(mats)), nstreams) do stream_context
+        firstF = _with_cuda_stream(stream_context, 1) do
             pluq!(mats[1], options = opts)
         end
         out = Vector{typeof(firstF)}(undef, length(mats))
         out[1] = firstF
         for i = 2:length(mats)
             stream_index = (i - 1) % nstreams + 1
-            out[i] = FFM.with_backend_stream(stream_context, stream_index) do
+            out[i] = _with_cuda_stream(stream_context, stream_index) do
                 pluq!(mats[i], options = opts)
             end
         end
@@ -1237,12 +1237,12 @@ function _inverse_batched_fallback(
     opts::PLUQOptions,
 )
     nstreams = min(opts.batch_streams, length(mats))
-    return FFM.with_backend_streams(parent(first(mats)), nstreams) do stream_context
+    return _with_cuda_streams(parent(first(mats)), nstreams) do stream_context
         out = Vector{CuModMatrix}(undef, length(mats))
         for i in eachindex(mats)
             A = mats[i]
             stream_index = (i - 1) % nstreams + 1
-            out[i] = FFM.with_backend_stream(stream_context, stream_index) do
+            out[i] = _with_cuda_stream(stream_context, stream_index) do
                 if rows(A) == cols(A)
                     inv(A, options = options)
                 elseif rows(A) < cols(A)

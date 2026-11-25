@@ -1,5 +1,5 @@
 const _ELEMENTWISE_PREFLIGHT =
-    Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
+    GPUFiniteFieldMatrices
 
 @testset "Elementwise host preflight metadata" begin
     mod = _ELEMENTWISE_PREFLIGHT

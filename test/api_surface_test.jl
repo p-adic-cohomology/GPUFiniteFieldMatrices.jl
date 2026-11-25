@@ -156,7 +156,7 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
     @test !hasmethod(mod.KaratsubaMatrix, Tuple{Matrix{Int},Matrix{Int},Int})
     @test !hasmethod(mod.KaratsubaMatrix, Tuple{Matrix{Int},Matrix{Int},Int,Int,Int})
     @test !hasmethod(mod.KaratsubaVector, Tuple{Vector{Int},Vector{Int},Int,Int,Int})
-    @test which(Base.copy, Tuple{matrix_type}).module === CUDA_EXT
+    @test which(Base.copy, Tuple{matrix_type}).module === mod
     @test which(Base.inv, Tuple{matrix_type}).module === CUDA_EXT
     @test which(mod.pluq, Tuple{matrix_type}).module === CUDA_EXT
     @test which(mod.is_invertible, Tuple{matrix_type}).module === CUDA_EXT
@@ -328,8 +328,8 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
     @test !hasmethod(mod.to_karatsuba, Tuple{Matrix{Int},Int})
     @test !hasmethod(mod.to_karatsuba, Tuple{Type{Int},Matrix{Int},Int})
     @test which(mod.from_karatsuba, Tuple{Type{Int},karatsuba_type}).module === mod
-    @test which(LinearAlgebra.rmul!, Tuple{matrix_type,Float64}).module === CUDA_EXT
-    @test which(LinearAlgebra.lmul!, Tuple{Float64,matrix_type}).module === CUDA_EXT
+    @test which(LinearAlgebra.rmul!, Tuple{matrix_type,Float64}).module === mod
+    @test which(LinearAlgebra.lmul!, Tuple{Float64,matrix_type}).module === mod
 
     # Keyword signatures stay CPU-inspectable, so the public names and removed
     # positional overrides are checked even when no CUDA device is available.
@@ -342,9 +342,9 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
         (mod.elementwise_multiply!, Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray}),
         (mod.scalar_add!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
         (mod.scalar_sub!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
-        (CUDA_EXT.rscalar_sub!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
-        (CUDA_EXT.mul_elementwise!, Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray}),
-        (CUDA_EXT.div!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
+        (mod.rscalar_sub!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
+        (mod.mul_elementwise!, Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray}),
+        (mod.div!, Tuple{mod.CuModArray,mod.CuModArray,Int}),
         (mod.mod_elements!, Tuple{mod.CuModArray}),
     )
     for (f, signature) in keyword_signatures
@@ -359,12 +359,12 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
     )
     @test !hasmethod(mod.scalar_add!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
     @test !hasmethod(mod.scalar_sub!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
-    @test !hasmethod(CUDA_EXT.rscalar_sub!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
+    @test !hasmethod(mod.rscalar_sub!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
     @test !hasmethod(
-        CUDA_EXT.mul_elementwise!,
+        mod.mul_elementwise!,
         Tuple{mod.CuModArray,mod.CuModArray,mod.CuModArray,Int},
     )
-    @test !hasmethod(CUDA_EXT.div!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
+    @test !hasmethod(mod.div!, Tuple{mod.CuModArray,mod.CuModArray,Int,Int})
     @test :modulus_override in
           keyword_decl(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,Float64})
     scalar_mul_keywords =

@@ -6,6 +6,7 @@ import Random
 using SparseArrays: SparseArrays
 import GPUArrays
 import KernelAbstractions
+import KernelAbstractions: @index, @kernel
 import KernelInterface
 
 const DEBUG = false
@@ -26,6 +27,10 @@ function karatsuba_gemv! end
 function scalar_multiply! end
 function negate! end
 function divide_elements! end
+function mul_elementwise! end
+function rscalar_sub! end
+function div! end
+function mod! end
 function pluq end
 function pluq! end
 function inverse_pluq end
@@ -53,10 +58,10 @@ function lower_triangular_inverse_no_copy end
 @stable default_mode = "disable" begin
     include("backend/storage.jl")
     include("backend/selection.jl")
-    include("backend/runtime.jl")
 
     include("CuModMatrix/CuModMatrix.jl")
     include("CuModMatrix/host_math.jl")
+    include("CuModMatrix/kernel_ops/elementwise.jl")
     include("CuModMatrix/inverse/types.jl")
     include("CuModMatrix/inverse/mod_arith.jl")
     include("CuModMatrix/inverse/perm_vectors.jl")

@@ -228,133 +228,6 @@ function Base.rand(
     end
 end
 
-"""
-    elementwise_multiply!(C, A, B; modulus_override = nothing)
-
-In-place element-wise multiplication: C = A .* B mod N. No allocation is performed.
-Only a positive `modulus_override` replaces `modulus(C)` for the reduction modulus.
-A zero or negative value throws `ArgumentError`. All stored moduli must still
-match, including when an override is supplied. Logical sizes and backing lengths
-must also match. These compatibility checks may be elided by an `@inbounds`
-caller, who is responsible for satisfying them.
-"""
-Base.@propagate_inbounds @inline function elementwise_multiply!(
-    C::CuModArray,
-    A::CuModArray,
-    B::CuModArray,
-    ;
-    modulus_override::Union{Nothing,Integer} = nothing,
-)
-    _validate_positive_modulus_override(modulus_override)
-    N = modulus_override === nothing ? modulus(C) : modulus_override
-
-    mul_elementwise!(C, A, B; modulus_override = N)
-    return C
-end
-
-"""
-    neg!(B, A; modulus_override = nothing)
-
-In-place negation: B = -A mod N. No allocation is performed.
-Only a positive `modulus_override` replaces `modulus(B)` for the reduction modulus.
-A zero or negative value throws `ArgumentError`. Stored moduli, logical sizes
-and backing lengths must match. Compatibility checks may be elided by an
-`@inbounds` caller, who is responsible for satisfying them.
-"""
-Base.@propagate_inbounds @inline function neg!(
-    B::CuModArray,
-    A::CuModArray;
-    modulus_override::Union{Nothing,Integer} = nothing,
-)
-    _validate_positive_modulus_override(modulus_override)
-    @boundscheck _check_elementwise_compatible(B, A)
-    N = modulus_override === nothing ? modulus(B) : modulus_override
-
-    rscalar_sub!(B, A, 0; modulus_override = N)
-    return B
-end
-
-"""
-    rmul!(A,s)
-
-Scales the array A by s, overwriting A.
-As ZZ/n is commutative, this has the same behavior as lmul!
-
-Extends LinearAlgebra.rmul! and LinearAlgebra.lmul!
-"""
-Base.@propagate_inbounds @inline function LinearAlgebra.rmul!(A::CuModArray, s::Number)
-    return mul!(A, A, s)
-end
-
-"""
-    lmul!(s,A)
-
-Scales the array A by s, overwriting A.
-As ZZ/n is commutative, this has the same behavior as lmul!
-"""
-Base.@propagate_inbounds @inline function LinearAlgebra.lmul!(s::Number, A::CuModArray)
-    return mul!(A, A, s)
-end
-
-function dumb_copy_kernel!(B, A)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-
-    if i <= length(A) && i <= length(B)
-        B[i] = A[i]
-    end
-
-    nothing
-end
-
-"""
-    copy!(B, A)
-
-In-place copy: B = A. No allocation is performed.
-B is updated with the contents of A.
-
-This copies all logical entries across valid backing layouts. Padding is outside
-the copy and is left unchanged in the destination. The operation does not test
-the modulus or normalize entries.
-"""
-function Base.copy!(B::CuModArray, A::CuModArray)
-    if size(A) != size(B)
-        throw(DimensionMismatch("Matrix dimensions must match"))
-    end
-
-    source = _logical_view(parent(A), size(A))
-    destination = _logical_view(parent(B), size(B))
-    threads = TILE_WIDTH
-    count = length(source)
-    if count > 0
-        blocks = cld(count, threads)
-        @cuda threads=threads blocks=blocks dumb_copy_kernel!(destination, source)
-    end
-
-    return B
-end
-
-"""
-    copyto!(dest::CuModArray, src::DenseArray)
-
-Copy the data from dest to src. This is useful for sending
-data to the gpu.
-
-Does not mod.
-"""
-function Base.copyto!(dest::CuModArray{T,D}, src::DenseArray{T,D}) where {T,D}
-    if size(dest) != size(src)
-        throw(DimensionMismatch("Matrix dimensions must match"))
-    end
-
-    #rangesize = map(x -> 1:x,size(dest))
-    #data_inds = CartesianIndices(rangesize)
-    inds = CartesianIndices(src)
-
-    #dataview = @view dest[data_inds]
-    copyto!(parent(dest), inds, src, inds)
-    return dest
-end
-
 function Base.copyto!(
     dest::CuModMatrix{T},
     src::SparseArrays.CHOLMOD.Dense{T},
@@ -362,104 +235,21 @@ function Base.copyto!(
     return copyto!(dest, Matrix(src))
 end
 
-
-"""
-    fill!(A::CuModArray{T,D}, s::T) where {T,D}
-
-fills (in place) A with the value s (mod N)
-"""
-function Base.fill!(A::CuModArray, s::Number)
-    smod = mod(s, modulus(A))
-
-    fill!(parent(A), smod)
+function similar_with_modulus(A::CuModArray{T,D}, new_modulus::Integer) where {T,D}
+    checked_modulus = FFM._elementwise_working_modulus(A, new_modulus)
+    device = CUDA.device(_cuda_root(parent(A)))
+    storage = _with_cuda_device(device) do
+        native = similar(parent(A), T, _padded_size(size(A)))
+        fill!(native, zero(T))
+        native
+    end
+    return FFM._new_modular_wrapper(A, storage, size(A), checked_modulus)
 end
 
-"""
-    zero!(A::CuModArray)
-
-Sets all of the entries of A to zero, in place.
-
-"""
-zero!(A::CuModArray) = fill!(parent(A), zero(eltype(parent(A))))
-
-"""
-    mod_elements!(A; modulus_override = nothing)
-
-Apply modulus to all elements of A in-place.
-Only a positive `modulus_override` replaces `modulus(A)` for the reduction modulus.
-A zero or negative value throws `ArgumentError`. The stored modulus on `A`
-is unchanged.
-"""
-function mod_elements!(A::CuModArray; modulus_override::Union{Nothing,Integer} = nothing)
-    _validate_positive_modulus_override(modulus_override)
-    N = modulus_override === nothing ? modulus(A) : modulus_override
-    mod!(parent(A), parent(A), N)
-    return A
-end
 
 function trunc_elements!(A::CuModArray)
     parent(A) .= trunc.(parent(A))
     return A
-end
-
-# Utility functions to change modulus
-"""
-    change_modulus(A, new_N)
-
-Create an independent CuModArray with modulus `new_N`. Logical elements are
-reduced only when `new_N` is smaller than `modulus(A)`; otherwise they are copied.
-The new storage rounds each logical
-dimension up to a multiple of `TILE_WIDTH` and has zero padding.
-"""
-function change_modulus(A::CuModArray, new_N::Integer)
-    T = eltype(parent(A))
-    D = ndims(A)
-    dims = size(A)
-    _, logical_dims, new_modulus = _cuda_factory_preflight(T, dims, new_N, dims)
-    return CUDA.device!(CUDA.device(parent(A))) do
-        data = CUDA.zeros(T, _padded_size(dims)...)
-        result = CuModArray{T,D}(
-            data;
-            modulus = new_modulus,
-            mod = false,
-            new_size = logical_dims,
-        )
-
-        if !isempty(A)
-            logical_source = _logical_view(parent(A), dims)
-            logical_result = _logical_view(parent(result), logical_dims)
-            if new_modulus < modulus(A)
-                logical_result .= mod.(logical_source, new_modulus)
-            else
-                copyto!(logical_result, logical_source)
-            end
-        end
-
-        return result
-    end
-end
-
-"""
-    change_modulus!!(A, new_N)
-
-Consumes `A` and returns a new immutable `CuModArray` wrapper over the same GPU
-storage with modulus `new_N`. The wrapper shares its parent storage with `A`.
-Use the returned wrapper, for example `A = change_modulus!!(A, p)`, and do not
-use the consumed wrapper afterward. Aliases to the parent share storage and
-observe the in-place reduction when the modulus shrinks.
-
-`new_N` must be positive. A smaller modulus performs one in-place reduction.
-Equal or larger moduli leave values unchanged and reinterpret them.
-The wrapper may allocate small host metadata; no GPU storage is allocated.
-"""
-function change_modulus!!(A::CuModArray{T,D}, new_N::Integer) where {T,D}
-    _, logical_dims, new_modulus = _cuda_factory_preflight(T, size(A), new_N, size(A))
-
-    if new_modulus < modulus(A)
-        mod!(parent(A), parent(A), new_modulus)
-    end
-
-    return CuModArray{T,D}(parent(A); modulus = new_modulus, new_size = logical_dims)
 end
 
 """
@@ -528,24 +318,6 @@ function LinearAlgebra.mul!(
 
     stripe_mul!(z, A, x; input_bound = input_bound, modulus_override = modulus_override)
     return z
-end
-
-"""
-    copy(A::CuModArray)
-
-Copy the logical data and metadata into newly allocated storage. The new
-storage rounds each logical dimension up to a multiple of `TILE_WIDTH` and has
-zero padding, regardless of the source padding contents.
-"""
-function Base.copy(A::CuModArray{T,D}) where {T,D}
-    return CUDA.device!(CUDA.device(parent(A))) do
-        dims = size(A)
-        data = CUDA.zeros(T, _padded_size(dims)...)
-        if !isempty(A)
-            copyto!(_logical_view(data, dims), _logical_view(parent(A), dims))
-        end
-        CuModArray{T,D}(data; modulus = modulus(A), mod = false, new_size = dims)
-    end
 end
 
 #TODO: addmul! (add and scalar multiply), gemv!, gemm!

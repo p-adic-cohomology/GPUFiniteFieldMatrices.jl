@@ -15,7 +15,7 @@ end
 Return a new modular array containing the additive inverse of each logical
 entry of `A`.
 """
-function Base.:-(A::CuModArray)
+function Base.:-(A::GPUModArray)
     result = similar_with_modulus(A, modulus(A))
     neg!(result, A)
     return result

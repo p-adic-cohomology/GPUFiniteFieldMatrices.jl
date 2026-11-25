@@ -1,21 +1,4 @@
 const STORAGE_CONTRACT_G = GPUFiniteFieldMatrices
-const STORAGE_CONTRACT_KI = STORAGE_CONTRACT_G.KernelInterface
-
-struct StorageContractBackendA <: STORAGE_CONTRACT_KI.Backend end
-struct StorageContractBackendB <: STORAGE_CONTRACT_KI.Backend end
-
-struct StorageContractArray{B<:STORAGE_CONTRACT_KI.Backend} <: AbstractVector{Float32}
-    backend::B
-    deviceid::Int
-end
-
-Base.size(::StorageContractArray) = (1,)
-STORAGE_CONTRACT_KI.get_backend(array::StorageContractArray) = array.backend
-STORAGE_CONTRACT_KI.device(::Union{StorageContractBackendA,StorageContractBackendB}) = 1
-STORAGE_CONTRACT_KI.device(
-    ::Union{StorageContractBackendA,StorageContractBackendB},
-    array::StorageContractArray,
-) = array.deviceid
 
 @testset "Generic modular storage contracts" begin
     G = STORAGE_CONTRACT_G
@@ -70,12 +53,6 @@ STORAGE_CONTRACT_KI.device(
     modulus_five = G.GPUModArray{Float32,1,Vector{Float32}}(Float32[1, 2], (2,), 5)
     modulus_seven = G.GPUModArray{Float32,1,Vector{Float32}}(Float32[1, 2], (2,), 7)
     @test modulus_five != modulus_seven
-
-    device_one = StorageContractArray(StorageContractBackendA(), 1)
-    device_two = StorageContractArray(StorageContractBackendA(), 2)
-    other_backend = StorageContractArray(StorageContractBackendB(), 1)
-    @test G.deviceof(device_one) != G.deviceof(device_two)
-    @test G.deviceof(device_one) != G.deviceof(other_backend)
 
     backends = Symbol[]
     GFM_TEST_CUDA_LOADED && push!(backends, :cuda)

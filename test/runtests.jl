@@ -106,7 +106,6 @@ include("backend_test_driver_test.jl")
 end
 include("backend_storage_test.jl")
 include("generic_storage_contract_test.jl")
-include("backend_runtime_test.jl")
 include("base_methods_test.jl")
 include("exceptions_test.jl")
 
@@ -205,8 +204,6 @@ end
         :_backend_default_component_type,
         :_backend_default_plan_type,
         :_backend_symbol,
-        :_copy_storage!,
-        :_fill_storage!,
         :_karatsuba_component,
         :_karatsuba_gemv_precision_plan,
         :_karatsuba_gemv_validate_radices,
@@ -222,30 +219,11 @@ end
         :_pluq_extract_U,
         :_storage_modulus_limit,
         :_storage_backend,
-        :_rand_storage!,
         :_validate_backend_storage,
         :_validate_storage_modulus,
         :CuStorage,
         :MtlStorage,
-        :copy_storage!,
-        :fill_storage!,
-        :rand_storage!,
-        :with_backend_stream,
-        :_host_scalar,
-        :_runtime_storage_root,
-        :_runtime_storage_value,
-        :_synchronize_runtime_storage!,
-        :_with_backend_stream,
-        :_with_backend_streams,
         :_modular_host_values,
-        :allocate_storage,
-        :backendof,
-        :deviceof,
-        :host_scalar,
-        :pinned_host_buffer,
-        :similar_storage,
-        :synchronize_backend!,
-        :with_backend_streams,
         :divide_elements!,
         :find_max_ops,
         :find_max_stripe_ops,

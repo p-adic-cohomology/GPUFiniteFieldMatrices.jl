@@ -1,19 +1,24 @@
 using Random
 
-@testset "Metal modular storage and backend selection" begin
+_metal_exact(values, modulus) = map(x -> mod(BigInt(x), BigInt(modulus)), values)
+_metal_exact2(f, left, right, modulus) = map(
+    (x, y) -> mod(f(BigInt(x), BigInt(y)), BigInt(modulus)),
+    left,
+    right,
+)
+
+@testset "Metal modular wrapper and elementwise contracts" begin
     G = GPUFiniteFieldMatrices
-    metal_ext = Base.get_extension(G, :GPUFiniteFieldMatricesMetalExt)
-    @test metal_ext !== nothing
+    ext = Base.get_extension(G, :GPUFiniteFieldMatricesMetalExt)
+    @test ext !== nothing
     @test G.MtlModMatrix{Float32} === G.MtlModArray{Float32,2}
     @test G.MtlModVector{Float32} === G.MtlModArray{Float32,1}
     @test G._auto_backend(true, true) === :cuda
     @test G._auto_backend(false, true) === :metal
     @test_throws ArgumentError G._auto_backend(false, false)
-    metal_precision = BackendTestSupport.precision_fixture(:metal)
-    @test metal_precision.storage_types == (Float32,)
-    @test only(last.(metal_precision.exact_bits)) == 24
-    @test BackendTestSupport.modulus_fixture(:metal).first_unsupported_float32_modulus ==
-          BigInt(2)^24 + 1
+    @test_throws ArgumentError G._validate_backend_storage(Val(:metal), Float64, 7)
+    @test_throws ArgumentError G._validate_backend_storage(Val(:metal), Int32, 7)
+    @test_throws DomainError G._validate_backend_storage(Val(:metal), Float32, 2^24 + 1)
 
     if !Metal.functional()
         @test_throws ArgumentError G.MtlModArray{Float32,2}(
@@ -21,356 +26,287 @@ using Random
             modulus = 7,
         )
     else
-        host = Float32[1 2 3; 4 5 6]
         device = Metal.device()
-        @info "Metal storage/factory fixture" device storage_modes=(
-            Metal.SharedStorage,
-            Metal.PrivateStorage,
-        ) scalar_indexing=false
-        typed_alias = @inferred G.MtlModMatrix{Float32}(host; modulus = 7)
-        typed_zeros = @inferred zeros(G.MtlModMatrix{Float32}, 2, 3; modulus = 7)
-        typed_rand = @inferred rand(G.MtlModVector{Float32}, 17; modulus = 7)
-        @test isconcretetype(typeof(typed_alias))
-        @test isconcretetype(typeof(typed_zeros))
-        @test isconcretetype(typeof(typed_rand))
         Metal.allowscalar(false)
         try
-            for mode in (Metal.SharedStorage, Metal.PrivateStorage)
-                array = BackendTestSupport.modular_array(
-                    :metal,
+        for mode in (Metal.SharedStorage, Metal.PrivateStorage)
+            @testset "$(nameof(mode)) wrapper methods" begin
+                host = Float32[1 2 3; 4 5 6]
+                A = G.MtlModArray{Float32,2}(
                     host;
                     modulus = 7,
                     storage = mode,
                     device,
                 )
-                backing = parent(array)
-                @test array isa G.MtlModMatrix{Float32}
-                @test isconcretetype(typeof(array))
-                @test size(array) == size(host)
-                @test size(backing) == (32, 32)
-                @test Metal.storagemode(backing) === mode
-                @test Metal.device(backing) == device
-                @test G.backendof(array) == G.backendof(backing)
-                @test G.deviceof(array) == G.deviceof(backing)
-                @test G.deviceof(array)[1] === typeof(G.backendof(backing))
+                @test A isa G.MtlModArray{Float32,2,mode}
+                @test Metal.storagemode(parent(A)) === mode
+                @test Metal.device(parent(A)) == device
+                @test Array(A) == _metal_exact(host, 7)
+                @test all(iszero, Array(parent(A))[3:end, :])
 
-                backing_view = view(backing, 1:2, 1:3)
-                storage_wrappers = (
-                    backing,
-                    backing_view,
-                    reshape(backing, length(backing)),
-                    transpose(backing),
-                    adjoint(backing),
-                )
-                for storage_wrapper in storage_wrappers
-                    @test G.backendof(storage_wrapper) == G.backendof(backing)
-                    @test G.deviceof(storage_wrapper) == G.deviceof(backing)
-                    similar_wrapper = G.similar_storage(storage_wrapper, Float32, (2, 3))
-                    @test Metal.storagemode(similar_wrapper) === mode
-                    @test Metal.device(similar_wrapper) == device
-                end
-                BackendTestSupport.synchronize_array!(array)
-                @test Array(array) == BackendTestSupport.exact_modular_reference(host, 7)
+                copied = copy(A)
+                @test copied isa G.MtlModArray{Float32,2,mode}
+                @test parent(copied) !== parent(A)
+                @test size(copied) == size(A)
+                @test G.modulus(copied) == G.modulus(A)
+                @test Metal.storagemode(parent(copied)) === mode
+                @test Metal.device(parent(copied)) == device
+                @test Array(copied) == _metal_exact(host, 7)
+                @test all(iszero, Array(parent(copied))[3:end, :])
 
-                allocated = G.allocate_storage(
-                    Metal.MetalBackend(),
-                    Float32,
-                    (2, 3);
+                similar_A = similar(A)
+                @test similar_A isa G.MtlModArray{Float32,2,mode}
+                @test all(iszero, Array(similar_A))
+                @test Metal.storagemode(parent(similar_A)) === mode
+                @test Metal.device(parent(similar_A)) == device
+                changed = G.similar_with_modulus(A, 11)
+                @test G.modulus(changed) == 11
+                @test Metal.storagemode(parent(changed)) === mode
+                @test all(iszero, Array(changed))
+
+                destination = G.similar_with_modulus(A, 7)
+                identity = parent(destination)
+                result = G.add!(destination, A, copied)
+                @test result === destination
+                @test parent(destination) === identity
+                @test Array(destination) == _metal_exact2(+, host, host, 7)
+
+                before_padding = Array(parent(destination))
+                @test G.sub!(destination, A, copied) === destination
+                @test Array(destination) == _metal_exact2(-, host, host, 7)
+                @test Array(parent(destination))[3:end, :] == before_padding[3:end, :]
+                @test G.mul_elementwise!(destination, A, copied) === destination
+                @test Array(destination) == _metal_exact2(*, host, host, 7)
+                @test G.elementwise_multiply!(destination, A, copied) === destination
+                @test Array(destination) == _metal_exact2(*, host, host, 7)
+
+                @test G.neg!(destination, A) === destination
+                @test Array(destination) == map(x -> mod(-BigInt(x), 7), host)
+                @test G.scalar_add!(destination, A, -9) === destination
+                @test Array(destination) == map(x -> mod(BigInt(x) - 9, 7), host)
+                @test G.scalar_sub!(destination, A, 11) === destination
+                @test Array(destination) == map(x -> mod(BigInt(x) - 11, 7), host)
+                @test G.rscalar_sub!(destination, A, 11) === destination
+                @test Array(destination) == map(x -> mod(11 - BigInt(x), 7), host)
+                @test LinearAlgebra.mul!(destination, A, 13) === destination
+                @test Array(destination) == map(x -> mod(BigInt(x) * 13, 7), host)
+                @test G.div!(destination, A, 3) === destination
+                @test Array(destination) == map(x -> mod(BigInt(x) * invmod(3, 7), 7), host)
+                @test G.add!(A, A, copied; threads = 1) === A
+                @test Array(A) == _metal_exact2(+, host, host, 7)
+
+                @test Array(A + copied) == _metal_exact2(+, host, host, 7)
+                @test Array(A - copied) == _metal_exact2(-, host, host, 7)
+                @test Array(-A) == map(x -> mod(-BigInt(x), 7), host)
+                @test Array(A + 11) == map(x -> mod(BigInt(x) + 11, 7), host)
+                @test Array(11 - A) == map(x -> mod(11 - BigInt(x), 7), host)
+                @test Array(A * 13) == map(x -> mod(BigInt(x) * 13, 7), host)
+                @test Array(A / 3) == map(x -> mod(BigInt(x) * invmod(3, 7), 7), host)
+
+                fill!(destination, -1)
+                @test Array(destination) == fill(6, 2, 3)
+                @test Array(parent(destination))[3:end, :] == before_padding[3:end, :]
+                @test copyto!(destination, Float32[6 5 4; 3 2 1]) === destination
+                @test Array(destination) == Float32[6 5 4; 3 2 1]
+                @test copyto!(destination, A) === destination
+                @test Array(destination) == Array(A)
+                @test G.mod_elements!(destination) === destination
+                @test Array(destination) == Array(A)
+                @test Array(G.change_modulus(A, 5)) == _metal_exact(host, 5)
+                @test Array(G.change_modulus!!(copy(A), 5)) == _metal_exact(host, 5)
+                @test Array(mod(A, 5)) == _metal_exact(host, 5)
+
+                random = rand(G.MtlModVector{Float32}, 33; modulus = 7, storage = mode, device)
+                random_values = Array(random)
+                @test Metal.storagemode(parent(random)) === mode
+                @test Metal.device(parent(random)) == device
+                @test all(x -> 0 <= x < 7 && isinteger(x), random_values)
+                @test all(iszero, Array(parent(random))[34:end])
+
+                edge_modulus = 2^24
+                edge_values = Float32[edge_modulus - 1, edge_modulus - 2, 1, 9]
+                edge_other = Float32[edge_modulus - 2, edge_modulus - 1, 3, 7]
+                edge_A = G.MtlModArray{Float32,1}(
+                    edge_values;
+                    modulus = edge_modulus,
                     storage = mode,
                     device,
                 )
-                allocated_storage =
-                    G.MtlStorage{Float32,2,mode,typeof(allocated)}(allocated)
-                @test G.fill_storage!(allocated_storage, 2.0f0) === allocated_storage
-                copied = G.similar_storage(allocated, Float32, (2, 3))
-                copied_storage = G.MtlStorage{Float32,2,mode,typeof(copied)}(copied)
-                @test G.copy_storage!(copied_storage, allocated_storage) === copied_storage
-                BackendTestSupport.synchronize_array!(copied_storage)
-                @test G.deviceof(copied_storage) == G.deviceof(allocated)
-                @test Metal.storagemode(copied) === mode
-                @test Array(copied) ==
-                      BackendTestSupport.exact_modular_reference(fill(2.0f0, 2, 3), 7)
-
-                padded_destination = Metal.MtlArray{Float32,2,mode}(undef, (3, 4))
-                copyto!(padded_destination, fill(8.0f0, 3, 4))
-                source_region = view(allocated, 1:2, 1:3)
-                destination_region = view(padded_destination, 2:3, 2:4)
-                source_region_storage =
-                    G.MtlStorage{Float32,2,mode,typeof(source_region)}(source_region)
-                destination_region_storage =
-                    G.MtlStorage{Float32,2,mode,typeof(destination_region)}(
-                        destination_region,
-                    )
-                @test G.copy_storage!(destination_region_storage, source_region_storage) ===
-                      destination_region_storage
-                BackendTestSupport.synchronize_array!(destination_region_storage)
-                padded_host = Array(padded_destination)
-                @test padded_host[1, :] == fill(8.0f0, 4)
-                @test padded_host[2:3, 1] == fill(8.0f0, 2)
-                @test padded_host[2:3, 2:4] == Array(allocated)
-                @test G.fill_storage!(destination_region_storage, 5.0f0) ===
-                      destination_region_storage
-                BackendTestSupport.synchronize_array!(destination_region_storage)
-                padded_host = Array(padded_destination)
-                @test padded_host[1, :] == fill(8.0f0, 4)
-                @test padded_host[2:3, 1] == fill(8.0f0, 2)
-                @test padded_host[2:3, 2:4] == fill(5.0f0, 2, 3)
-
-                similar_array = G.similar_with_modulus(array, 11)
-                @test similar_array isa G.MtlModArray{Float32,2,mode}
-                @test isconcretetype(typeof(similar_array))
-                @test Metal.storagemode(parent(similar_array)) === mode
-                @test Metal.device(parent(similar_array)) == device
-                @test all(iszero, Array(similar_array))
-
-                base_similar = similar(array)
-                @test base_similar isa G.MtlModArray{Float32,2,mode}
-                @test isconcretetype(typeof(base_similar))
-                @test Metal.storagemode(parent(base_similar)) === mode
-                @test Metal.device(parent(base_similar)) == device
-                @test all(iszero, Array(base_similar))
-
-                base = Metal.MtlArray{Float32,2,mode}(undef, (4, 5))
-                copyto!(
-                    base,
-                    Float32[1 2 3 4 5; 6 7 8 9 10; 11 12 13 14 15; 16 17 18 19 20],
+                edge_B = G.MtlModArray{Float32,1}(
+                    edge_other;
+                    modulus = edge_modulus,
+                    storage = mode,
+                    device,
                 )
-                wrapped = G.GPUModArray(base; modulus = 23, new_size = (3, 4))
-                @test parent(wrapped) === base
-                @test isconcretetype(typeof(wrapped))
-                @test size(wrapped) == (3, 4)
-                @test size(parent(wrapped)) == (4, 5)
-                @test Array(wrapped) == Float32[1 2 3 4; 6 7 8 9; 11 12 13 14]
-                @test Metal.storagemode(parent(wrapped)) === mode
+                edge_C = similar(edge_A)
+                @test G.add!(edge_C, edge_A, edge_B) === edge_C
+                @test Array(edge_C) == _metal_exact2(+, edge_values, edge_other, edge_modulus)
+                @test G.mul_elementwise!(edge_C, edge_A, edge_B) === edge_C
+                @test Array(edge_C) == _metal_exact2(*, edge_values, edge_other, edge_modulus)
+                large_scalar = BigInt(edge_modulus) + 3
+                @test G.scalar_add!(edge_C, edge_A, large_scalar) === edge_C
+                @test Array(edge_C) == map(
+                    x -> mod(BigInt(x) + large_scalar, BigInt(edge_modulus)),
+                    edge_values,
+                )
+                @test G.div!(edge_C, edge_A, 3; threads = 1) === edge_C
+                @test Array(edge_C) == map(
+                    x -> mod(BigInt(x) * invmod(BigInt(3), BigInt(edge_modulus)), BigInt(edge_modulus)),
+                    edge_values,
+                )
+                @test Array(edge_A + large_scalar) == map(
+                    x -> mod(BigInt(x) + large_scalar, BigInt(edge_modulus)),
+                    edge_values,
+                )
+                exact_alias = copy(edge_A)
+                @test G.add!(exact_alias, exact_alias, edge_B) === exact_alias
+                @test Array(exact_alias) == _metal_exact2(+, edge_values, edge_other, edge_modulus)
 
-                backing_view = view(base, 2:4, 2:5)
-                wrapped_view = G.GPUModArray(backing_view; modulus = 23)
-                @test parent(wrapped_view) === backing_view
-                @test isconcretetype(typeof(wrapped_view))
-                @test Array(wrapped_view) == Float32[7 8 9 10; 12 13 14 15; 17 18 19 20]
-                @test G.deviceof(wrapped_view) == G.deviceof(base)
+                modulus_one = G.MtlModArray{Float32,1}(
+                    zeros(Float32, 3);
+                    modulus = 1,
+                    storage = mode,
+                    device,
+                )
+                @test G.neg!(modulus_one, modulus_one) === modulus_one
+                @test Array(modulus_one) == zeros(Float32, 3)
+            end
+        end
 
-                transformed_wrappers =
-                    (reshape(base, length(base)), transpose(base), adjoint(base))
-                for transformed in transformed_wrappers
-                    wrapped_transformed =
-                        G.MtlModArray{Float32,ndims(transformed)}(transformed; modulus = 23)
-                    @test parent(wrapped_transformed) === transformed
-                    @test G.deviceof(wrapped_transformed) == G.deviceof(base)
-                    native_transformed = metal_ext._metal_root(parent(wrapped_transformed))
-                    @test Metal.storagemode(native_transformed) === mode
-                    @test Metal.device(native_transformed) == device
+        @testset "Elementwise shapes, exact modular arithmetic, and bounds" begin
+            shapes = ((0, 3), (1,), (1, 1), (7,), (3, 5), (31, 33), (33, 31),
+                      (65, 67), (257, 255))
+            for (shape_index, shape) in enumerate(shapes)
+                values = reshape(Float32.(mod.(collect(0:prod(shape)-1), 97)), shape)
+                other = reshape(Float32.(mod.(collect(13:12+prod(shape)), 97)), shape)
+                A = G.MtlModArray{Float32,length(shape)}(
+                    values;
+                    modulus = 97,
+                    storage = Metal.PrivateStorage,
+                    device,
+                )
+                B = G.MtlModArray{Float32,length(shape)}(
+                    other;
+                    modulus = 97,
+                    storage = Metal.PrivateStorage,
+                    device,
+                )
+                C = similar(A)
+                @test G.add!(C, A, B) === C
+                @test Array(C) == _metal_exact2(+, values, other, 97)
+                physical = Array(parent(C))
+                padding_mask = trues(size(physical))
+                padding_mask[ntuple(d -> 1:size(C, d), length(shape))...] .= false
+                @test all(iszero, physical[padding_mask])
+                if shape_index == length(shapes)
+                    @test G.mul_elementwise!(C, A, B) === C
+                    @test Array(C) == _metal_exact2(*, values, other, 97)
                 end
+            end
+        end
 
-                half = Metal.MtlArray{Float16,2,mode}(undef, (3, 4))
-                copyto!(half, Float16[1 2 3 4; 5 6 7 8; 9 10 11 12])
-                half_view = view(half, 1:2, 2:4)
-                wrapped_half = G.MtlModMatrix(half_view; modulus = 13)
-                @test eltype(wrapped_half) === Float16
-                @test isconcretetype(typeof(wrapped_half))
-                @test parent(wrapped_half) === half_view
-                @test Array(wrapped_half) == Float16[2 3 4; 6 7 8]
+        @testset "Padded views, aliasing, and preflight no-write behavior" begin
+            raw_a = Metal.MtlArray{Float32,2,Metal.PrivateStorage}(undef, (4, 5))
+            raw_b = Metal.MtlArray{Float32,2,Metal.PrivateStorage}(undef, (4, 5))
+            raw_c = Metal.MtlArray{Float32,2,Metal.PrivateStorage}(undef, (4, 5))
+            copyto!(raw_a, fill(91.0f0, 4, 5))
+            copyto!(raw_b, fill(92.0f0, 4, 5))
+            copyto!(raw_c, fill(77.0f0, 4, 5))
+            logical_a = Float32[1 2 3 4; 5 6 0 1; 2 3 4 5]
+            logical_b = Float32[4 3 2 1; 0 6 5 4; 3 2 1 0]
+            copyto!(view(raw_a, 1:3, 1:4), logical_a)
+            copyto!(view(raw_b, 1:3, 1:4), logical_b)
+            A = G.GPUModArray(view(raw_a, 1:3, 1:4); modulus = 7)
+            B = G.GPUModArray(view(raw_b, 1:3, 1:4); modulus = 7)
+            C = G.GPUModArray(view(raw_c, 1:3, 1:4); modulus = 7)
+            before = Array(raw_c)
+            identity = parent(C)
+            @test G.add!(C, A, B) === C
+            @test parent(C) === identity
+            @test Array(C) == _metal_exact2(+, logical_a, logical_b, 7)
+            after = Array(raw_c)
+            @test after[4, :] == before[4, :]
+            @test after[:, 5] == before[:, 5]
 
+            alias_backing = Metal.MtlArray{Float32,2,Metal.PrivateStorage}(undef, (4, 4))
+            copyto!(alias_backing, reshape(Float32.(1:16), 4, 4))
+            alias_C = G.GPUModArray(view(alias_backing, 1:2, 1:2); modulus = 17)
+            alias_A = G.GPUModArray(view(alias_backing, 2:3, 2:3); modulus = 17)
+            alias_B = G.GPUModArray(Float32[1 1; 1 1]; modulus = 17, storage = Metal.PrivateStorage)
+            alias_before = Array(alias_backing)
+            @test_throws ArgumentError G.add!(alias_C, alias_A, alias_B)
+            @test Array(alias_backing) == alias_before
+
+            mismatch = G.MtlModArray{Float32,2}(
+                logical_b;
+                modulus = 101,
+                storage = Metal.PrivateStorage,
+            )
+            before_C = Array(parent(C))
+            @test_throws G.ModulusMismatchError G.add!(C, A, mismatch)
+            @test Array(parent(C)) == before_C
+            wrong_shape = G.MtlModArray{Float32,2}(
+                logical_b[1:2, :];
+                modulus = 7,
+                storage = Metal.PrivateStorage,
+            )
+            @test_throws DimensionMismatch G.add!(C, A, wrong_shape)
+            @test Array(parent(C)) == before_C
+
+            invalid_parent = Metal.MtlArray{Float32,2,Metal.PrivateStorage}(undef, (3, 4))
+            invalid_values = zeros(Float32, 3, 4)
+            invalid_values[1, 1] = NaN32
+            copyto!(invalid_parent, invalid_values)
+            invalid = G.GPUModArray(invalid_parent; modulus = 7, new_size = (3, 4))
+            @test_throws ArgumentError G.add!(C, A, invalid)
+            @test Array(parent(C)) == before_C
+            @test_throws ArgumentError G.scalar_add!(C, A, Inf)
+            @test Array(parent(C)) == before_C
+            @test_throws LinearAlgebra.SingularException G.div!(C, A, 7)
+            @test Array(parent(C)) == before_C
+
+            @test_throws ArgumentError G.add!(C, A, B; modulus_override = 0)
+            @test Array(parent(C)) == before_C
+            @test_throws ArgumentError G.add!(C, A, B; threads = 0)
+            @test Array(parent(C)) == before_C
+
+            raw_backing = Metal.MtlArray{Float32,1,Metal.PrivateStorage}(undef, (8,))
+            copyto!(raw_backing, Float32[1, 2, 3, 4, 5, 6, 7, 8])
+            raw_C = view(raw_backing, 2:5)
+            raw_A = view(raw_backing, 4:7)
+            raw_before = Array(raw_backing)
+            @test_throws ArgumentError G.mod!(raw_C, raw_A, 7)
+            @test Array(raw_backing) == raw_before
+            @test_throws ArgumentError G.rscalar_sub!(raw_C, raw_A, 3, 7)
+            @test Array(raw_backing) == raw_before
+            @test G.mod!(raw_backing, raw_backing, 7) === raw_backing
+            @test Array(raw_backing) == _metal_exact(Float32[1, 2, 3, 4, 5, 6, 7, 8], 7)
+        end
+
+        @testset "Metal factory and backend selection" begin
+            host = Float32[1 2; 3 4]
+            previous = G.set_default_backend!(:metal)
+            try
+                generic = G.GPUModArray{Float32,2}(host; modulus = 7)
+                @test generic isa G.MtlModMatrix{Float32}
+                @test Metal.device(parent(generic)) == device
+                @test G.default_backend() === :metal
                 zeros_array = zeros(
                     G.MtlModMatrix{Float32},
                     2,
-                    3;
+                    2;
                     modulus = 7,
-                    storage = mode,
+                    storage = Metal.PrivateStorage,
                     device,
                 )
-                @test zeros_array isa G.MtlModArray{Float32,2,mode}
-                @test isconcretetype(typeof(zeros_array))
-                @test Metal.storagemode(parent(zeros_array)) === mode
-                @test Metal.device(parent(zeros_array)) == device
-                @test Array(zeros_array) ==
-                      BackendTestSupport.exact_modular_reference(zeros(Float32, 2, 3), 7)
-                random_array =
-                    rand(G.MtlModVector{Float32}, 17; modulus = 7, storage = mode, device)
-                random_host = Array(random_array)
-                @test random_array isa G.MtlModVector{Float32}
-                @test isconcretetype(typeof(random_array))
-                @test Metal.storagemode(parent(random_array)) === mode
-                @test Metal.device(parent(random_array)) == device
-                @test all(x -> 0 <= x < 7, random_host)
-                @test all(iszero, Array(parent(random_array))[18:end])
-
-                random_storage = G.MtlStorage{Float32,2,mode,typeof(allocated)}(allocated)
-                G.fill_storage!(random_storage, 9.0f0)
-                before_unsupported_rng = Array(allocated)
-                @test_throws ArgumentError G.rand_storage!(
-                    random_storage,
-                    Random.MersenneTwister(5),
-                )
-                @test Array(allocated) == before_unsupported_rng
-                @test G.rand_storage!(random_storage) === random_storage
-                BackendTestSupport.synchronize_array!(random_storage)
-                random_values = Array(allocated)
-                @test all(value -> 0.0f0 <= value < 1.0f0, random_values)
-
-                raw_rng_backing = Metal.MtlArray{Float32,1,mode}(undef, (4,))
-                copyto!(raw_rng_backing, fill(9.0f0, 4))
-                raw_rng_view = SubArray(raw_rng_backing, (2:3,))
-                @test G.fill_storage!(raw_rng_view, 6.0f0) === raw_rng_view
-                @test Array(raw_rng_backing) == Float32[9, 6, 6, 9]
-                @test G.copy_storage!(raw_rng_view, Float32[2, 3]) === raw_rng_view
-                @test Array(raw_rng_backing) == Float32[9, 2, 3, 9]
-                for unsupported_destination in (raw_rng_backing, raw_rng_view)
-                    copyto!(raw_rng_backing, fill(9.0f0, 4))
-                    before_unsupported_rng = Array(raw_rng_backing)
-                    error = try
-                        G.rand_storage!(unsupported_destination, Random.MersenneTwister(19))
-                        nothing
-                    catch exception
-                        exception
-                    end
-                    @test error isa ArgumentError
-                    @test occursin("Metal.default_rng()", sprint(showerror, error))
-                    @test Array(raw_rng_backing) == before_unsupported_rng
-                end
-
-                @test G.rand_storage!(raw_rng_backing) === raw_rng_backing
-                @test all(value -> 0.0f0 <= value < 1.0f0, Array(raw_rng_backing))
-                copyto!(raw_rng_backing, fill(9.0f0, 4))
-                @test G.rand_storage!(raw_rng_view, Metal.default_rng()) === raw_rng_view
-                after_view_rng = Array(raw_rng_backing)
-                @test after_view_rng[1] == 9.0f0
-                @test after_view_rng[4] == 9.0f0
-                @test all(value -> 0.0f0 <= value < 1.0f0, after_view_rng[2:3])
-                raw_rng_storage =
-                    G.MtlStorage{Float32,1,mode,typeof(raw_rng_view)}(raw_rng_view)
-                @test G.rand_storage!(raw_rng_storage) === raw_rng_storage
-                @test all(value -> 0.0f0 <= value < 1.0f0, Array(raw_rng_backing)[2:3])
-
-                scalar_storage = Metal.MtlArray{Float32,1,mode}(undef, (1,))
-                copyto!(scalar_storage, Float32[3.25])
-                @test G.host_scalar(scalar_storage) === 3.25f0
-
-                raw_scalar_backing = Metal.MtlArray{Float32,1,mode}(undef, (4,))
-                copyto!(raw_scalar_backing, Float32[1, 2, 3, 4])
-                scalar_view = SubArray(raw_scalar_backing, (2:2,))
-                scalar_wrappers = (
-                    scalar_view,
-                    reshape(scalar_view, (1,)),
-                    transpose(scalar_view),
-                    adjoint(scalar_view),
-                )
-                for scalar_wrapper in scalar_wrappers
-                    @test G.host_scalar(scalar_wrapper) === 2.0f0
-                end
-                adapted_scalar_view =
-                    G.MtlStorage{Float32,1,mode,typeof(scalar_view)}(scalar_view)
-                @test G.host_scalar(adapted_scalar_view) === 2.0f0
-                nonsingleton_view = SubArray(raw_scalar_backing, (1:2,))
-                @test_throws ArgumentError G.host_scalar(nonsingleton_view)
-                adapted_nonsingleton_view =
-                    G.MtlStorage{Float32,1,mode,typeof(nonsingleton_view)}(
-                        nonsingleton_view,
-                    )
-                @test_throws ArgumentError G.host_scalar(adapted_nonsingleton_view)
-
-                staging = G.pinned_host_buffer(Metal.MetalBackend(), Float32, (2, 3))
-                @test staging isa Array{Float32,2}
-                @test size(staging) == (2, 3)
+                @test all(iszero, Array(zeros_array))
+                @test Metal.storagemode(parent(zeros_array)) === Metal.PrivateStorage
+            finally
+                G.set_default_backend!(:auto)
             end
+        end
         finally
             Metal.allowscalar(true)
-        end
-
-        # Private storage must use device operations; host reads below are bulk conversions.
-        Metal.allowscalar(false)
-        try
-            private =
-                G.MtlModArray{Float32,2}(host; modulus = 7, storage = Metal.PrivateStorage)
-            BackendTestSupport.synchronize_array!(private)
-            @test Array(private) == BackendTestSupport.exact_modular_reference(host, 7)
-            @test isconcretetype(typeof(private))
-            queue_callback_ran = Ref(false)
-            @test G.with_backend_streams(private, 1) do stream_context
-                @test stream_context === nothing
-                G.with_backend_stream(stream_context, 1) do
-                    queue_callback_ran[] = true
-                    :current_queue
-                end
-            end === :current_queue
-            @test queue_callback_ran[]
-            current_device = Metal.device()
-            @test_throws ErrorException G.with_backend_streams(private, 1) do stream_context
-                @test stream_context === nothing
-                G.with_backend_stream(stream_context, 1) do
-                    error("Metal current-queue callback cleanup")
-                end
-            end
-            @test Metal.device() == current_device
-            queue_callback_ran[] = false
-            @test_throws ArgumentError G.with_backend_streams(private, 2) do _
-                queue_callback_ran[] = true
-            end
-            @test !queue_callback_ran[]
-            @test_throws ArgumentError G.MtlModArray{Int32,2}(Int32[1 2; 3 4]; modulus = 7)
-            @test_throws ArgumentError G.MtlModArray{Float64,2}(
-                ones(Float64, 1, 1);
-                modulus = 7,
-            )
-            @test_throws DomainError G.MtlModArray{Float32,2}(host; modulus = 2^24 + 1)
-            @test_throws ArgumentError G.MtlModArray{Float32,2}(
-                parent(private);
-                modulus = 7,
-                storage = Metal.SharedStorage,
-            )
-        finally
-            Metal.allowscalar(true)
-        end
-
-        previous_backend = G.set_default_backend!(:metal)
-        try
-            @test G.default_backend() === :metal
-            generic = G.GPUModArray{Float32,2}(host; modulus = 7)
-            explicit = G.GPUModArray{Float32,2}(host; modulus = 7, backend = :metal)
-            @test generic isa G.MtlModMatrix{Float32}
-            @test isconcretetype(typeof(generic))
-            @test explicit isa G.MtlModMatrix{Float32}
-            @test isconcretetype(typeof(explicit))
-
-            G.set_default_backend!(:cuda)
-            explicit_metal_alias = G.MtlModArray{Float32,2}(host; modulus = 7)
-            @test explicit_metal_alias isa G.MtlModMatrix{Float32}
-            @test isconcretetype(typeof(explicit_metal_alias))
-            G.set_default_backend!(:metal)
-
-            nested = G.with_backend(:cuda) do
-                @test G.default_backend() === :cuda
-                G.with_backend(:metal) do
-                    @test G.default_backend() === :metal
-                end
-                G.default_backend()
-            end
-            @test nested === :cuda
-            @test G.default_backend() === :metal
-
-            @sync begin
-                gate = Channel{Nothing}(1)
-                task = Threads.@spawn G.with_backend(:cuda) do
-                    put!(gate, nothing)
-                    yield()
-                    G.default_backend()
-                end
-                take!(gate)
-                @test G.default_backend() === :metal
-                @test fetch(task) === :cuda
-            end
-
-            @test_throws ErrorException G.with_backend(:cuda) do
-                @test G.default_backend() === :cuda
-                error("scoped selection restoration")
-            end
-            @test G.default_backend() === :metal
-
-            automatic = G.set_default_backend!(:auto)
-            @test automatic === :auto
-            @test G.default_backend() === (GFM_TEST_CUDA_FUNCTIONAL ? :cuda : :metal)
-        finally
-            G.set_default_backend!(:auto)
         end
     end
 end
