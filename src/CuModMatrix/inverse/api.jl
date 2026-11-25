@@ -198,7 +198,7 @@ end
 
 # The first n columns of [A I] are pivoted on the device. Host transfers
 # carry only pivot indices and invertibility status, never matrix values.
-function _inverse_augmented(A::GPUModMatrix)
+function _inverse_augmented(A::GPUModMatrix, options::PLUQOptions)
     m, n = size(A)
     result = _inverse_zero_matrix(A, (n, m))
     m == 0 && return result
@@ -209,6 +209,11 @@ function _inverse_augmented(A::GPUModMatrix)
     width = n + m
     aug = similar(native, eltype(A), (m, width))
     pivot_slot = similar(native, Int32, 1)
+    pivot_host = Vector{Int32}(undef, 1)
+    mode = options.pivot_warp_kernel
+    subgroup_width =
+        _storage_backend(native) === Val(:metal) ?
+        _pluq_pivot_subgroup_width(backend, mode) : 0
     diagonal = similar(native, Int64, 1)
     factors = similar(native, eltype(A), m)
     _inverse_init_augmented!(backend)(aug, source, n, N; ndrange = (m, width))
@@ -218,12 +223,19 @@ function _inverse_augmented(A::GPUModMatrix)
     column = _inverse_augmented_column!(backend)
     eliminate = _inverse_augmented_eliminate!(backend)
     for k = 1:m
-        _pluq_ka_find_pivot!(pivot_slot, aug, k, m, n, N)
-        pivot = Int(only(Array(pivot_slot)))
-        active_rows = m - k + 1
-        pivot <= active_rows * (n - k + 1) || throw(LinearAlgebra.SingularException(0))
-        col, row = divrem(pivot - 1, active_rows)
-        prow, pcol = k + row, k + col
+        prow, pcol = _pluq_ka_complete_pivot(
+            aug,
+            pivot_slot,
+            nothing,
+            pivot_host,
+            k,
+            m,
+            n,
+            N,
+            mode,
+            subgroup_width,
+        )
+        prow == 0 && throw(LinearAlgebra.SingularException(0))
         if prow != k
             swap(aug, k, prow, Val(true); ndrange = width)
         end
@@ -247,7 +259,7 @@ function Base.inv(A::GPUModMatrix; options::PLUQOptions = PLUQOptions())
     size(A, 1) == size(A, 2) || throw(DimensionMismatch("matrix must be square"))
     opts = _inverse_options(options, A)
     return opts.inverse_strategy === :pluq ? inverse_pluq(A; options = opts) :
-           _inverse_augmented(A)
+           _inverse_augmented(A, opts)
 end
 
 function _inverse_selected_columns(A, columns, opts)
@@ -284,7 +296,7 @@ function right_inverse(A::GPUModMatrix; options::PLUQOptions = PLUQOptions())
         selected = _inverse_selected_columns(A, view(F.q, 1:m), opts)
         selected === nothing || return selected
     end
-    return _inverse_augmented(A)
+    return _inverse_augmented(A, opts)
 end
 
 @kernel inbounds = true function _inverse_transpose_kernel!(out, A)

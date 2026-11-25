@@ -42,7 +42,11 @@ end
 @testset "Portable inverse API on Metal" begin
     G = GPUFiniteFieldMatrices
     N = 101
-    aug = G.PLUQOptions(inverse_strategy = :augmented, check_prime = true)
+    aug = G.PLUQOptions(
+        inverse_strategy = :augmented,
+        pivot_warp_kernel = :shfl,
+        check_prime = true,
+    )
     Metal.allowscalar(false)
     try
         for storage in (Metal.SharedStorage, Metal.PrivateStorage)
