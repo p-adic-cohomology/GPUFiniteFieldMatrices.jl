@@ -117,6 +117,8 @@ end
 
 if GFM_TEST_METAL_FUNCTIONAL
     include("metal_products_test.jl")
+    include("CuModMatrix/inverse/test_ordinary_ka.jl")
+    MetalOrdinaryPLUQTests.run_tests()
 end
 
 if GFM_TEST_CUDA_LOADED
