@@ -115,6 +115,7 @@ if GFM_TEST_METAL_LOADED
 end
 
 if GFM_TEST_CUDA_LOADED
+    GFM_TEST_CUDA_FUNCTIONAL && include("cuda_runtime_contract_test.jl")
     include("api_surface_test.jl")
     include("cuda_kernel_bindings_test.jl")
     include("KaratsubaMatrix/api_regressions_test.jl")
@@ -204,6 +205,8 @@ end
         :_backend_default_component_type,
         :_backend_default_plan_type,
         :_backend_symbol,
+        :_copy_storage!,
+        :_fill_storage!,
         :_karatsuba_component,
         :_karatsuba_gemv_precision_plan,
         :_karatsuba_gemv_validate_radices,
@@ -219,6 +222,7 @@ end
         :_pluq_extract_U,
         :_storage_modulus_limit,
         :_storage_backend,
+        :_rand_storage!,
         :_validate_backend_storage,
         :_validate_storage_modulus,
         :CuStorage,
@@ -229,6 +233,7 @@ end
         :with_backend_stream,
         :_host_scalar,
         :_runtime_storage_root,
+        :_runtime_storage_value,
         :_synchronize_runtime_storage!,
         :_with_backend_stream,
         :_with_backend_streams,

@@ -20,6 +20,10 @@ function _runtime_storage_root(storage::AbstractArray)
 end
 _runtime_storage_root(storage) = storage
 
+# Keep the selected region for operations; the root is only for backend/device discovery.
+_runtime_storage_value(storage::BackendStorage) = parent(storage)
+_runtime_storage_value(storage) = storage
+
 backendof(storage::AbstractArray) =
     KernelInterface.get_backend(_runtime_storage_root(storage))
 
@@ -28,10 +32,27 @@ function similar_storage(template::AbstractArray, ::Type{T}, dims::Dims) where {
     native === template && return similar(template, T, dims)
     return similar_storage(native, T, dims)
 end
-copy_storage!(dest, src) = copyto!(dest, src)
-fill_storage!(dest, value) = fill!(dest, value)
-rand_storage!(dest, rng = nothing) =
-    rng === nothing ? Random.rand!(dest) : Random.rand!(rng, dest)
+function _copy_storage!(backend, dest, src)
+    copyto!(_runtime_storage_value(dest), _runtime_storage_value(src))
+    return dest
+end
+
+copy_storage!(dest, src) = _copy_storage!(backendof(dest), dest, src)
+
+function _fill_storage!(backend, dest, value)
+    fill!(_runtime_storage_value(dest), value)
+    return dest
+end
+
+fill_storage!(dest, value) = _fill_storage!(backendof(dest), dest, value)
+
+function _rand_storage!(backend, dest, rng)
+    value = _runtime_storage_value(dest)
+    rng === nothing ? Random.rand!(value) : Random.rand!(rng, value)
+    return dest
+end
+
+rand_storage!(dest, rng = nothing) = _rand_storage!(backendof(dest), dest, rng)
 
 function _synchronize_runtime_storage!(backend::KernelInterface.Backend, storage)
     KernelInterface.synchronize(backend)
@@ -51,9 +72,11 @@ function deviceof(storage::AbstractArray)
 end
 
 _host_scalar(value) = value
+_host_scalar(backend, value) = _host_scalar(value)
 host_scalar(value) = _host_scalar(value)
-host_scalar(value::AbstractArray) = _host_scalar(value)
-host_scalar(value::BackendStorage) = _host_scalar(_runtime_storage_root(value))
+host_scalar(value::AbstractArray) = _host_scalar(backendof(value), value)
+host_scalar(value::BackendStorage) =
+    _host_scalar(backendof(value), _runtime_storage_value(value))
 
 pinned_host_buffer(::KernelInterface.Backend, ::Type{T}, dims::Dims) where {T} =
     Array{T}(undef, dims)

@@ -208,9 +208,67 @@ using Random
                 random_values = Array(allocated)
                 @test all(value -> 0.0f0 <= value < 1.0f0, random_values)
 
+                raw_rng_backing = Metal.MtlArray{Float32,1,mode}(undef, (4,))
+                copyto!(raw_rng_backing, fill(9.0f0, 4))
+                raw_rng_view = SubArray(raw_rng_backing, (2:3,))
+                @test G.fill_storage!(raw_rng_view, 6.0f0) === raw_rng_view
+                @test Array(raw_rng_backing) == Float32[9, 6, 6, 9]
+                @test G.copy_storage!(raw_rng_view, Float32[2, 3]) === raw_rng_view
+                @test Array(raw_rng_backing) == Float32[9, 2, 3, 9]
+                for unsupported_destination in (raw_rng_backing, raw_rng_view)
+                    copyto!(raw_rng_backing, fill(9.0f0, 4))
+                    before_unsupported_rng = Array(raw_rng_backing)
+                    error = try
+                        G.rand_storage!(unsupported_destination, Random.MersenneTwister(19))
+                        nothing
+                    catch exception
+                        exception
+                    end
+                    @test error isa ArgumentError
+                    @test occursin("Metal.default_rng()", sprint(showerror, error))
+                    @test Array(raw_rng_backing) == before_unsupported_rng
+                end
+
+                @test G.rand_storage!(raw_rng_backing) === raw_rng_backing
+                @test all(value -> 0.0f0 <= value < 1.0f0, Array(raw_rng_backing))
+                copyto!(raw_rng_backing, fill(9.0f0, 4))
+                @test G.rand_storage!(raw_rng_view, Metal.default_rng()) === raw_rng_view
+                after_view_rng = Array(raw_rng_backing)
+                @test after_view_rng[1] == 9.0f0
+                @test after_view_rng[4] == 9.0f0
+                @test all(value -> 0.0f0 <= value < 1.0f0, after_view_rng[2:3])
+                raw_rng_storage =
+                    G.MtlStorage{Float32,1,mode,typeof(raw_rng_view)}(raw_rng_view)
+                @test G.rand_storage!(raw_rng_storage) === raw_rng_storage
+                @test all(value -> 0.0f0 <= value < 1.0f0, Array(raw_rng_backing)[2:3])
+
                 scalar_storage = Metal.MtlArray{Float32,1,mode}(undef, (1,))
                 copyto!(scalar_storage, Float32[3.25])
                 @test G.host_scalar(scalar_storage) === 3.25f0
+
+                raw_scalar_backing = Metal.MtlArray{Float32,1,mode}(undef, (4,))
+                copyto!(raw_scalar_backing, Float32[1, 2, 3, 4])
+                scalar_view = SubArray(raw_scalar_backing, (2:2,))
+                scalar_wrappers = (
+                    scalar_view,
+                    reshape(scalar_view, (1,)),
+                    transpose(scalar_view),
+                    adjoint(scalar_view),
+                )
+                for scalar_wrapper in scalar_wrappers
+                    @test G.host_scalar(scalar_wrapper) === 2.0f0
+                end
+                adapted_scalar_view =
+                    G.MtlStorage{Float32,1,mode,typeof(scalar_view)}(scalar_view)
+                @test G.host_scalar(adapted_scalar_view) === 2.0f0
+                nonsingleton_view = SubArray(raw_scalar_backing, (1:2,))
+                @test_throws ArgumentError G.host_scalar(nonsingleton_view)
+                adapted_nonsingleton_view =
+                    G.MtlStorage{Float32,1,mode,typeof(nonsingleton_view)}(
+                        nonsingleton_view,
+                    )
+                @test_throws ArgumentError G.host_scalar(adapted_nonsingleton_view)
+
                 staging = G.pinned_host_buffer(Metal.MetalBackend(), Float32, (2, 3))
                 @test staging isa Array{Float32,2}
                 @test size(staging) == (2, 3)
@@ -236,6 +294,14 @@ using Random
                 end
             end === :current_queue
             @test queue_callback_ran[]
+            current_device = Metal.device()
+            @test_throws ErrorException G.with_backend_streams(private, 1) do stream_context
+                @test stream_context === nothing
+                G.with_backend_stream(stream_context, 1) do
+                    error("Metal current-queue callback cleanup")
+                end
+            end
+            @test Metal.device() == current_device
             queue_callback_ran[] = false
             @test_throws ArgumentError G.with_backend_streams(private, 2) do _
                 queue_callback_ran[] = true

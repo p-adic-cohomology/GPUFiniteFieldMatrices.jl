@@ -37,42 +37,54 @@ function _cuda_with_native_device(f::F, storage) where {F}
     end
 end
 
-function FFM.copy_storage!(dest::FFM.CuStorage, src)
-    source = src isa FFM.CuStorage ? parent(src) : src
-    return _cuda_with_native_device(parent(dest)) do native_dest
-        copyto!(native_dest, source)
+function FFM._copy_storage!(::CUDA.CUDABackend, dest, src)
+    native_dest = FFM._runtime_storage_value(dest)
+    native_source = FFM._runtime_storage_value(src)
+    return _cuda_with_native_device(native_dest) do selected_dest
+        copyto!(selected_dest, native_source)
         dest
     end
 end
 
-function FFM.fill_storage!(dest::FFM.CuStorage, value)
-    return _cuda_with_native_device(parent(dest)) do native_dest
-        fill!(native_dest, value)
+function FFM._fill_storage!(::CUDA.CUDABackend, dest, value)
+    native_dest = FFM._runtime_storage_value(dest)
+    return _cuda_with_native_device(native_dest) do selected_dest
+        fill!(selected_dest, value)
         dest
     end
 end
 
-function FFM.rand_storage!(dest::FFM.CuStorage, rng = nothing)
-    return _cuda_with_native_device(parent(dest)) do native_dest
+function FFM._rand_storage!(::CUDA.CUDABackend, dest, rng)
+    if rng !== nothing && !(rng isa CUDA.RNG)
+        throw(ArgumentError("explicit CUDA RNGs must be CUDA.RNG; got $(typeof(rng))"))
+    end
+    native_dest = FFM._runtime_storage_value(dest)
+    return _cuda_with_native_device(native_dest) do selected_dest
         if rng === nothing
-            Random.rand!(native_dest)
-        elseif rng isa CUDA.RNG
-            Random.rand!(rng, native_dest)
+            Random.rand!(selected_dest)
         else
-            throw(ArgumentError("explicit CUDA RNGs must be CUDA.RNG; got $(typeof(rng))"))
+            Random.rand!(rng, selected_dest)
         end
         dest
     end
 end
 
-function FFM._host_scalar(value::CUDA.CuArray)
-    return _with_cuda_device(CUDA.device(value)) do
-        CUDA.scalar(value)
+function FFM._host_scalar(::CUDA.CUDABackend, value::AbstractArray)
+    native = FFM._runtime_storage_root(value)
+    return _with_cuda_device(CUDA.device(native)) do
+        if value isa CUDA.CuArray
+            return CUDA.scalar(value)
+        end
+        staging = FFM.similar_storage(native, eltype(value), size(value))
+        FFM.copy_storage!(staging, value)
+        only(Array(staging))
     end
 end
 
-FFM._host_scalar(storage::FFM.CuStorage) =
-    FFM._host_scalar(FFM._runtime_storage_root(storage))
+FFM._host_scalar(backend::CUDA.CUDABackend, value::LinearAlgebra.Transpose) =
+    FFM._host_scalar(backend, parent(value))
+FFM._host_scalar(backend::CUDA.CUDABackend, value::LinearAlgebra.Adjoint) =
+    adjoint(FFM._host_scalar(backend, parent(value)))
 
 FFM.pinned_host_buffer(::CUDA.CUDABackend, ::Type{T}, dims::Dims) where {T} =
     CUDA.pin(Array{T}(undef, dims))
