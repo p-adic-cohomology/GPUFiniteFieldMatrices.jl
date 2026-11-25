@@ -111,6 +111,7 @@ include("exceptions_test.jl")
 
 if GFM_TEST_METAL_LOADED
     include("metal_storage_test.jl")
+    GFM_TEST_METAL_FUNCTIONAL && include("CuModMatrix/inverse/test_metal_subgroup_trsm.jl")
 end
 
 if GFM_TEST_CUDA_LOADED
