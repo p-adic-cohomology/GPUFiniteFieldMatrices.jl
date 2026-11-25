@@ -71,6 +71,9 @@ end
 
 # Device kernels must not contain DispatchDoctor host-side instrumentation.
 include("CuModMatrix/kernel_ops/elementwise.jl")
+include("KaratsubaMatrix/conversion_kernels.jl")
+include("KaratsubaMatrix/elementwise_kernels.jl")
+include("KaratsubaMatrix/device_operations.jl")
 include("CuModMatrix/inverse/basecase_pluq.jl")
 include("CuModMatrix/inverse/rectangular_pluq.jl")
 include("CuModMatrix/inverse/trsm.jl")
