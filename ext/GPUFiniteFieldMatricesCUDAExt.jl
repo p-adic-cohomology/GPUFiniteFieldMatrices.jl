@@ -13,7 +13,8 @@ import GPUFiniteFieldMatrices: KaratsubaArray
 import GPUFiniteFieldMatrices: PLUQ, PLUQOptions, ModulusMismatchError
 import GPUFiniteFieldMatrices: modulus, low_modulus, high_modulus, low_part, high_part
 import GPUFiniteFieldMatrices: add!, sub!, rscalar_sub!, mod!
-import GPUFiniteFieldMatrices: similar_with_modulus, stripe_mul, stripe_mul!, karatsuba_gemv!
+import GPUFiniteFieldMatrices:
+    similar_with_modulus, stripe_mul, stripe_mul!, karatsuba_gemv!
 import GPUFiniteFieldMatrices: scalar_multiply!, negate!, divide_elements!, pluq, pluq!
 import GPUFiniteFieldMatrices: inverse_pluq, pluq_batched!, pluq_batched, inverse_batched
 import GPUFiniteFieldMatrices: pluq_batched_4x4!, pluq_batched_8x8!, pluq_batched_16x16!
