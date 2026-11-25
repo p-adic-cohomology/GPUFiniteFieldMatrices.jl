@@ -1,3 +1,23 @@
+@testset "CPU-safe native CUDA product dispatch" begin
+    FFM = GPUFiniteFieldMatrices
+    cuda_ext = Base.get_extension(FFM, :GPUFiniteFieldMatricesCUDAExt)
+    @test cuda_ext._CUDA_BLAS === CUDA.cuBLAS
+
+    for T in (Float16, Float32, Float64)
+        CU = CUDA.CuArray{T,2,CUDA.DeviceMemory}
+        CV = CUDA.CuArray{T,1,CUDA.DeviceMemory}
+        GPUView = SubArray{T,2,CU,Tuple{UnitRange{Int},UnitRange{Int}},false}
+
+        # The stripe accumulator itself uses LinearAlgebra, and CUDA owns the
+        # native matrix and vector methods it reaches in the supported layouts.
+        signature = Tuple{CU,GPUView,GPUView,UnitRange{Int}}
+        @test only(Base.return_types(FFM._stripe_accumulate_stripe!, signature)) === CU
+        @test which(LinearAlgebra.mul!, (CU, Char, Char, GPUView, GPUView, T, T)).module ===
+              CUDA.cuBLAS
+        @test which(LinearAlgebra.mul!, (CV, Char, GPUView, CV, T, T)).module === CUDA.cuBLAS
+    end
+end
+
 @testset "CPU-safe cuBLAS scalar cache inference" begin
     cuda_ext = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
     for T in (Float16, Float32, Float64)
@@ -476,7 +496,7 @@ function test_cuda_blas_compatibility()
 
     # Float16 uses the default 16-bit GEMM scale type. Small exact inputs keep
     # the test within Float16's integer precision while exercising one and
-    # multiple stripes through the cached scalar references.
+    # multiple stripes through native LinearAlgebra.mul!.
     if CUDA.capability(CUDA.device()) >= v"5.3"
         half_modulus = 7
         half_A_data = [1 2 3 4 5; 2 3 4 5 6]
