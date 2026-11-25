@@ -668,7 +668,10 @@ function Base.copy!(destination::GPUModArray, source::GPUModArray)
     return destination
 end
 
-function Base.copyto!(destination::GPUModArray{T,D}, source::AbstractArray{S,D}) where {T,S,D}
+function _copyto_modular_array!(
+    destination::GPUModArray{T,D},
+    source::AbstractArray{S,D},
+) where {T,S,D}
     size(destination) == size(source) ||
         throw(DimensionMismatch("Matrix dimensions must match"))
     _check_elementwise_backend(destination, destination)
@@ -679,6 +682,37 @@ function Base.copyto!(destination::GPUModArray{T,D}, source::AbstractArray{S,D})
     copyto!(_logical_view(parent(destination), size(destination)), source)
     return destination
 end
+
+Base.copyto!(
+    destination::GPUModArray{T,D},
+    source::AbstractArray{S,D},
+) where {T,S,D} = _copyto_modular_array!(destination, source)
+
+# These intersections keep the broad wrapper copy method unambiguous with the
+# sparse and CHOLMOD matrix copy methods. Materialize these host-only formats
+# before the ordinary array upload so GPU destinations never use scalar loops.
+function _copyto_modular_host_matrix!(destination::GPUModMatrix, source::AbstractMatrix)
+    size(destination) == size(source) ||
+        throw(DimensionMismatch("Matrix dimensions must match"))
+    return _copyto_modular_array!(destination, Matrix(source))
+end
+
+Base.copyto!(
+    destination::GPUModMatrix{T},
+    source::SparseArrays.AbstractSparseMatrixCSC{S},
+) where {T,S} = _copyto_modular_host_matrix!(destination, source)
+
+Base.copyto!(
+    destination::GPUModMatrix{T},
+    source::SparseArrays.CHOLMOD.Dense{S},
+) where {T,S<:Union{Float32,Float64,ComplexF64,ComplexF32}} =
+    _copyto_modular_host_matrix!(destination, source)
+
+Base.copyto!(
+    destination::GPUModMatrix{T},
+    source::SparseArrays.CHOLMOD.Dense{T},
+) where {T<:Union{Float32,Float64,ComplexF64,ComplexF32}} =
+    _copyto_modular_host_matrix!(destination, source)
 
 function Base.copyto!(destination::GPUModArray{T,D}, source::GPUModArray{S,D}) where {T,S,D}
     size(destination) == size(source) ||

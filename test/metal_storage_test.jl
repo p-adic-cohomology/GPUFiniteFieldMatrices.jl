@@ -1,4 +1,5 @@
 using Random
+using SparseArrays
 
 _metal_exact(values, modulus) = map(x -> mod(BigInt(x), BigInt(modulus)), values)
 _metal_exact2(f, left, right, modulus) = map(
@@ -232,7 +233,9 @@ _metal_exact2(f, left, right, modulus) = map(
             copyto!(alias_backing, reshape(Float32.(1:16), 4, 4))
             alias_C = G.GPUModArray(view(alias_backing, 1:2, 1:2); modulus = 17)
             alias_A = G.GPUModArray(view(alias_backing, 2:3, 2:3); modulus = 17)
-            alias_B = G.GPUModArray(Float32[1 1; 1 1]; modulus = 17, storage = Metal.PrivateStorage)
+            alias_b_native = Metal.MtlArray{Float32,2,Metal.PrivateStorage}(undef, (2, 2))
+            copyto!(alias_b_native, Float32[1 1; 1 1])
+            alias_B = G.GPUModArray(alias_b_native; modulus = 17)
             alias_before = Array(alias_backing)
             @test_throws ArgumentError G.add!(alias_C, alias_A, alias_B)
             @test Array(alias_backing) == alias_before
@@ -303,6 +306,44 @@ _metal_exact2(f, left, right, modulus) = map(
                 @test Metal.storagemode(parent(zeros_array)) === Metal.PrivateStorage
             finally
                 G.set_default_backend!(:auto)
+            end
+        end
+
+        @testset "Host sparse and CHOLMOD copy intersections" begin
+            for mode in (Metal.SharedStorage, Metal.PrivateStorage)
+                original = Float32[1 0; 3 4]
+                destination = G.MtlModArray{Float32,2}(
+                    zeros(Float32, 2, 2);
+                    modulus = 17,
+                    storage = mode,
+                    device,
+                )
+                native = parent(destination)
+                physical = Array(native)
+                padding_mask = trues(size(physical))
+                padding_mask[1:size(destination, 1), 1:size(destination, 2)] .= false
+                physical[padding_mask] .= 91.0f0
+                copyto!(native, physical)
+                sources = (
+                    sparse(original),
+                    SparseArrays.CHOLMOD.Dense(original),
+                    SparseArrays.CHOLMOD.Dense(Float64.(original)),
+                )
+
+                for source in sources
+                    @test copyto!(destination, source) === destination
+                    @test Array(destination) == original
+                    @test parent(destination) === native
+                    @test G.modulus(destination) == 17
+                    @test all(==(91.0f0), Array(parent(destination))[padding_mask])
+                end
+
+                saved = Array(parent(destination))
+                @test_throws DimensionMismatch copyto!(
+                    destination,
+                    sparse(ones(Float32, 3, 2)),
+                )
+                @test Array(parent(destination)) == saved
             end
         end
         finally

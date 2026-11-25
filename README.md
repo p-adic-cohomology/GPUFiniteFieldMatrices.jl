@@ -10,8 +10,13 @@ This package aims to implement fast finite field matrix operations on the GPU.
 
 We currently implement:
 
-- `CuModMatrix`, a `CuArray` wrapper representing a matrix modulo `N`, with
-  logical dimensions separate from its padded GPU storage. This includes:
+- `GPUModArray`, with the `CuModArray` and `MtlModArray` aliases, representing
+  vectors and matrices modulo `N` with logical dimensions separate from padded
+  GPU storage. Elementwise addition, subtraction, negation, scalar arithmetic,
+  elementwise multiplication, division by invertible scalars, and modulus
+  changes run through KernelAbstractions on CUDA and Metal. Metal supports
+  `Float16` and `Float32` storage in SharedStorage and PrivateStorage modes.
+- `CuModMatrix`, a CUDA-backed modular matrix wrapper. This includes:
   - exact modular matrix and matrix-vector multiplication, with an element-type
     dependent safe stripe budget
   - if `N` is prime, row reduction, LU decomposition, PLUQ decomposition, square
@@ -33,6 +38,10 @@ First, install Julia 1.12. If you're new to Julia, you can find a tutorial for n
 Then install Julia with `curl -fsSL https://install.julialang.org | sh`, restart your terminal if necessary, and open a Julia REPL with `julia`.
 
 This package uses CUDA. You'll need to install the CUDA driver, see [the instructions in the CUDA.jl docs](https://cuda.juliagpu.org/stable/installation/overview/).
+
+The Metal extension currently supports modular array construction, factories,
+copy/fill operations, and the elementwise arithmetic family. Matrix products
+and inversion require CUDA.
 
 Then, clone this repo with `git clone https://github.com/UCSD-computational-number-theory/GPUFiniteFieldMatrices.jl.git`.
 

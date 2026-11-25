@@ -61,7 +61,6 @@ function lower_triangular_inverse_no_copy end
 
     include("CuModMatrix/CuModMatrix.jl")
     include("CuModMatrix/host_math.jl")
-    include("CuModMatrix/kernel_ops/elementwise.jl")
     include("CuModMatrix/inverse/types.jl")
     include("CuModMatrix/inverse/mod_arith.jl")
     include("CuModMatrix/inverse/perm_vectors.jl")
@@ -69,6 +68,9 @@ function lower_triangular_inverse_no_copy end
     include("KaratsubaMatrix/KaratsubaMatrix.jl")
     include("base_methods.jl")
 end
+
+# Device kernels must not contain DispatchDoctor host-side instrumentation.
+include("CuModMatrix/kernel_ops/elementwise.jl")
 
 export GPUModArray, GPUModMatrix, GPUModVector, CuModArray, CuModMatrix, CuModVector
 export MtlModArray, MtlModMatrix, MtlModVector
