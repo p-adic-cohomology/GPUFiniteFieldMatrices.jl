@@ -113,6 +113,10 @@ if GFM_TEST_METAL_LOADED
     include("metal_storage_test.jl")
 end
 
+if GFM_TEST_METAL_FUNCTIONAL
+    include("metal_products_test.jl")
+end
+
 if GFM_TEST_CUDA_LOADED
     GFM_TEST_CUDA_FUNCTIONAL && include("cuda_runtime_contract_test.jl")
     include("api_surface_test.jl")
