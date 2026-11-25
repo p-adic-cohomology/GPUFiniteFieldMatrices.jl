@@ -57,7 +57,7 @@ end
 
 Materialize explicit `L` on GPU from packed `F.LU`.
 """
-function _pluq_extract_L(F::PLUQ)
+function _pluq_extract_L(F::PLUQ{T,A}) where {T,A<:CuModMatrix{T}}
     n = rows(F.LU)
     n32 = Int32(n)
     L = zeros(CuModMatrix{eltype(parent(F.LU))}, n, n; modulus = modulus(F.LU))
@@ -82,7 +82,7 @@ F = pluq(A)
 U = F.U
 ```
 """
-function _pluq_extract_U(F::PLUQ)
+function _pluq_extract_U(F::PLUQ{T,A}) where {T,A<:CuModMatrix{T}}
     n = rows(F.LU)
     n32 = Int32(n)
     U = zeros(CuModMatrix{eltype(parent(F.LU))}, n, n; modulus = modulus(F.LU))
