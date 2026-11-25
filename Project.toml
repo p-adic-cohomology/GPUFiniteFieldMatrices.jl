@@ -3,6 +3,7 @@ uuid = "465031f1-b347-4f72-85f6-baf667cdf853"
 version = "0.4.0"
 
 [deps]
+Atomix = "a9b6321e-bd34-4604-b9c9-b65b8de01458"
 DispatchDoctor = "8d63f2c5-f18a-4cf2-ba9d-b3f60fc568c8"
 GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
@@ -20,6 +21,7 @@ GPUFiniteFieldMatricesCUDAExt = "CUDA"
 GPUFiniteFieldMatricesMetalExt = "Metal"
 
 [compat]
+Atomix = "1.7"
 CUDA = "6.5"
 DispatchDoctor = "0.4.28"
 GPUArrays = "12.2"

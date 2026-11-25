@@ -45,9 +45,6 @@ function _metal_stripe_run!(output, left, right, output_size, q, chunk)
             store!(output, nothing, output_size; ndrange = size(output))
             return output
         end
-        Metal.MPS.is_supported(device) ||
-            throw(ArgumentError("exact Metal products require Metal Performance Shaders"))
-
         # Reuse one packed pair across stripes. The final short stripe is zero
         # extended on the device so no stale entries contribute to its sum.
         width = min(inner, chunk)

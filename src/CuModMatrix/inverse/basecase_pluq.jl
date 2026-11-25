@@ -1,4 +1,5 @@
-import KernelAbstractions: @atomic, @localmem, @synchronize
+import Atomix: @atomic
+import KernelAbstractions: @localmem, @synchronize
 
 const _PLUQ_KA_GROUP_SIZE = 128
 const _PLUQ_KA_NO_CANDIDATE = typemax(Int32)
