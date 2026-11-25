@@ -75,6 +75,7 @@ include("CuModMatrix/inverse/basecase_pluq.jl")
 include("CuModMatrix/inverse/rectangular_pluq.jl")
 include("CuModMatrix/inverse/trsm.jl")
 include("CuModMatrix/inverse/blocked_recursive_pluq.jl")
+include("CuModMatrix/inverse/subgroups/pivot.jl")
 include("CuModMatrix/inverse/subgroups/trsm.jl")
 
 include("CuModMatrix/kernel_mul/stripe_mul.jl")
