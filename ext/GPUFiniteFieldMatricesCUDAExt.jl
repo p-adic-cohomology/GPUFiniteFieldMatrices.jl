@@ -31,7 +31,7 @@ import GPUFiniteFieldMatrices:
 import GPUFiniteFieldMatrices: _karatsuba_plan_type
 import GPUFiniteFieldMatrices: _backend_default_component_type, _backend_default_plan_type
 import GPUFiniteFieldMatrices: find_max_ops, find_max_stripe_ops
-import GPUFiniteFieldMatrices: inverse_permutation, mod_inv
+import GPUFiniteFieldMatrices: inverse_permutation
 import GPUFiniteFieldMatrices: _padded_extent, _padded_size
 import GPUFiniteFieldMatrices: _pluq_extract_L, _pluq_extract_U
 import GPUFiniteFieldMatrices:
