@@ -14,7 +14,8 @@
         @test only(Base.return_types(FFM._stripe_accumulate_stripe!, signature)) === CU
         @test which(LinearAlgebra.mul!, (CU, Char, Char, GPUView, GPUView, T, T)).module ===
               CUDA.cuBLAS
-        @test which(LinearAlgebra.mul!, (CV, Char, GPUView, CV, T, T)).module === CUDA.cuBLAS
+        @test which(LinearAlgebra.mul!, (CV, Char, GPUView, CV, T, T)).module ===
+              CUDA.cuBLAS
     end
 end
 
