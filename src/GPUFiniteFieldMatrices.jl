@@ -2,7 +2,7 @@ module GPUFiniteFieldMatrices
 
 using DispatchDoctor: @stable
 using LinearAlgebra: LinearAlgebra
-using Random: Random, rand!
+import Random
 using SparseArrays: SparseArrays
 import GPUArrays
 import KernelAbstractions

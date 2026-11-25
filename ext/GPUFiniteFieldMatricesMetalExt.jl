@@ -1,6 +1,7 @@
 module GPUFiniteFieldMatricesMetalExt
 
 import Metal
+import Random
 import LinearAlgebra: I, UniformScaling
 import GPUFiniteFieldMatrices
 import GPUFiniteFieldMatrices: _backend_available, _backend_instance

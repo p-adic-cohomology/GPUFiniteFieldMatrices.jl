@@ -106,6 +106,7 @@ include("backend_test_driver_test.jl")
 end
 include("backend_storage_test.jl")
 include("generic_storage_contract_test.jl")
+include("backend_runtime_test.jl")
 include("base_methods_test.jl")
 include("exceptions_test.jl")
 
@@ -224,6 +225,13 @@ end
         :MtlStorage,
         :copy_storage!,
         :fill_storage!,
+        :rand_storage!,
+        :with_backend_stream,
+        :_host_scalar,
+        :_runtime_storage_root,
+        :_synchronize_runtime_storage!,
+        :_with_backend_stream,
+        :_with_backend_streams,
         :_modular_host_values,
         :allocate_storage,
         :backendof,

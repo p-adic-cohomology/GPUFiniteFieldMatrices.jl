@@ -30,7 +30,7 @@ import GPUFiniteFieldMatrices: from_karatsuba, initialize_plan!
 import GPUFiniteFieldMatrices: _logical_view, _validate_storage_modulus
 import GPUFiniteFieldMatrices:
     _validate_backend_storage, _normalize_logical_size, _storage_modulus_limit
-import GPUFiniteFieldMatrices: _karatsuba_plan_type, similar_storage
+import GPUFiniteFieldMatrices: _karatsuba_plan_type
 import GPUFiniteFieldMatrices: _backend_default_component_type, _backend_default_plan_type
 import GPUFiniteFieldMatrices: find_max_ops, find_max_stripe_ops
 import GPUFiniteFieldMatrices: inverse_permutation, mod_inv, zero!
@@ -43,6 +43,7 @@ import GPUFiniteFieldMatrices: _karatsuba_component, _karatsuba_host_array
 import GPUFiniteFieldMatrices: _karatsuba_zero_component
 import KernelAbstractions
 import KernelInterface
+import Random
 
 const FFM = GPUFiniteFieldMatrices
 const TILE_WIDTH = FFM.TILE_WIDTH

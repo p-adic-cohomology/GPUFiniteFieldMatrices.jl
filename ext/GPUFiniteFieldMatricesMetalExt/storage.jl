@@ -2,10 +2,18 @@ function _metal_root(array::Metal.MtlArray)
     return array
 end
 
-_metal_root(array::SubArray) = _metal_root(parent(array))
+function _metal_root(array::AbstractArray)
+    native = parent(array)
+    native === array && throw(MethodError(_metal_root, (array,)))
+    return _metal_root(native)
+end
 
 _metal_modeof(::Metal.MtlArray{T,D,S}) where {T,D,S} = S
-_metal_modeof(array::SubArray) = _metal_modeof(parent(array))
+function _metal_modeof(array::AbstractArray)
+    native = parent(array)
+    native === array && throw(MethodError(_metal_modeof, (array,)))
+    return _metal_modeof(native)
+end
 
 FFM._storage_backend(::Metal.MtlArray) = Val(:metal)
 

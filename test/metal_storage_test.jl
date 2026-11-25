@@ -1,3 +1,5 @@
+using Random
+
 @testset "Metal modular storage and backend selection" begin
     G = GPUFiniteFieldMatrices
     metal_ext = Base.get_extension(G, :GPUFiniteFieldMatricesMetalExt)
@@ -48,8 +50,25 @@
                 @test size(backing) == (32, 32)
                 @test Metal.storagemode(backing) === mode
                 @test Metal.device(backing) == device
-                @test G.deviceof(array)[1] === :metal
-                @test G.deviceof(array)[2] == device
+                @test G.backendof(array) == G.backendof(backing)
+                @test G.deviceof(array) == G.deviceof(backing)
+                @test G.deviceof(array)[1] === typeof(G.backendof(backing))
+
+                backing_view = view(backing, 1:2, 1:3)
+                storage_wrappers = (
+                    backing,
+                    backing_view,
+                    reshape(backing, length(backing)),
+                    transpose(backing),
+                    adjoint(backing),
+                )
+                for storage_wrapper in storage_wrappers
+                    @test G.backendof(storage_wrapper) == G.backendof(backing)
+                    @test G.deviceof(storage_wrapper) == G.deviceof(backing)
+                    similar_wrapper = G.similar_storage(storage_wrapper, Float32, (2, 3))
+                    @test Metal.storagemode(similar_wrapper) === mode
+                    @test Metal.device(similar_wrapper) == device
+                end
                 BackendTestSupport.synchronize_array!(array)
                 @test Array(array) == BackendTestSupport.exact_modular_reference(host, 7)
 
@@ -62,15 +81,40 @@
                 )
                 allocated_storage =
                     G.MtlStorage{Float32,2,mode,typeof(allocated)}(allocated)
-                G.fill_storage!(allocated_storage, 2.0f0)
+                @test G.fill_storage!(allocated_storage, 2.0f0) === allocated_storage
                 copied = G.similar_storage(allocated, Float32, (2, 3))
                 copied_storage = G.MtlStorage{Float32,2,mode,typeof(copied)}(copied)
-                G.copy_storage!(copied_storage, allocated_storage)
+                @test G.copy_storage!(copied_storage, allocated_storage) === copied_storage
                 BackendTestSupport.synchronize_array!(copied_storage)
-                @test G.deviceof(copied_storage)[2] == device
+                @test G.deviceof(copied_storage) == G.deviceof(allocated)
                 @test Metal.storagemode(copied) === mode
                 @test Array(copied) ==
                       BackendTestSupport.exact_modular_reference(fill(2.0f0, 2, 3), 7)
+
+                padded_destination = Metal.MtlArray{Float32,2,mode}(undef, (3, 4))
+                copyto!(padded_destination, fill(8.0f0, 3, 4))
+                source_region = view(allocated, 1:2, 1:3)
+                destination_region = view(padded_destination, 2:3, 2:4)
+                source_region_storage =
+                    G.MtlStorage{Float32,2,mode,typeof(source_region)}(source_region)
+                destination_region_storage =
+                    G.MtlStorage{Float32,2,mode,typeof(destination_region)}(
+                        destination_region,
+                    )
+                @test G.copy_storage!(destination_region_storage, source_region_storage) ===
+                      destination_region_storage
+                BackendTestSupport.synchronize_array!(destination_region_storage)
+                padded_host = Array(padded_destination)
+                @test padded_host[1, :] == fill(8.0f0, 4)
+                @test padded_host[2:3, 1] == fill(8.0f0, 2)
+                @test padded_host[2:3, 2:4] == Array(allocated)
+                @test G.fill_storage!(destination_region_storage, 5.0f0) ===
+                      destination_region_storage
+                BackendTestSupport.synchronize_array!(destination_region_storage)
+                padded_host = Array(padded_destination)
+                @test padded_host[1, :] == fill(8.0f0, 4)
+                @test padded_host[2:3, 1] == fill(8.0f0, 2)
+                @test padded_host[2:3, 2:4] == fill(5.0f0, 2, 3)
 
                 similar_array = G.similar_with_modulus(array, 11)
                 @test similar_array isa G.MtlModArray{Float32,2,mode}
@@ -104,7 +148,19 @@
                 @test parent(wrapped_view) === backing_view
                 @test isconcretetype(typeof(wrapped_view))
                 @test Array(wrapped_view) == Float32[7 8 9 10; 12 13 14 15; 17 18 19 20]
-                @test G.deviceof(wrapped_view)[2] == device
+                @test G.deviceof(wrapped_view) == G.deviceof(base)
+
+                transformed_wrappers =
+                    (reshape(base, length(base)), transpose(base), adjoint(base))
+                for transformed in transformed_wrappers
+                    wrapped_transformed =
+                        G.MtlModArray{Float32,ndims(transformed)}(transformed; modulus = 23)
+                    @test parent(wrapped_transformed) === transformed
+                    @test G.deviceof(wrapped_transformed) == G.deviceof(base)
+                    native_transformed = metal_ext._metal_root(parent(wrapped_transformed))
+                    @test Metal.storagemode(native_transformed) === mode
+                    @test Metal.device(native_transformed) == device
+                end
 
                 half = Metal.MtlArray{Float16,2,mode}(undef, (3, 4))
                 copyto!(half, Float16[1 2 3 4; 5 6 7 8; 9 10 11 12])
@@ -138,6 +194,26 @@
                 @test Metal.device(parent(random_array)) == device
                 @test all(x -> 0 <= x < 7, random_host)
                 @test all(iszero, Array(parent(random_array))[18:end])
+
+                random_storage = G.MtlStorage{Float32,2,mode,typeof(allocated)}(allocated)
+                G.fill_storage!(random_storage, 9.0f0)
+                before_unsupported_rng = Array(allocated)
+                @test_throws ArgumentError G.rand_storage!(
+                    random_storage,
+                    Random.MersenneTwister(5),
+                )
+                @test Array(allocated) == before_unsupported_rng
+                @test G.rand_storage!(random_storage) === random_storage
+                BackendTestSupport.synchronize_array!(random_storage)
+                random_values = Array(allocated)
+                @test all(value -> 0.0f0 <= value < 1.0f0, random_values)
+
+                scalar_storage = Metal.MtlArray{Float32,1,mode}(undef, (1,))
+                copyto!(scalar_storage, Float32[3.25])
+                @test G.host_scalar(scalar_storage) === 3.25f0
+                staging = G.pinned_host_buffer(Metal.MetalBackend(), Float32, (2, 3))
+                @test staging isa Array{Float32,2}
+                @test size(staging) == (2, 3)
             end
         finally
             Metal.allowscalar(true)
@@ -151,12 +227,20 @@
             BackendTestSupport.synchronize_array!(private)
             @test Array(private) == BackendTestSupport.exact_modular_reference(host, 7)
             @test isconcretetype(typeof(private))
+            queue_callback_ran = Ref(false)
             @test G.with_backend_streams(private, 1) do stream_context
-                stream_context
-            end === nothing
+                @test stream_context === nothing
+                G.with_backend_stream(stream_context, 1) do
+                    queue_callback_ran[] = true
+                    :current_queue
+                end
+            end === :current_queue
+            @test queue_callback_ran[]
+            queue_callback_ran[] = false
             @test_throws ArgumentError G.with_backend_streams(private, 2) do _
-                nothing
+                queue_callback_ran[] = true
             end
+            @test !queue_callback_ran[]
             @test_throws ArgumentError G.MtlModArray{Int32,2}(Int32[1 2; 3 4]; modulus = 7)
             @test_throws ArgumentError G.MtlModArray{Float64,2}(
                 ones(Float64, 1, 1);

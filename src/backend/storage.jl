@@ -19,5 +19,9 @@ Base.parent(storage::BackendStorage) = getfield(storage, :array)
 
 _storage_backend(::CuStorage) = Val(:cuda)
 _storage_backend(::MtlStorage) = Val(:metal)
-_storage_backend(storage::SubArray) = _storage_backend(parent(storage))
+function _storage_backend(storage::AbstractArray)
+    native = parent(storage)
+    native === storage && return nothing
+    return _storage_backend(native)
+end
 _storage_backend(::Any) = nothing

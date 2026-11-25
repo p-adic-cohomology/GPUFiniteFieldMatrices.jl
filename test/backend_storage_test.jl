@@ -64,6 +64,27 @@
                 @test parent(integer_wrapped) === raw_cuda
 
                 raw_view = @view raw_cuda[1:2]
+                reshaped = reshape(raw_cuda, length(raw_cuda))
+                transformed_wrappers = (
+                    raw_cuda,
+                    raw_view,
+                    reshaped,
+                    transpose(reshape(raw_cuda, 1, length(raw_cuda))),
+                    adjoint(reshape(raw_cuda, 1, length(raw_cuda))),
+                )
+                for transformed in transformed_wrappers
+                    @test mod.backendof(transformed) == mod.backendof(raw_cuda)
+                    @test mod.deviceof(transformed) == mod.deviceof(raw_cuda)
+                    similar_transformed = mod.similar_storage(transformed, Float32, (2, 3))
+                    @test CUDA.device(similar_transformed) == target
+                    wrapped_transformed = mod.CuModArray{Float32,ndims(transformed)}(
+                        transformed;
+                        modulus = 7,
+                        device = target,
+                    )
+                    @test parent(wrapped_transformed) === transformed
+                    @test mod.deviceof(wrapped_transformed) == mod.deviceof(raw_cuda)
+                end
                 native_view_wrapped =
                     mod.CuModVector(raw_view; modulus = 7, device = target)
                 integer_view_wrapped =

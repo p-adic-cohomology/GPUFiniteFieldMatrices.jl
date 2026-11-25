@@ -21,35 +21,6 @@ function FFM.allocate_storage(
     end
 end
 
-FFM.backendof(::FFM.MtlStorage) = Metal.MetalBackend()
-FFM.backendof(::Metal.MtlArray) = Metal.MetalBackend()
-function FFM.backendof(array::SubArray)
-    try
-        _metal_root(array)
-        return Metal.MetalBackend()
-    catch err
-        err isa MethodError || rethrow()
-        return invoke(FFM.backendof, Tuple{AbstractArray}, array)
-    end
-end
-
-function FFM.deviceof(storage::FFM.MtlStorage)
-    return (:metal, Metal.device(_metal_root(parent(storage))))
-end
-
-function FFM.deviceof(storage::Metal.MtlArray)
-    return (:metal, Metal.device(storage))
-end
-
-function FFM.deviceof(storage::SubArray)
-    try
-        return (:metal, Metal.device(_metal_root(storage)))
-    catch err
-        err isa MethodError || rethrow()
-        return invoke(FFM.deviceof, Tuple{AbstractArray}, storage)
-    end
-end
-
 function FFM.similar_storage(
     template::Metal.MtlArray{S,N,Mode},
     ::Type{T},
@@ -60,35 +31,71 @@ function FFM.similar_storage(
     end
 end
 
-function FFM.similar_storage(
-    template::SubArray{S,N,P},
-    ::Type{T},
-    dims::Dims{D},
-) where {S,N,P<:Metal.MtlArray,T,D}
-    return FFM.similar_storage(_metal_root(template), T, dims)
+function _metal_with_native_device(f::F, storage) where {F}
+    native = FFM._runtime_storage_root(storage)
+    return _with_metal_device(Metal.device(native)) do
+        f(storage)
+    end
 end
 
 function FFM.copy_storage!(dest::FFM.MtlStorage, src)
     source = src isa FFM.MtlStorage ? parent(src) : src
-    copyto!(parent(dest), source)
-    return dest
+    return _metal_with_native_device(parent(dest)) do native_dest
+        copyto!(native_dest, source)
+        dest
+    end
 end
 
 function FFM.fill_storage!(dest::FFM.MtlStorage, value)
-    fill!(parent(dest), value)
-    return dest
+    return _metal_with_native_device(parent(dest)) do native_dest
+        fill!(native_dest, value)
+        dest
+    end
 end
 
-function FFM.synchronize_backend!(storage::Union{FFM.MtlStorage,Metal.MtlArray,SubArray})
-    array = storage isa FFM.MtlStorage ? parent(storage) : storage
-    native = try
-        _metal_root(array)
-    catch err
-        err isa MethodError || rethrow()
-        return invoke(FFM.synchronize_backend!, Tuple{AbstractArray}, array)
+function FFM.rand_storage!(dest::FFM.MtlStorage, rng = nothing)
+    return _metal_with_native_device(parent(dest)) do native_dest
+        if rng === nothing
+            Random.rand!(Metal.default_rng(), native_dest)
+        elseif rng isa typeof(Metal.default_rng())
+            Random.rand!(rng, native_dest)
+        else
+            throw(
+                ArgumentError(
+                    "explicit Metal RNGs must be Metal.KernelRNG; got $(typeof(rng))",
+                ),
+            )
+        end
+        dest
     end
-    return _with_metal_device(Metal.device(native)) do
+end
+
+function FFM._host_scalar(value::Metal.MtlArray)
+    return _with_metal_device(Metal.device(value)) do
+        only(Array(value))
+    end
+end
+
+FFM._host_scalar(storage::FFM.MtlStorage) =
+    FFM._host_scalar(FFM._runtime_storage_root(storage))
+
+function FFM._synchronize_runtime_storage!(::Metal.MetalBackend, storage::Metal.MtlArray)
+    return _with_metal_device(Metal.device(storage)) do
         Metal.synchronize()
         nothing
+    end
+end
+
+function FFM._with_backend_streams(
+    f::F,
+    ::Metal.MetalBackend,
+    storage::Metal.MtlArray,
+    n::Int,
+) where {F}
+    n == 1 || throw(
+        ArgumentError("Metal supports only one command queue; batch_streams must equal 1"),
+    )
+    return _with_metal_device(Metal.device(storage)) do
+        f(nothing)
     end
 end

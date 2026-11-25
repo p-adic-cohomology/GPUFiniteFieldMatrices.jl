@@ -1,5 +1,9 @@
 _cuda_root(array::CuArray) = array
-_cuda_root(array::SubArray) = _cuda_root(parent(array))
+function _cuda_root(array::AbstractArray)
+    native = parent(array)
+    native === array && throw(MethodError(_cuda_root, (array,)))
+    return _cuda_root(native)
+end
 _cuda_memory_type(::CuArray{T,D,M}) where {T,D,M} = M
 
 function _cuda_storage(array::AbstractArray{T,D}) where {T,D}

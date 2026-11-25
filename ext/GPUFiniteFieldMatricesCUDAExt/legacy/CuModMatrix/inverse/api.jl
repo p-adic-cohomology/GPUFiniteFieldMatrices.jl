@@ -981,27 +981,21 @@ _empty_pluq_batch(::Type) = PLUQ[]
 
 function _pluq_batched_fallback!(mats::AbstractVector{<:CuModMatrix}, options::PLUQOptions)
     opts = _resolve_options(options, first(mats))
-    firstF = pluq!(mats[1], options = opts)
-    out = Vector{typeof(firstF)}(undef, length(mats))
-    out[1] = firstF
     nstreams = min(opts.batch_streams, length(mats))
-    if nstreams == 1
+    return FFM.with_backend_streams(parent(first(mats)), nstreams) do stream_context
+        firstF = FFM.with_backend_stream(stream_context, 1) do
+            pluq!(mats[1], options = opts)
+        end
+        out = Vector{typeof(firstF)}(undef, length(mats))
+        out[1] = firstF
         for i = 2:length(mats)
-            out[i] = pluq!(mats[i], options = opts)
+            stream_index = (i - 1) % nstreams + 1
+            out[i] = FFM.with_backend_stream(stream_context, stream_index) do
+                pluq!(mats[i], options = opts)
+            end
         end
-        return out
+        out
     end
-    streams = [CuStream() for _ = 1:nstreams]
-    for i = 2:length(mats)
-        s = streams[(i-1)%nstreams+1]
-        CUDA.stream!(s) do
-            out[i] = pluq!(mats[i], options = opts)
-        end
-    end
-    for s in streams
-        synchronize(s)
-    end
-    return out
 end
 
 function _pluq_batched_inplace_nonempty!(
@@ -1242,39 +1236,24 @@ function _inverse_batched_fallback(
     options::PLUQOptions,
     opts::PLUQOptions,
 )
-    out = Vector{CuModMatrix}(undef, length(mats))
     nstreams = min(opts.batch_streams, length(mats))
-    if nstreams == 1
+    return FFM.with_backend_streams(parent(first(mats)), nstreams) do stream_context
+        out = Vector{CuModMatrix}(undef, length(mats))
         for i in eachindex(mats)
             A = mats[i]
-            if rows(A) == cols(A)
-                out[i] = inv(A, options = options)
-            elseif rows(A) < cols(A)
-                out[i] = right_inverse(A, options = options)
-            else
-                out[i] = left_inverse(A, options = options)
+            stream_index = (i - 1) % nstreams + 1
+            out[i] = FFM.with_backend_stream(stream_context, stream_index) do
+                if rows(A) == cols(A)
+                    inv(A, options = options)
+                elseif rows(A) < cols(A)
+                    right_inverse(A, options = options)
+                else
+                    left_inverse(A, options = options)
+                end
             end
         end
-        return out
+        out
     end
-    streams = [CuStream() for _ = 1:nstreams]
-    for i in eachindex(mats)
-        A = mats[i]
-        s = streams[(i-1)%nstreams+1]
-        CUDA.stream!(s) do
-            if rows(A) == cols(A)
-                out[i] = inv(A, options = options)
-            elseif rows(A) < cols(A)
-                out[i] = right_inverse(A, options = options)
-            else
-                out[i] = left_inverse(A, options = options)
-            end
-        end
-    end
-    for s in streams
-        synchronize(s)
-    end
-    return out
 end
 
 """
