@@ -12,7 +12,7 @@ import GPUFiniteFieldMatrices: GPUModArray, CuModArray, CuModMatrix, CuModVector
 import GPUFiniteFieldMatrices: KaratsubaArray
 import GPUFiniteFieldMatrices: PLUQ, PLUQOptions, ModulusMismatchError
 import GPUFiniteFieldMatrices: modulus, low_modulus, high_modulus, low_part, high_part
-import GPUFiniteFieldMatrices: add!, sub!, rscalar_sub!, mod!
+import GPUFiniteFieldMatrices: add!, sub!, mod!
 import GPUFiniteFieldMatrices: similar_with_modulus, stripe_mul!, karatsuba_gemv!
 import GPUFiniteFieldMatrices: scalar_multiply!, negate!, divide_elements!, pluq, pluq!
 import GPUFiniteFieldMatrices: inverse_pluq, pluq_batched!, pluq_batched, inverse_batched
@@ -63,12 +63,6 @@ include("GPUFiniteFieldMatricesCUDAExt/karatsuba_methods.jl")
 # The v0.4.0 CUDA elementwise kernels remain under legacy/ for comparison.
 # Elementwise arithmetic, mutation and wrapper-copy methods now live in core
 # and dispatch through the shared KernelAbstractions implementation.
-include(
-    "GPUFiniteFieldMatricesCUDAExt/legacy/CuModMatrix/triangular/triangular_inverse_no_copy.jl",
-)
-include(
-    "GPUFiniteFieldMatricesCUDAExt/legacy/CuModMatrix/triangular/substitution_inplace.jl",
-)
 include("GPUFiniteFieldMatricesCUDAExt/legacy/CuModMatrix/inverse/basecase_pluq.jl")
 include("GPUFiniteFieldMatricesCUDAExt/legacy/CuModMatrix/inverse/rectangular_pluq.jl")
 include("GPUFiniteFieldMatricesCUDAExt/legacy/CuModMatrix/inverse/trsm.jl")

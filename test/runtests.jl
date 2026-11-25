@@ -117,6 +117,7 @@ end
 
 if GFM_TEST_METAL_FUNCTIONAL
     include("metal_products_test.jl")
+    include("metal_ordinary_inverse_test.jl")
 end
 
 if GFM_TEST_CUDA_LOADED

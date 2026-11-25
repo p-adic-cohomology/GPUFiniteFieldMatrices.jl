@@ -75,6 +75,10 @@ include("CuModMatrix/inverse/subgroups/trsm.jl")
 
 include("CuModMatrix/kernel_mul/stripe_mul.jl")
 include("CuModMatrix/kernel_mul/mat_mul_gpu_direct.jl")
+include("CuModMatrix/kernel_mul/mat_mul_ops.jl")
+include("CuModMatrix/inverse/schur_update.jl")
+include("CuModMatrix/triangular/substitution_inplace.jl")
+include("CuModMatrix/triangular/triangular_inverse_no_copy.jl")
 
 export GPUModArray, GPUModMatrix, GPUModVector, CuModArray, CuModMatrix, CuModVector
 export MtlModArray, MtlModMatrix, MtlModVector
