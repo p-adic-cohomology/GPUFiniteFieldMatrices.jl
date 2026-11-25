@@ -235,7 +235,7 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
     @test_throws ArgumentError cpu_karatsuba_int64_a * cpu_karatsuba_int64_b
     @test_throws ArgumentError cpu_karatsuba_float32_a * cpu_karatsuba_a
     @test_throws ArgumentError cpu_karatsuba_a * cpu_karatsuba_float32_a
-    @test which(Base.copy, Tuple{karatsuba_type}).module === CUDA_EXT
+    @test which(Base.copy, Tuple{karatsuba_type}).module === mod
     @test which(
         mod.karatsuba_gemv!,
         Tuple{karatsuba_type,karatsuba_type,karatsuba_type},

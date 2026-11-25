@@ -57,6 +57,7 @@ function _validate_backend_storage(::Val{:metal}, ::Type{T}, modulus::Integer) w
 end
 
 include("GPUFiniteFieldMatricesMetalExt/storage.jl")
+include("GPUFiniteFieldMatricesMetalExt/karatsuba_storage.jl")
 include("GPUFiniteFieldMatricesMetalExt/products.jl")
 
 end
