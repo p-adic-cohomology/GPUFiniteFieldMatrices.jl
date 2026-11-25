@@ -72,6 +72,9 @@ end
 # Device kernels must not contain DispatchDoctor host-side instrumentation.
 include("CuModMatrix/kernel_ops/elementwise.jl")
 
+include("CuModMatrix/kernel_mul/stripe_mul.jl")
+include("CuModMatrix/kernel_mul/mat_mul_gpu_direct.jl")
+
 export GPUModArray, GPUModMatrix, GPUModVector, CuModArray, CuModMatrix, CuModVector
 export MtlModArray, MtlModMatrix, MtlModVector
 export KaratsubaArray, KaratsubaMatrix, KaratsubaVector

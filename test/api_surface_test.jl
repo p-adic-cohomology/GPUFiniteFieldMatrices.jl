@@ -165,7 +165,7 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
     @test which(mod.similar_with_modulus, Tuple{matrix_type,Int}).module === CUDA_EXT
     @test which(Base.similar, Tuple{matrix_type,Int}).module === Base
     @test which(LinearAlgebra.mul!, Tuple{matrix_type,matrix_type,matrix_type}).module ===
-          CUDA_EXT
+          mod
     @test which(LinearAlgebra.mul!, Tuple{karatsuba_type,karatsuba_type,karatsuba_type}).module ===
           CUDA_EXT
     allocating_karatsuba_type =
@@ -391,8 +391,8 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
     @test !hasmethod(mod.stripe_mul!, Tuple{matrix_type,matrix_type,matrix_type,Int})
     @test !isdefined(mod, :mat_mul_gpu_type)
     @test !isdefined(mod, :mat_mul_type_inplace!)
-    @test which(mod.stripe_mul, Tuple{matrix_type,matrix_type}).module === CUDA_EXT
-    @test which(mod.stripe_mul, Tuple{matrix_type,vector_type}).module === CUDA_EXT
+    @test which(mod.stripe_mul, Tuple{matrix_type,matrix_type}).module === mod
+    @test which(mod.stripe_mul, Tuple{matrix_type,vector_type}).module === mod
     @test which(mod.stripe_mul!, Tuple{matrix_type,matrix_type,matrix_type}).module ===
           CUDA_EXT
     @test which(mod.stripe_mul!, Tuple{vector_type,matrix_type,vector_type}).module ===
@@ -427,39 +427,39 @@ const CUDA_EXT = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatri
     )
     @test stripe_safe_budget == 2
     @test stripe_safe_budget < mod.find_max_stripe_ops(Float32, stripe_input_bound)
-    @test CUDA_EXT._stripe_safe_chunk(
+    @test mod._stripe_safe_chunk(
         Float32,
         stripe_reduction_modulus,
         stripe_input_bound,
         nothing,
     ) == stripe_safe_budget
-    @test CUDA_EXT._stripe_safe_chunk(
+    @test mod._stripe_safe_chunk(
         Float32,
         stripe_reduction_modulus,
         stripe_input_bound,
         1,
     ) == 1
-    @test_throws ArgumentError CUDA_EXT._stripe_safe_chunk(
+    @test_throws ArgumentError mod._stripe_safe_chunk(
         Float32,
         stripe_reduction_modulus,
         stripe_input_bound,
         stripe_safe_budget + 1,
     )
-    @test_throws ArgumentError CUDA_EXT._stripe_safe_chunk(
+    @test_throws ArgumentError mod._stripe_safe_chunk(
         Float32,
         stripe_reduction_modulus,
         stripe_input_bound,
         big(2)^100,
     )
     stripe_default_modulus = 101
-    @test CUDA_EXT._stripe_safe_chunk(Float32, stripe_default_modulus, nothing, nothing) ==
+    @test mod._stripe_safe_chunk(Float32, stripe_default_modulus, nothing, nothing) ==
           mod.find_max_stripe_ops(Float32, stripe_default_modulus)
     @test BigInt(stripe_reduction_modulus - 1) +
           BigInt(stripe_safe_budget) * BigInt(stripe_input_bound - 1)^2 <= BigInt(2)^24 - 1
 
-    @test CUDA_EXT._stripe_effective_modulus(101, nothing) == 101
-    @test CUDA_EXT._stripe_effective_modulus(101, 7) == 7
-    @test_throws ArgumentError CUDA_EXT._stripe_effective_modulus(101, 0)
+    @test mod._stripe_effective_modulus(101, nothing) == 101
+    @test mod._stripe_effective_modulus(101, 7) == 7
+    @test_throws ArgumentError mod._stripe_effective_modulus(101, 0)
 
     @testset "Karatsuba GEMM host bounds and radix audit" begin
         same_radix = mod._karatsuba_matmul_product_plan(13, 7, 13, 5, 13, 11)
