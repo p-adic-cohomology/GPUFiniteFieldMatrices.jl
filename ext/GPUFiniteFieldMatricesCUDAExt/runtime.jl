@@ -15,10 +15,11 @@ function FFM.allocate_storage(
     device = nothing,
 ) where {T}
     storage === :default || throw(ArgumentError("unsupported CUDA storage mode $storage"))
-    if device === nothing || KernelInterface.device(backend) == device
+    requested_device = _cuda_device_index(device)
+    if requested_device === nothing || KernelInterface.device(backend) == requested_device
         return CUDA.CuArray{T}(undef, dims)
     end
-    return CUDA.device!(Int(device) - 1) do
+    return _with_cuda_device(device) do
         CUDA.CuArray{T}(undef, dims)
     end
 end

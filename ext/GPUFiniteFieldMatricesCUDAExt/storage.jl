@@ -15,12 +15,38 @@ function _cuda_storage_mode(storage)
     return nothing
 end
 
+_cuda_device_index(::Nothing) = nothing
+
+function _cuda_device_index(device::Integer)
+    device isa Bool &&
+        throw(ArgumentError("CUDA device indices must be one-based integers, got Bool"))
+    1 <= device <= typemax(Int) || throw(
+        ArgumentError("CUDA device indices must be positive and fit in Int, got $device"),
+    )
+    return Int(device)
+end
+
+function _cuda_device_index(device::CUDA.CuDevice)
+    ordinal = CUDA.deviceid(device)
+    0 <= ordinal < typemax(Int) || throw(
+        ArgumentError("CUDA device handles must refer to a GPU, got device id $ordinal"),
+    )
+    return ordinal + 1
+end
+
+function _cuda_device_index(device)
+    throw(
+        ArgumentError(
+            "CUDA device must be a one-based integer or CUDA.CuDevice, got $(typeof(device))",
+        ),
+    )
+end
+
 function _with_cuda_device(f::Function, device)
-    device === nothing && return f()
-    device isa Integer && return CUDA.device!(Int(device) - 1) do
-        f()
-    end
-    return CUDA.device!(device) do
+    index = _cuda_device_index(device)
+    index === nothing && return f()
+    target = device isa CUDA.CuDevice ? device : CUDA.CuDevice(index - 1)
+    return CUDA.device!(target) do
         f()
     end
 end
@@ -93,10 +119,12 @@ function (::Type{CuModArray{T,D}})(
     storage = :default,
     device = nothing,
 ) where {T,D,M}
+    requested_device = _cuda_device_index(device)
     _, dims, N = _cuda_factory_preflight(T, size(array), modulus, new_size)
     _cuda_storage_mode(storage)
-    device === nothing ||
-        Int(device) == KernelInterface.device(KernelInterface.get_backend(array), array) ||
+    requested_device === nothing ||
+        requested_device ==
+        KernelInterface.device(KernelInterface.get_backend(array), array) ||
         throw(
             ArgumentError(
                 "raw CUDA storage belongs to a different device than the requested device",
@@ -113,10 +141,12 @@ function (::Type{CuModArray{T,D}})(
     storage = :default,
     device = nothing,
 ) where {T,D,P<:CUDA.CuArray}
+    requested_device = _cuda_device_index(device)
     _, dims, N = _cuda_factory_preflight(T, size(array), modulus, new_size)
     _cuda_storage_mode(storage)
-    device === nothing ||
-        Int(device) == KernelInterface.device(KernelInterface.get_backend(array), array) ||
+    requested_device === nothing ||
+        requested_device ==
+        KernelInterface.device(KernelInterface.get_backend(array), array) ||
         throw(
             ArgumentError(
                 "raw CUDA storage belongs to a different device than the requested device",
@@ -133,6 +163,7 @@ function (::Type{CuModArray{T,D}})(
     storage = :default,
     device = nothing,
 ) where {T,D,S}
+    requested_device = _cuda_device_index(device)
     source_backend = FFM._storage_backend(values)
     if source_backend !== nothing
         source_backend === Val(:cuda) || throw(
@@ -147,8 +178,8 @@ function (::Type{CuModArray{T,D}})(
         )
         _, logical_size, N = _cuda_factory_preflight(T, size(values), modulus, new_size)
         _cuda_storage_mode(storage)
-        device === nothing ||
-            Int(device) ==
+        requested_device === nothing ||
+            requested_device ==
             KernelInterface.device(KernelInterface.get_backend(values), values) ||
             throw(
                 ArgumentError(
@@ -162,11 +193,12 @@ function (::Type{CuModArray{T,D}})(
     padded = FFM._padded_size(dims)
     converted = FFM._modular_host_values(T, values, N, mod)
     data = _with_cuda_device(device) do
-        CUDA.zeros(T, padded...)
-    end
-    if !isempty(values)
-        inds = CartesianIndices(values)
-        copyto!(data, inds, converted, inds)
+        data = CUDA.zeros(T, padded...)
+        if !isempty(values)
+            inds = CartesianIndices(values)
+            copyto!(data, inds, converted, inds)
+        end
+        data
     end
     return _construct_cuda_storage(T, data, logical_size, N)
 end
