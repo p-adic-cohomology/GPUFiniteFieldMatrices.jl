@@ -95,6 +95,7 @@ const GFM_TEST_CAPABILITIES = BackendTestSupport.capability_fixture(;
 )
 
 include("core_api_surface_test.jl")
+include("CuModMatrix/stripe_plan_test.jl")
 include("core_karatsuba_host_test.jl")
 include("backend_test_driver_test.jl")
 @testset "Only requested optional vendor is imported" begin

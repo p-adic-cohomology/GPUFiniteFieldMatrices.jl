@@ -57,119 +57,6 @@ end
     return cublas_scalars_f16()
 end
 
-function _stripe_is_cuda_storage(data::CuArray)
-    return true
-end
-
-function _stripe_is_cuda_storage(data::SubArray)
-    return _stripe_is_cuda_storage(parent(data))
-end
-
-_stripe_is_cuda_storage(data) = false
-
-_stripe_storage_root(data::CuArray) = data
-_stripe_storage_root(data::SubArray) = _stripe_storage_root(parent(data))
-_stripe_mightalias(A, B) = _stripe_storage_root(A) === _stripe_storage_root(B)
-
-function _stripe_validate_raw(Cdata, Adata, Bdata, modulus, input_bound, max_ops)
-    _stripe_is_cuda_storage(Cdata) &&
-    _stripe_is_cuda_storage(Adata) &&
-    _stripe_is_cuda_storage(Bdata) ||
-        throw(ArgumentError("stripe multiplication requires CUDA arrays or CUDA views"))
-
-    T = eltype(Cdata)
-    T === eltype(Adata) === eltype(Bdata) ||
-        throw(ArgumentError("matrix product element types do not match"))
-    T in (Float16, Float32, Float64) || throw(
-        ArgumentError("element type $T is unsupported for exact stripe multiplication"),
-    )
-    modulus isa Integer && modulus > 0 ||
-        throw(ArgumentError("modulus must be a positive integer"))
-    input_bound === nothing ||
-        (input_bound isa Integer && input_bound > 1) ||
-        throw(ArgumentError("input_bound must be an integer greater than one"))
-    max_ops === nothing ||
-        (max_ops isa Integer && max_ops > 0) ||
-        throw(ArgumentError("max_ops must be a positive integer"))
-    if T === Float32 && CUDA.math_mode() == CUDA.FAST_MATH
-        throw(
-            ArgumentError("exact modular GEMM requires CUDA DEFAULT_MATH or PEDANTIC_MATH"),
-        )
-    end
-    return T
-end
-
-function _stripe_safe_chunk(
-    ::Type{T},
-    modulus,
-    input_bound,
-    max_ops;
-    empty_inner::Bool = false,
-) where {T}
-    bound = input_bound === nothing ? modulus : input_bound
-    safe_ops = find_max_stripe_ops(T, bound; modulus = modulus)
-    if empty_inner && max_ops === nothing
-        return max(safe_ops, 1)
-    end
-    safe_ops >= 1 || throw(
-        ArgumentError(
-            "cannot perform one exact product contribution for input bound $bound and modulus $modulus with $T",
-        ),
-    )
-    chunk = if max_ops === nothing
-        safe_ops
-    else
-        BigInt(max_ops) <= safe_ops || throw(
-            ArgumentError(
-                "max_ops=$max_ops exceeds the exact stripe budget $safe_ops for input bound $bound and modulus $modulus",
-            ),
-        )
-        Int(max_ops)
-    end
-    return chunk
-end
-
-function _stripe_require_same_device(output_device, left_device, right_device)
-    output_device == left_device == right_device ||
-        throw(ArgumentError("empty stripe product arrays must use the same CUDA device"))
-    return nothing
-end
-
-function _stripe_preflight(Cdata, Adata, Bdata, modulus, input_bound, max_ops)
-    T = _stripe_validate_raw(Cdata, Adata, Bdata, modulus, input_bound, max_ops)
-    _stripe_mightalias(Cdata, Adata) && throw(
-        ArgumentError(
-            "matrix product destination must not share storage with its left input",
-        ),
-    )
-    _stripe_mightalias(Cdata, Bdata) && throw(
-        ArgumentError(
-            "matrix product destination must not share storage with its right input",
-        ),
-    )
-    empty_inner = size(Adata, 2) == 0
-    chunk = _stripe_safe_chunk(T, modulus, input_bound, max_ops; empty_inner = empty_inner)
-    if empty_inner
-        _stripe_require_same_device(
-            CUDA.device(_stripe_storage_root(Cdata)),
-            CUDA.device(_stripe_storage_root(Adata)),
-            CUDA.device(_stripe_storage_root(Bdata)),
-        )
-    end
-    return chunk
-end
-
-@inline function _stripe_reduce!(Cdata::CuArray, modulus)
-    mod!(Cdata, Cdata, modulus)
-    return Cdata
-end
-
-@inline function _stripe_reduce!(Cdata::SubArray, modulus)
-    modulus_value = convert(eltype(Cdata), modulus)
-    @. Cdata = mod(Cdata, modulus_value)
-    return Cdata
-end
-
 function _stripe_gemv_scalars(::Type{Float64})
     return cublas_scalars_f64()
 end
@@ -223,124 +110,98 @@ end
     return zdata
 end
 
-function _stripe_run!(Cdata, Adata, Bdata, modulus, chunk, scalars)
+# Legacy CUDA inverse and Karatsuba callers use these algorithm helpers.
+const _stripe_storage_root = _cuda_root
+const _stripe_logical_data = FFM._stripe_logical_data
+const _stripe_mightalias = FFM._stripe_mightalias
+const _stripe_safe_chunk = FFM._stripe_safe_chunk
+
+_cuda_stripe_layout(::AbstractArray) = false
+
+function _cuda_stripe_layout(A::CUDA.StridedCuMatrix)
+    return (stride(A, 1) == 1 || size(A, 1) == 1) && stride(A, 2) >= size(A, 1)
+end
+
+function _cuda_stripe_layout(x::CUDA.StridedCuVector{T}) where {T}
+    # cuBLAS uses GEMM for Float16 vectors and GEMV for Float32/64 vectors.
+    return T === Float16 ? stride(x, 1) == 1 : stride(x, 1) > 0
+end
+
+function _check_cuda_stripe_layout(Cdata, Adata, Bdata)
+    if eltype(Cdata) === Float32 && CUDA.math_mode() == CUDA.FAST_MATH
+        throw(
+            ArgumentError("exact modular GEMM requires CUDA DEFAULT_MATH or PEDANTIC_MATH"),
+        )
+    end
+    (isempty(Cdata) || size(Adata, 2) == 0) && return nothing
+    _cuda_stripe_layout(Cdata) &&
+    _cuda_stripe_layout(Adata) &&
+    _cuda_stripe_layout(Bdata) ||
+        throw(ArgumentError("matrix product requires cuBLAS-compatible CUDA strides"))
+    return nothing
+end
+
+function _stripe_preflight(Cdata, Adata, Bdata, modulus, input_bound, max_ops)
+    size(Cdata) == FFM._stripe_output_size(Adata, Bdata) ||
+        throw(DimensionMismatch("destination dimensions do not match the matrix product"))
+    T = FFM._stripe_check_eltypes(Cdata, Adata, Bdata)
+    roots = map(FFM._elementwise_native_root, (Cdata, Adata, Bdata))
+    all(root -> root isa CuArray, roots) ||
+        throw(ArgumentError("stripe multiplication requires CUDA arrays or CUDA views"))
+    FFM._stripe_check_alias(Cdata, Adata, Bdata)
+    FFM._stripe_check_devices(roots...)
+    chunk = _stripe_safe_chunk(
+        T,
+        modulus,
+        input_bound,
+        max_ops;
+        empty_inner = size(Adata, 2) == 0,
+    )
+    _check_cuda_stripe_layout(Cdata, Adata, Bdata)
+    return chunk
+end
+
+function _legacy_cuda_stripe_run!(Cdata, Adata, Bdata, modulus, chunk)
+    isempty(Cdata) && return Cdata
     k = size(Adata, 2)
-    if k == 0
-        fill!(Cdata, zero(eltype(Cdata)))
-        return Cdata
-    end
+    k == 0 && return fill!(Cdata, zero(eltype(Cdata)))
 
-    if scalars === nothing
-        scalars = _stripe_gemm_scalars(eltype(Cdata))
-    end
-
-    first_stripe = true
-    for lo = 1:chunk:k
-        hi = min(lo + chunk - 1, k)
-        _stripe_accumulate_stripe!(Cdata, Adata, Bdata, lo:hi, first_stripe, scalars)
-        _stripe_reduce!(Cdata, modulus)
-        first_stripe = false
+    T = eltype(Cdata)
+    scalars = Cdata isa AbstractVector ? _stripe_gemv_scalars(T) : _stripe_gemm_scalars(T)
+    for stripe in FFM._stripe_ranges(k, chunk)
+        _stripe_accumulate_stripe!(Cdata, Adata, Bdata, stripe, first(stripe) == 1, scalars)
+        FFM._stripe_reduce!(Cdata, modulus)
     end
     return Cdata
 end
 
-"""
-    _stripe_mul!(Cdata, Adata, Bdata; modulus, input_bound=nothing, max_ops=nothing)
-
-Destination-writing raw GPU core shared by matrix-matrix and matrix-vector
-multiplication. Each stripe is accumulated directly into the destination; after
-the first stripe, the prior destination is reduced before the next GEMM/GEMV.
-The exactness budget accounts for that value using
-`(modulus - 1) + max_ops * (input_bound - 1)^2`.
-"""
+# The legacy inverse and Karatsuba consumers retain their task-local device
+# scalars and only write the native destination view.
 function _stripe_mul!(
-    Cdata::AbstractMatrix,
+    Cdata::Union{AbstractMatrix,AbstractVector},
     Adata::AbstractMatrix,
-    Bdata::AbstractMatrix;
+    Bdata::Union{AbstractMatrix,AbstractVector};
     modulus,
     input_bound = nothing,
     max_ops = nothing,
 )
-    size(Adata, 2) == size(Bdata, 1) ||
-        throw(DimensionMismatch("matrix product dimensions do not match"))
-    size(Cdata) == (size(Adata, 1), size(Bdata, 2)) ||
-        throw(DimensionMismatch("destination dimensions do not match the matrix product"))
     chunk = _stripe_preflight(Cdata, Adata, Bdata, modulus, input_bound, max_ops)
-    return _stripe_run!(Cdata, Adata, Bdata, modulus, chunk, nothing)
-end
-
-"""Matrix-vector form of the shared destination-writing stripe core."""
-function _stripe_mul!(
-    zdata::AbstractVector,
-    Adata::AbstractMatrix,
-    xdata::AbstractVector;
-    modulus,
-    input_bound = nothing,
-    max_ops = nothing,
-)
-    size(Adata, 2) == length(xdata) ||
-        throw(DimensionMismatch("matrix-vector product dimensions do not match"))
-    length(zdata) == size(Adata, 1) || throw(
-        DimensionMismatch("destination length does not match the matrix-vector product"),
-    )
-    T = eltype(zdata)
-    chunk = _stripe_preflight(zdata, Adata, xdata, modulus, input_bound, max_ops)
-    return _stripe_run!(zdata, Adata, xdata, modulus, chunk, _stripe_gemv_scalars(T))
-end
-
-# The logical matrix view has two concrete GPU representations; scope that
-# allowance to this overload so the vector helper stays under the default.
-@stable default_mode = "disable" default_union_limit = 2 begin
-    function _stripe_logical_data(A::CuModMatrix)
-        m, n = size(A)
-        size(parent(A), 1) >= m && size(parent(A), 2) >= n || throw(
-            DimensionMismatch("matrix storage is smaller than its logical dimensions"),
-        )
-        return @view parent(A)[1:m, 1:n]
+    return _with_cuda_device(CUDA.device(_cuda_root(Cdata))) do
+        _legacy_cuda_stripe_run!(Cdata, Adata, Bdata, modulus, chunk)
     end
 end
 
-function _stripe_logical_data(x::CuModVector)
-    n = length(x)
-    length(parent(x)) >= n ||
-        throw(DimensionMismatch("vector storage is smaller than its logical length"))
-    return @view parent(x)[1:n]
+function _cuda_stripe_product!(C, A, B; modulus_override, input_bound, max_ops)
+    Cdata, Adata, Bdata, effective_modulus, chunk =
+        FFM._stripe_product_args(C, A, B; modulus_override, input_bound, max_ops)
+    _check_cuda_stripe_layout(Cdata, Adata, Bdata)
+    _with_cuda_device(CUDA.device(_cuda_root(Cdata))) do
+        fill!(parent(C), zero(eltype(C)))
+        FFM._stripe_run!(Cdata, Adata, Bdata, effective_modulus, chunk)
+    end
+    return C
 end
 
-function _validate_positive_modulus_override(modulus_override)
-    modulus_override === nothing ||
-        (modulus_override isa Integer && modulus_override > 0) ||
-        throw(ArgumentError("modulus_override must be a positive integer"))
-    return modulus_override
-end
-
-function _stripe_effective_modulus(stored_modulus, modulus_override)
-    _validate_positive_modulus_override(modulus_override)
-    modulus = modulus_override === nothing ? stored_modulus : modulus_override
-    modulus isa Integer && modulus > 0 ||
-        throw(ArgumentError("modulus must be a positive integer"))
-    return Int(modulus)
-end
-
-"""
-    stripe_mul!(C, A, B; modulus_override=nothing, input_bound=nothing, max_ops=nothing)
-
-Multiply matrices into `C` modulo the effective modulus. The destination's
-stored modulus is unchanged. When `modulus_override` is omitted, `modulus(C)` is used
-for reduction. A supplied `modulus_override` must be positive.
-`input_bound` promises that input entries are nonnegative and strictly below
-the given bound. `max_ops` limits product contributions per output entry
-between reductions. When omitted, `max_ops` is derived from the effective input
-bound and reduction modulus. A supplied safe `max_ops` is used as given, while
-an unsafe value throws `ArgumentError`. An explicit `input_bound` may therefore
-require multiple stripes when the inner dimension exceeds the safe budget.
-
-An empty inner dimension produces a zero result after the usual argument,
-shape, storage, alias, and same-device checks. With the default max_ops, this
-also works when the derived exact-product budget is zero because no products are
-taken. An explicitly supplied max_ops must still fit the budget, including
-for an empty product; input bounds and moduli must remain valid.
-"""
 function stripe_mul!(
     C::CuModMatrix,
     A::CuModMatrix,
@@ -349,44 +210,9 @@ function stripe_mul!(
     input_bound = nothing,
     max_ops = nothing,
 )
-    effective_modulus = _stripe_effective_modulus(modulus(C), modulus_override)
-    modulus(A) == modulus(B) ||
-        throw(ModulusMismatchError("Input matrices must have the same modulus N"))
-    size(A, 2) == size(B, 1) ||
-        throw(DimensionMismatch("Matrix dimensions do not match for multiplication"))
-    size(C) == (size(A, 1), size(B, 2)) ||
-        throw(DimensionMismatch("Output matrix C has incorrect dimensions"))
-    eltype(parent(A)) === eltype(parent(B)) === eltype(parent(C)) ||
-        throw(ArgumentError("matrix product element types do not match"))
-    max_ops === nothing ||
-        (max_ops isa Integer && max_ops > 0) ||
-        throw(ArgumentError("max_ops must be a positive integer"))
-
-    bound = input_bound === nothing ? modulus(A) : input_bound
-    Cdata = _stripe_logical_data(C)
-    Adata = _stripe_logical_data(A)
-    Bdata = _stripe_logical_data(B)
-    _stripe_preflight(Cdata, Adata, Bdata, effective_modulus, bound, max_ops)
-
-    fill!(parent(C), zero(eltype(parent(C))))
-    _stripe_mul!(
-        Cdata,
-        Adata,
-        Bdata;
-        modulus = effective_modulus,
-        input_bound = bound,
-        max_ops,
-    )
-    return C
+    return _cuda_stripe_product!(C, A, B; modulus_override, input_bound, max_ops)
 end
 
-"""
-Multiply a matrix and vector into `z`, preserving its stored modulus. A supplied
-`modulus_override` must be positive. `respect_max_ops=false` recomputes the safe
-stripe budget from `input_bound`. An empty inner dimension produces zeros after
-validation, even when the default derived budget is zero. Explicit `max_ops`
-values are still checked against that budget when `respect_max_ops=true`.
-"""
 function stripe_mul!(
     z::CuModVector,
     A::CuModMatrix,
@@ -396,80 +222,12 @@ function stripe_mul!(
     max_ops = nothing,
     respect_max_ops::Bool = true,
 )
-    effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
-    modulus(A) == modulus(x) ||
-        throw(ModulusMismatchError("Matrix and vector inputs must have the same modulus N"))
-    modulus_override === nothing &&
-        modulus(z) != modulus(A) &&
-        throw(
-            ModulusMismatchError(
-                "Destination must have the input modulus when no override is supplied",
-            ),
-        )
-    size(A, 2) == length(x) ||
-        throw(DimensionMismatch("Matrix and vector dimensions do not match"))
-    length(z) == size(A, 1) ||
-        throw(DimensionMismatch("Output vector has incorrect length"))
-    eltype(parent(A)) === eltype(parent(x)) === eltype(parent(z)) ||
-        throw(ArgumentError("matrix-vector product element types do not match"))
-
-    bound = input_bound === nothing ? modulus(A) : input_bound
-    zdata = _stripe_logical_data(z)
-    Adata = _stripe_logical_data(A)
-    xdata = _stripe_logical_data(x)
-    effective_max_ops = respect_max_ops ? max_ops : nothing
-    _stripe_preflight(zdata, Adata, xdata, effective_modulus, bound, effective_max_ops)
-    fill!(parent(z), zero(eltype(parent(z))))
-    _stripe_mul!(
-        zdata,
-        Adata,
-        xdata;
-        modulus = effective_modulus,
-        input_bound = bound,
-        max_ops = effective_max_ops,
+    return _cuda_stripe_product!(
+        z,
+        A,
+        x;
+        modulus_override,
+        input_bound,
+        max_ops = respect_max_ops ? max_ops : nothing,
     )
-    return z
-end
-
-"""
-    stripe_mul(A, B; modulus_override=nothing, input_bound=nothing, max_ops=nothing)
-
-Allocate a matrix or vector result and multiply using the shared stripe core.
-The returned object's stored modulus is the effective reduction modulus.
-"""
-function stripe_mul(
-    A::CuModMatrix,
-    B::CuModMatrix;
-    modulus_override = nothing,
-    input_bound = nothing,
-    max_ops = nothing,
-)
-    effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
-    modulus(A) == modulus(B) ||
-        throw(ModulusMismatchError("Input matrices must have the same modulus N"))
-    size(A, 2) == size(B, 1) ||
-        throw(DimensionMismatch("Matrix dimensions do not match for multiplication"))
-    C = zeros(
-        CuModMatrix{eltype(parent(A))},
-        size(A, 1),
-        size(B, 2);
-        modulus = effective_modulus,
-    )
-    return stripe_mul!(C, A, B; modulus_override = effective_modulus, input_bound, max_ops)
-end
-
-function stripe_mul(
-    A::CuModMatrix,
-    x::CuModVector;
-    modulus_override = nothing,
-    input_bound = nothing,
-    max_ops = nothing,
-)
-    effective_modulus = _stripe_effective_modulus(modulus(A), modulus_override)
-    modulus(A) == modulus(x) ||
-        throw(ModulusMismatchError("Matrix and vector inputs must have the same modulus N"))
-    size(A, 2) == length(x) ||
-        throw(DimensionMismatch("Matrix and vector dimensions do not match"))
-    z = zeros(CuModVector{eltype(parent(A))}, size(A, 1); modulus = effective_modulus)
-    return stripe_mul!(z, A, x; modulus_override = effective_modulus, input_bound, max_ops)
 end
