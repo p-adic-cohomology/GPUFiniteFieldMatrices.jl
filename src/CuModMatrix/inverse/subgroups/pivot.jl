@@ -91,6 +91,12 @@ function _pluq_pivot_subgroup_width(backend, mode::Symbol)
     return KernelInterface.supports_shuffle(backend, Int32) ? width : 0
 end
 
+function _pluq_launch_full_subgroup!(kernel, width, arguments)
+    width <= KernelInterface.max_work_group_size(kernel) || return false
+    kernel(arguments...; numgroups = 1, workgroupsize = width)
+    return true
+end
+
 """
     _pluq_subgroup_pivot!(slot, A, k, lastrow, lastcol, modulus, mode; row_index=false)
 
@@ -148,45 +154,58 @@ function _pluq_subgroup_pivot!(
         throw(ArgumentError("PLUQ pivot input and slot must be on the same active device"))
 
     width = _pluq_pivot_subgroup_width(backend, mode)
-    limit = iszero(width) ? _PLUQ_PIVOT_FALLBACK_THREADS : width
-    threads = min(
-        limit,
-        max(1, total),
+    max_threads = min(
         KernelInterface.max_work_group_size(backend),
         KernelInterface.max_work_group_dims(backend)[1],
     )
     modulus_i = Int64(modulus_value)
-    # Each KI launch specializes on its concrete kernel function.
-    if iszero(width)
-        KernelInterface.@launch backend numgroups=1 workgroupsize=threads _pluq_pivot_workgroup_kernel!(
-            slot,
-            A,
-            start,
-            nrows,
-            total,
-            modulus_i,
-            offset,
-        )
-    elseif mode === :ballot
-        KernelInterface.@launch backend numgroups=1 workgroupsize=threads _pluq_pivot_ballot_kernel!(
-            slot,
-            A,
-            start,
-            nrows,
-            total,
-            modulus_i,
-            offset,
-        )
-    else
-        KernelInterface.@launch backend numgroups=1 workgroupsize=threads _pluq_pivot_shuffle_kernel!(
-            slot,
-            A,
-            start,
-            nrows,
-            total,
-            modulus_i,
-            offset,
-        )
+    arguments = (slot, A, start, nrows, total, modulus_i, offset)
+
+    # Use a whole subgroup even for an empty or ragged panel. The device
+    # predicates and sentinels give padded lanes values for every collective.
+    if 0 < width <= max_threads
+        if mode === :ballot
+            ballot =
+                KernelInterface.@launch backend launch=false _pluq_pivot_ballot_kernel!(
+                    slot,
+                    A,
+                    start,
+                    nrows,
+                    total,
+                    modulus_i,
+                    offset,
+                )
+            _pluq_launch_full_subgroup!(ballot, width, arguments) && return slot
+        else
+            shuffle =
+                KernelInterface.@launch backend launch=false _pluq_pivot_shuffle_kernel!(
+                    slot,
+                    A,
+                    start,
+                    nrows,
+                    total,
+                    modulus_i,
+                    offset,
+                )
+            _pluq_launch_full_subgroup!(shuffle, width, arguments) && return slot
+        end
     end
+
+    workgroup = KernelInterface.@launch backend launch=false _pluq_pivot_workgroup_kernel!(
+        slot,
+        A,
+        start,
+        nrows,
+        total,
+        modulus_i,
+        offset,
+    )
+    threads = min(
+        _PLUQ_PIVOT_FALLBACK_THREADS,
+        max(1, total),
+        max_threads,
+        KernelInterface.max_work_group_size(workgroup),
+    )
+    workgroup(arguments...; numgroups = 1, workgroupsize = threads)
     return slot
 end

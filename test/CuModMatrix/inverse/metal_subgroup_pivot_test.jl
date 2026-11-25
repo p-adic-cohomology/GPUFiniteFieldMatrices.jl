@@ -105,13 +105,37 @@ end
     @test FFM._pluq_pivot_subgroup_width(backend, :ballot) == width
     @test FFM._pluq_pivot_subgroup_width(backend, :shfl) == width
 
+    # Require both native kernels to support the full width so the cases
+    # below exercise the requested paths on this device.
+    probe = metal_array(Metal.PrivateStorage, zeros(Float32, 1, 1))
+    probe_slot = metal_array(Metal.PrivateStorage, Int32[-19])
+    ballot = KernelInterface.@launch backend launch=false FFM._pluq_pivot_ballot_kernel!(
+        probe_slot,
+        probe,
+        1,
+        1,
+        1,
+        Int64(17),
+        0,
+    )
+    shuffle = KernelInterface.@launch backend launch=false FFM._pluq_pivot_shuffle_kernel!(
+        probe_slot,
+        probe,
+        1,
+        1,
+        1,
+        Int64(17),
+        0,
+    )
+    @test width <= KernelInterface.max_work_group_size(ballot)
+    @test width <= KernelInterface.max_work_group_size(shuffle)
+
     for S in (Metal.SharedStorage, Metal.PrivateStorage),
         mode in (:ballot, :shfl, :workgroup)
 
         @testset "$S / $mode" begin
-            @testset "No pivot, singleton and empty panels" begin
+            @testset "No pivot and empty panels" begin
                 check_pivot(S, mode, fill(-17.0f0, width + 1, 3), 1, width + 1, 3, 17)
-                check_pivot(S, mode, reshape(Float32[-1], 1, 1), 1, 1, 1, 17)
                 check_pivot(S, mode, zeros(Float32, 0, 3), 1, 0, 3, 17)
                 check_pivot(S, mode, ones(Float32, 4, 4), 5, 4, 4, 17)
             end
@@ -119,14 +143,14 @@ end
                 A = reshape(Float16[-2034, 2034, -2033, 0, 113], 5, 1)
                 check_pivot(S, mode, A, 1, 5, 1, 113)
             end
-            @testset "Last lane and ragged work" begin
-                for nrows in (width, max(1, width - 3), 2 * width + 3)
+            @testset "Last candidate around the subgroup boundary" begin
+                # A single nonzero at the end exercises inactive padded lanes,
+                # the last hardware lane, and the first lane of the next chunk.
+                for nrows in unique((1, width - 1, width, width + 1, 2 * width + 3))
                     A = zeros(Float32, nrows, 1)
                     A[end, 1] = 7
                     check_pivot(S, mode, A, 1, nrows, 1, 17)
                 end
-                # Last physical lane of the full group and the last lane
-                # of a partial group both receive candidates above.
             end
             @testset "Column-major ties with logical bounds" begin
                 A = zeros(Float32, width + 2, 9)
