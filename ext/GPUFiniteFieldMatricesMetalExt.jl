@@ -1,7 +1,6 @@
 module GPUFiniteFieldMatricesMetalExt
 
 import Metal
-import Random
 import LinearAlgebra
 import LinearAlgebra: I, UniformScaling
 import KernelInterface

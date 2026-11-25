@@ -41,7 +41,6 @@ import GPUFiniteFieldMatrices: _karatsuba_component, _karatsuba_host_array
 import GPUFiniteFieldMatrices: _karatsuba_zero_component
 import KernelAbstractions
 import KernelInterface
-import Random
 
 const FFM = GPUFiniteFieldMatrices
 const TILE_WIDTH = FFM.TILE_WIDTH

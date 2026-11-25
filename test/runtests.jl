@@ -242,6 +242,8 @@ end
 
     # The ignored names are non-public bindings required by supported APIs:
     #   CHOLMOD                          – SparseArrays.CHOLMOD.Dense in a copyto! signature
+    #   AbstractSparseMatrixCSC          – host sparse source dispatch for copyto!
+    #   mightalias                       – raw-array overlap preflight via Base.mightalias
     #   gemm!, gemv!, gemv_batched!      – CUDA cuBLAS low-level BLAS entry points
     #   @atomic, FAST_MATH, fill, math_mode, pin, rand, zeros
     #                                    – CUDA 5.11.3 owns these names in CUDA
@@ -258,6 +260,8 @@ end
         ignore = (
             private_extension_bindings...,
             :CHOLMOD,
+            :AbstractSparseMatrixCSC,
+            :mightalias,
             :gemm!,
             :gemv!,
             :gemv_batched!,
