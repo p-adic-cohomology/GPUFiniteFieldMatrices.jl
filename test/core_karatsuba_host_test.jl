@@ -685,3 +685,49 @@ end
         modulus = 11,
     )
 end
+
+@testset "Core Karatsuba negation digits" begin
+    G = GPUFiniteFieldMatrices
+
+    function check_negation(::Type{T}, low, high, R, H) where {T}
+        radix, bound = UInt64(R), UInt64(H)
+        digits = @inferred G._karatsuba_digits(T(low), T(high), radix, bound)
+        actual = @inferred G._karatsuba_negate_digits(digits, radix, bound)
+        expected = mod(-(BigInt(low) + BigInt(R) * high), BigInt(R) * H)
+        @test BigInt(actual[1]) == mod(expected, R)
+        @test BigInt(actual[2]) == div(expected, R)
+    end
+
+    for (T, exact_bits) in ((Float32, 24), (Float64, 53))
+        for high = 0:9, low = 0:9
+            check_negation(T, low, high, 10, 10)
+        end
+        R = 1 << exact_bits
+        H = R - 3
+        for (low, high) in ((0, 0), (1, 0), (0, 1), (R - 1, H - 1), (-1, 0), (-R, H))
+            check_negation(T, low, high, R, H)
+        end
+    end
+end
+
+@testset "Host Karatsuba copy and plan ownership" begin
+    G = GPUFiniteFieldMatrices
+    values = Int128[1, -4, 2^20, Int128(1)<<85]
+    A = @inferred G.to_karatsuba(values; low_modulus = 7, high_modulus = 17, modulus = 19)
+    @test G.initialize_plan!(A) === A
+    fill!(A.plan, Int128(31))
+    B = @inferred copy(A)
+    @test typeof(B) === typeof(A)
+    @test Base.Array(B) == values
+    @test G.low_part(B) !== G.low_part(A)
+    @test G.high_part(B) !== G.high_part(A)
+    @test B.plan !== A.plan
+    @test all(iszero, B.plan)
+    @test all(==(31), A.plan)
+    C = @inferred zeros(typeof(A), 4; low_modulus = 7, high_modulus = 17, modulus = 19)
+    @test copy!(C, A) === C
+    @test Base.Array(C) == values
+    @test all(iszero, C.plan)
+    @test_throws DimensionMismatch copy!(C, G.to_karatsuba(Int128[2]; modulus = 19))
+    @test Base.Array(C) == values
+end

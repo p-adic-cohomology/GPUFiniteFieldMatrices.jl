@@ -33,30 +33,9 @@ mutable struct KaratsubaArray{T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}} <
             throw(ArgumentError("Karatsuba components require a concrete storage type"))
         isconcretetype(plan_type) ||
             throw(ArgumentError("Karatsuba plans require a concrete storage type"))
-        if size(A) != size(B)
-            throw(DimensionMismatch("Dimensions of matrices must match"))
-        end
-        #=
-        if !(all(x->x<N,A) && all(x->x<N,B))
-            throw(ArgumentError("Cannot have entries larger than modulus in matrices"))
-        end
-        =#
-        N1, N2, M = _karatsuba_parameters(
-            A;
-            parameter_type = T,
-            low_modulus = low_modulus,
-            high_modulus = high_modulus,
-            modulus = modulus,
-        )
-        (N1 > 0 && N2 > 0 && M > 0) ||
-            throw(ArgumentError("Karatsuba moduli must be positive"))
-        if T <: AbstractFloat
-            arithmetic_limit = BigInt(1) << (get_bits(T) - 2)
-            BigInt(M) < arithmetic_limit ||
-                throw(ArgumentError("Modulus too large for $T Karatsuba arithmetic"))
-        elseif M >= BigInt(2)^get_bits(T)
-            throw(ArgumentError("Modulus too large"))
-        end
+        size(A) == size(B) || throw(DimensionMismatch("Dimensions of matrices must match"))
+        N1, N2, M = _karatsuba_parameters(size(A), T; low_modulus, high_modulus, modulus)
+        _karatsuba_validate_component_type(T, _storage_backend(A))
 
         return new{T,D,component_type,plan_type}(A, B, nothing, N1, N2, M)
     end
@@ -79,24 +58,8 @@ end
 _karatsuba_plan_type(::Type{Array{T,D}}) where {T,D} = Array{T,D}
 _karatsuba_plan_type(::Type{S}) where {T,D,S<:AbstractArray{T,D}} = S
 
-_backend_default_component_type(::Val{B}, ::Type{T}, ::Val{D}) where {B,T,D} =
+_backend_default_component_type(::Val{B}, ::Type, ::Val, storage) where {B} =
     throw(ArgumentError("the $B backend extension is required for this component type"))
-_backend_default_plan_type(::Val{B}, ::Type{T}, ::Val{D}) where {B,T,D} =
-    throw(ArgumentError("the $B backend extension is required for this plan type"))
-
-@inline function _karatsuba_resolve_component_type(
-    ::Type{CuModArray{T,D}},
-    ::Type{A},
-    ::Type{T},
-    ::Val{D},
-) where {T,D,A}
-    isconcretetype(A) && A <: CuModArray{T,D} || throw(
-        ArgumentError(
-            "partial CuModArray component requests need concrete CuModArray inputs",
-        ),
-    )
-    return A
-end
 
 @inline function _karatsuba_resolve_component_type(
     ::Type{S},
@@ -104,24 +67,48 @@ end
     ::Type{T},
     ::Val{D},
 ) where {S,A,T,D}
-    isconcretetype(S) ||
-        throw(ArgumentError("Karatsuba components require a concrete storage type"))
-    S === A ||
+    (S === A || (!isconcretetype(S) && S <: GPUModArray{T,D} && A <: S)) ||
         throw(ArgumentError("Karatsuba component input does not match requested type $S"))
-    return S
+    return A
 end
 
-@inline function _karatsuba_resolve_requested_component_type(
+function _karatsuba_resolve_requested_component_type(
     ::Type{S},
     ::Type{T},
     ::Val{D},
+    storage,
 ) where {S,T,D}
-    if S === CuModArray{T,D}
-        return _backend_default_component_type(Val(:cuda), T, Val(D))
-    end
     isconcretetype(S) ||
         throw(ArgumentError("Karatsuba components require a concrete storage type"))
     return S
+end
+
+_karatsuba_resolve_requested_component_type(
+    ::Type{CuModArray{T,D}},
+    ::Type{T},
+    ::Val{D},
+    storage,
+) where {T,D} = _backend_default_component_type(Val(:cuda), T, Val(D), storage)
+
+_karatsuba_resolve_requested_component_type(
+    ::Type{MtlModArray{T,D}},
+    ::Type{T},
+    ::Val{D},
+    storage,
+) where {T,D} = _backend_default_component_type(Val(:metal), T, Val(D), storage)
+
+_karatsuba_resolve_requested_component_type(
+    ::Type{GPUModArray{T,D}},
+    ::Type{T},
+    ::Val{D},
+    storage,
+) where {T,D} = _backend_default_component_type(Val(default_backend()), T, Val(D), storage)
+
+function _karatsuba_validate_component_type(::Type{T}, backend) where {T}
+    backend === Val(:metal) &&
+        T !== Float32 &&
+        throw(ArgumentError("Metal Karatsuba components require Float32, got $T"))
+    return nothing
 end
 
 @inline function _karatsuba_resolve_plan_type(::Type{P}, ::Type{S}, ::Val{D}) where {P,S,D}
@@ -165,18 +152,20 @@ function KaratsubaArray(A::AbstractArray{T,D}, B::AbstractArray{T,D}; kwargs...)
 end
 
 function _karatsuba_parameters(
-    A::AbstractArray;
-    parameter_type::Type = eltype(A),
+    dims::Dims,
+    ::Type{T};
     low_modulus::Union{Nothing,Integer} = nothing,
     high_modulus::Union{Nothing,Integer} = nothing,
     modulus::Union{Nothing,Integer} = nothing,
-)
-    inferred =
-        modulus === nothing ? find_max_ops_karatsuba(parameter_type, max(size(A)...)) :
-        modulus
-    N1 = low_modulus === nothing ? inferred : low_modulus
-    N2 = high_modulus === nothing ? inferred : high_modulus
-    return (Int(N1), Int(N2), Int(inferred))
+) where {T}
+    M = modulus === nothing ? find_max_ops_karatsuba(T, max(1, dims...)) : Int(modulus)
+    N1 = low_modulus === nothing ? M : Int(low_modulus)
+    N2 = high_modulus === nothing ? M : Int(high_modulus)
+    (N1 > 0 && N2 > 0 && M > 0) || throw(ArgumentError("Karatsuba moduli must be positive"))
+    max_modulus = (BigInt(1) << get_bits(T)) - !(T <: AbstractFloat)
+    M <= max_modulus ||
+        throw(ArgumentError("Modulus too large for $T Karatsuba arithmetic"))
+    return N1, N2, M
 end
 
 function _wrap_karatsuba(
@@ -185,8 +174,7 @@ function _wrap_karatsuba(
     B::AbstractArray{T,D};
     kwargs...,
 ) where {T,D}
-    N1, N2, M = _karatsuba_parameters(A; kwargs...)
-    return KaratsubaArray{T,D}(A, B; low_modulus = N1, high_modulus = N2, modulus = M)
+    return KaratsubaArray{T,D}(A, B; kwargs...)
 end
 
 function KaratsubaMatrix(A::AbstractMatrix{T}, B::AbstractMatrix{T}; kwargs...) where {T}
@@ -481,15 +469,6 @@ function Base.setindex!(K::KaratsubaArray, value, i::Int)
     return value
 end
 
-function Base.copy!(dest::KaratsubaArray, src::KaratsubaArray)
-    copy!(low_part(dest), low_part(src))
-    copy!(high_part(dest), high_part(src))
-    if src.plan !== nothing && dest.plan === nothing
-        initialize_plan!(dest)
-    end
-    return dest
-end
-
 function zero!(A::AbstractArray)
     fill!(A, zero(eltype(A)))
     return A
@@ -528,20 +507,12 @@ function _karatsuba_exact_convert(::Type{T}, value::BigInt) where {T}
     return converted
 end
 
-_karatsuba_host_array(A::AbstractArray) = Array(A)
-_karatsuba_component(
-    ::Type{T},
-    values::AbstractArray,
-    source,
-    component_modulus,
-) where {T} = values
-
 function _karatsuba_reconstruct_host(
     ::Type{T},
     K::KaratsubaArray{S,D,Storage,Plan},
 ) where {T,S,D,Storage<:AbstractArray{S,D},Plan<:AbstractArray{S,D}}
-    low = _karatsuba_host_array(low_part(K))
-    high = _karatsuba_host_array(high_part(K))
+    low = Array(low_part(K))
+    high = Array(high_part(K))
     result = Array{T,D}(undef, size(low))
     for i in eachindex(result, low, high)
         value =
@@ -557,7 +528,8 @@ function from_karatsuba(
     ::Type{T},
     K::KaratsubaArray{S,D,Storage,Plan},
 ) where {T,S,D,Storage<:AbstractArray{S,D},Plan<:AbstractArray{S,D}}
-    return _karatsuba_reconstruct_host(T, K)
+    _storage_backend(low_part(K)) === nothing && return _karatsuba_reconstruct_host(T, K)
+    return _karatsuba_reconstruct_device(T, K)
 end
 
 function _split_karatsuba(
@@ -567,15 +539,13 @@ function _split_karatsuba(
     high_modulus = nothing,
     modulus = nothing,
 ) where {T}
-    N1, N2, M = _karatsuba_parameters(
-        A;
-        low_modulus = low_modulus,
-        high_modulus = high_modulus,
-        modulus = modulus,
-        parameter_type = T,
-    )
-    (N1 > 0 && N2 > 0 && M > 0) || throw(ArgumentError("Karatsuba moduli must be positive"))
-    input = _karatsuba_host_array(A)
+    N1, N2, M = _karatsuba_parameters(size(A), T; low_modulus, high_modulus, modulus)
+    backend = _storage_backend(A)
+    if backend !== nothing
+        _karatsuba_validate_component_type(T, backend)
+        return _karatsuba_split_device(T, A, N1, N2, M)
+    end
+    input = Array(A)
     low = Array{T}(undef, size(input))
     high = Array{T}(undef, size(input))
     for i in eachindex(input, low, high)
@@ -583,15 +553,7 @@ function _split_karatsuba(
         low[i] = _karatsuba_exact_convert(T, low_value)
         high[i] = _karatsuba_exact_convert(T, high_value)
     end
-    component1 = _karatsuba_component(T, low, A, N1)
-    component2 = _karatsuba_component(T, high, A, N2)
-    return KaratsubaArray{T,ndims(A)}(
-        component1,
-        component2;
-        low_modulus = N1,
-        high_modulus = N2,
-        modulus = M,
-    )
+    return KaratsubaArray(low, high; low_modulus = N1, high_modulus = N2, modulus = M)
 end
 
 to_karatsuba(A::AbstractArray; kwargs...) = _split_karatsuba(eltype(A), A; kwargs...)
@@ -602,8 +564,44 @@ KaratsubaMatrix(::Type{T}, A::AbstractMatrix; kwargs...) where {T} =
 KaratsubaVector(::Type{T}, A::AbstractVector; kwargs...) where {T} =
     _split_karatsuba(T, A; kwargs...)
 
-function _karatsuba_zero_component(::Type{Array{T,D}}, dims::Dims{D}, ::Int) where {T,D}
+function _karatsuba_zero_component(
+    ::Type{S},
+    dims::Dims,
+    component_modulus::Int;
+    storage,
+    device,
+) where {S}
+    throw(
+        ArgumentError("Karatsuba zero factories do not support component storage type $S"),
+    )
+end
+
+function _karatsuba_zero_component(
+    ::Type{Array{T,D}},
+    dims::Dims{D},
+    ::Int;
+    storage,
+    device,
+) where {T,D}
+    storage === :default && device === nothing ||
+        throw(ArgumentError("CPU Karatsuba factories do not take a storage mode or device"))
     return zeros(T, dims)
+end
+
+function _karatsuba_zero_moduli(
+    dims::Dims,
+    ::Type{T};
+    low_modulus = nothing,
+    high_modulus = nothing,
+    modulus = nothing,
+) where {T}
+    explicit = low_modulus !== nothing && high_modulus !== nothing && modulus !== nothing
+    shorthand = low_modulus === nothing && high_modulus === nothing && modulus !== nothing
+    (explicit || shorthand) || throw(
+        ArgumentError("Karatsuba zeros require either modulus or all three split moduli"),
+    )
+    all(>=(0), dims) || throw(ArgumentError("Karatsuba dimensions must be nonnegative"))
+    return _karatsuba_parameters(dims, T; low_modulus, high_modulus, modulus)
 end
 
 function _karatsuba_zeros(
@@ -611,103 +609,78 @@ function _karatsuba_zeros(
     ::Type{S},
     ::Type{P},
     dims::Dims{D};
-    low_modulus = nothing,
-    high_modulus = nothing,
-    modulus = nothing,
+    storage = :default,
+    device = nothing,
+    kwargs...,
 ) where {T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}}
-    explicit = low_modulus !== nothing && high_modulus !== nothing && modulus !== nothing
-    shorthand = low_modulus === nothing && high_modulus === nothing && modulus !== nothing
-    (explicit || shorthand) || throw(
-        ArgumentError("Karatsuba zeros require either modulus or all three split moduli"),
-    )
-    component_type = _karatsuba_resolve_requested_component_type(S, T, Val(D))
+    N1, N2, M = _karatsuba_zero_moduli(dims, T; kwargs...)
+    component_type = _karatsuba_resolve_requested_component_type(S, T, Val(D), storage)
     plan_type = _karatsuba_resolve_plan_type(P, component_type, Val(D))
-    isconcretetype(component_type) ||
-        throw(ArgumentError("Karatsuba zero factories require a concrete component type"))
-    isconcretetype(plan_type) ||
-        throw(ArgumentError("Karatsuba zero factories require a concrete plan type"))
-    expected_plan_type = _karatsuba_plan_type(component_type)
-    plan_type === expected_plan_type || throw(
-        ArgumentError(
-            "Requested plan storage type $plan_type does not match the plan type $expected_plan_type for component storage $component_type",
-        ),
-    )
-    N1, N2, M = _karatsuba_parameters(
-        zeros(T, dims);
-        low_modulus = low_modulus,
-        high_modulus = high_modulus,
-        modulus = modulus,
-    )
-    first = _karatsuba_zero_component(component_type, dims, N1)
-    second = _karatsuba_zero_component(component_type, dims, N2)
-    typeof(first) === component_type || throw(
-        ArgumentError(
-            "Storage factory returned $(typeof(first)) for requested component type $component_type",
-        ),
-    )
-    typeof(second) === component_type || throw(
-        ArgumentError(
-            "Storage factory returned $(typeof(second)) for requested component type $component_type",
-        ),
-    )
+    if component_type <: GPUModArray
+        _validate_storage_modulus(T, N1)
+        _validate_storage_modulus(T, N2)
+    end
+    low =
+        _karatsuba_zero_component(component_type, dims, N1; storage, device)::component_type
+    high =
+        _karatsuba_zero_component(component_type, dims, N2; storage, device)::component_type
     return KaratsubaArray{T,D,component_type,plan_type}(
-        first,
-        second;
+        low,
+        high;
         low_modulus = N1,
         high_modulus = N2,
         modulus = M,
     )
 end
 
-function _karatsuba_zeros(
-    ::Type{T},
-    ::Type{S},
-    dims::Dims{D};
+function Base.zeros(
+    ::Type{KaratsubaArray{T,D}},
+    dims::Vararg{Integer,D};
+    backend = nothing,
+    storage = :default,
+    device = nothing,
     kwargs...,
-) where {T,D,S<:AbstractArray{T,D}}
-    component_type = _karatsuba_resolve_requested_component_type(S, T, Val(D))
+) where {T,D}
+    selected = Val(_requested_backend(backend))
+    _karatsuba_validate_component_type(T, selected)
+    S = _backend_default_component_type(selected, T, Val(D), storage)
     return _karatsuba_zeros(
         T,
-        component_type,
-        _karatsuba_plan_type(component_type),
-        dims;
+        S,
+        _karatsuba_plan_type(S),
+        Int.(dims);
+        storage,
+        device,
         kwargs...,
     )
 end
 
-Base.zeros(
-    ::Type{KaratsubaArray{T,2,S}},
-    rows::Integer,
-    cols::Integer;
+function Base.zeros(
+    ::Type{KaratsubaArray{T,D,S}},
+    dims::Vararg{Integer,D};
     kwargs...,
-) where {T,S<:AbstractArray{T,2}} =
-    _karatsuba_zeros(T, S, (Int(rows), Int(cols)); kwargs...)
-Base.zeros(
-    ::Type{KaratsubaArray{T,1,S}},
-    length::Integer;
-    kwargs...,
-) where {T,S<:AbstractArray{T,1}} = _karatsuba_zeros(T, S, (Int(length),); kwargs...)
-Base.zeros(
-    ::Type{KaratsubaArray{T,2,S,P}},
-    rows::Integer,
-    cols::Integer;
-    kwargs...,
-) where {T,S<:AbstractArray{T,2},P<:AbstractArray{T,2}} =
-    _karatsuba_zeros(T, S, P, (Int(rows), Int(cols)); kwargs...)
-Base.zeros(
-    ::Type{KaratsubaArray{T,1,S,P}},
-    length::Integer;
-    kwargs...,
-) where {T,S<:AbstractArray{T,1},P<:AbstractArray{T,1}} =
-    _karatsuba_zeros(T, S, P, (Int(length),); kwargs...)
+) where {T,D,S<:AbstractArray{T,D}}
+    return _karatsuba_zeros(T, S, AbstractArray{T,D}, Int.(dims); kwargs...)
+end
 
-function initialize_plan!(
-    K::KaratsubaArray{T,D,S,P},
-) where {T,D,S<:Array{T,D},P<:Array{T,D}}
-    expected = _karatsuba_plan_type(S)
-    P === expected || throw(
-        ArgumentError("initialize_plan! requires plan storage type $expected, got $P"),
-    )
-    K.plan = zeros(T, size(low_part(K)))
+function Base.zeros(
+    ::Type{KaratsubaArray{T,D,S,P}},
+    dims::Vararg{Integer,D};
+    kwargs...,
+) where {T,D,S<:AbstractArray{T,D},P<:AbstractArray{T,D}}
+    return _karatsuba_zeros(T, S, P, Int.(dims); kwargs...)
+end
+
+function _new_karatsuba_plan(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
+    low = low_part(K)
+    return if _storage_backend(low) === nothing
+        zeros(T, size(low))::P
+    else
+        _karatsuba_device_plan(low, low_modulus(K))::P
+    end
+end
+
+function initialize_plan!(K::KaratsubaArray)
+    K.plan = _new_karatsuba_plan(K)
     return K
 end

@@ -1,26 +1,59 @@
-function _default_cumod_storage_type(::Type{T}, ::Val{D}) where {T,D}
-    compiler_return_type = getfield(getfield(Core, :Compiler), :return_type)
-    native_type = compiler_return_type(CUDA.zeros, Tuple{Type{T},Vararg{Int,D}})
-    isconcretetype(native_type) && native_type <: CUDA.CuArray{T,D} || throw(
-        ArgumentError("CUDA.zeros does not infer a concrete CuArray{$T,$D} storage type"),
-    )
-    memory_type = native_type.parameters[3]
-    isconcretetype(memory_type) || throw(
-        ArgumentError("CUDA.zeros does not infer a concrete CuArray memory type for $T,$D"),
-    )
-    storage_type = FFM.CuStorage{T,D,memory_type,native_type}
-    return GPUModArray{T,D,storage_type}
+function _karatsuba_cuda_wrapper(::Type{T}, ::Val{D}, ::Type{M}) where {T,D,M}
+    return GPUModArray{T,D,FFM.CuStorage{T,D,M,CuArray{T,D,M}}}
 end
 
-_backend_default_component_type(::Val{:cuda}, ::Type{T}, ::Val{D}) where {T,D} =
-    _default_cumod_storage_type(T, Val(D))
-_backend_default_plan_type(::Val{:cuda}, ::Type{T}, ::Val{D}) where {T,D} =
-    _default_cumod_storage_type(T, Val(D))
+function _default_cumod_storage_type(::Type{T}, ::Val{D}) where {T,D}
+    return _karatsuba_cuda_wrapper(T, Val(D), CUDA.CUDACore.default_memory)
+end
 
-_karatsuba_plan_type(::Type{S}) where {T,D,S<:CuModArray{T,D}} =
-    _default_cumod_storage_type(T, Val(D))
-_karatsuba_plan_type(::Type{S}) where {T,D,S<:CUDA.CuArray{T,D}} =
-    _default_cumod_storage_type(T, Val(D))
+function _backend_default_component_type(
+    ::Val{:cuda},
+    ::Type{T},
+    ::Val{D},
+    storage,
+) where {T,D}
+    _cuda_storage_mode(storage)
+    return _default_cumod_storage_type(T, Val(D))
+end
+
+_karatsuba_plan_type(::Type{<:CuModArray{T,D,M}}) where {T,D,M} =
+    _karatsuba_cuda_wrapper(T, Val(D), M)
+_karatsuba_plan_type(::Type{CuArray{T,D,M}}) where {T,D,M} =
+    _karatsuba_cuda_wrapper(T, Val(D), M)
+
+function _karatsuba_zero_component(
+    ::Type{S},
+    dims::Dims{D},
+    component_modulus::Int;
+    storage,
+    device,
+) where {T,D,M,S<:CuModArray{T,D,M}}
+    _cuda_storage_mode(storage)
+    _validate_backend_storage(Val(:cuda), T, component_modulus)
+    S === _karatsuba_cuda_wrapper(T, Val(D), M) || throw(
+        ArgumentError("Karatsuba zero factories require dense CUDA component storage"),
+    )
+    CUDA.functional() || throw(ArgumentError("the selected CUDA backend is not functional"))
+    native = _with_cuda_device(device) do
+        result = CuArray{T,D,M}(undef, _padded_size(dims))
+        fill!(result, zero(T))
+    end
+    return _construct_cuda_storage(T, native, dims, component_modulus)
+end
+
+function _karatsuba_zero_component(
+    ::Type{CuArray{T,D,M}},
+    dims::Dims{D},
+    ::Int;
+    storage,
+    device,
+) where {T,D,M}
+    _cuda_storage_mode(storage)
+    CUDA.functional() || throw(ArgumentError("the selected CUDA backend is not functional"))
+    return _with_cuda_device(device) do
+        fill!(CuArray{T,D,M}(undef, dims), zero(T))
+    end
+end
 
 @inline function _karatsuba_require_matched_float_type(
     ::Type{TA},
@@ -626,374 +659,10 @@ function LinearAlgebra.mul!(C::KaratsubaArray, A::KaratsubaArray, B::KaratsubaAr
     throw(ArgumentError("Karatsuba mul! supports matrix-matrix and matrix-vector products"))
 end
 
-_karatsuba_gpu_storage(A::CuModArray) = parent(A)
-_karatsuba_gpu_storage(A::CUDA.CuArray) = A
-_karatsuba_gpu_strides(A::CuModArray) = strides(parent(A))
-_karatsuba_gpu_strides(A::CUDA.CuArray) = strides(A)
-@stable default_mode = "disable" default_union_limit = 2 begin
-    _karatsuba_logical_view(A::CuModArray) = _logical_view(parent(A), size(A))
-end
-_karatsuba_logical_view(A::CUDA.CuArray) = A
+import Base: *
 
-function _karatsuba_gpu_float_precision(::Type{Float16})
-    11
-end
-function _karatsuba_gpu_float_precision(::Type{Float32})
-    24
-end
-function _karatsuba_gpu_float_precision(::Type{Float64})
-    53
-end
-
-function _karatsuba_gpu_component(::Type{T}, x::S) where {T<:Integer,S<:Integer}
-    fits = if T <: Signed
-        if S <: Signed
-            sizeof(S) <= sizeof(T) || (x >= typemin(T) && x <= typemax(T))
-        else
-            sizeof(S) < sizeof(T) || x <= typemax(T)
-        end
-    elseif S <: Signed
-        x >= 0 && (sizeof(S) < sizeof(T) || x <= typemax(T))
-    else
-        sizeof(S) <= sizeof(T) || x <= typemax(T)
-    end
-    return fits ? (convert(T, x), true) : (zero(T), false)
-end
-
-function _karatsuba_gpu_component(::Type{T}, x::S) where {T<:AbstractFloat,S<:Integer}
-    converted = T(x)
-    isfinite(converted) || return zero(T), false
-    lower = S <: Signed ? T(typemin(S)) : zero(T)
-    upper = T(typemax(S))
-    upper_ok =
-        _karatsuba_gpu_float_precision(T) >= 8 * sizeof(S) ? converted <= upper :
-        converted < upper
-    (converted >= lower && upper_ok) || return zero(T), false
-    return converted, S(converted) == x
-end
-
-function _karatsuba_gpu_component(::Type{T}, x::S) where {T<:Integer,S<:AbstractFloat}
-    (isfinite(x) && isinteger(x)) || return zero(T), false
-    lower = T <: Signed ? S(typemin(T)) : zero(S)
-    upper = S(typemax(T))
-    upper_ok = _karatsuba_gpu_float_precision(S) >= 8 * sizeof(T) ? x <= upper : x < upper
-    (x >= lower && upper_ok) || return zero(T), false
-    return convert(T, x), true
-end
-
-function _karatsuba_gpu_component(::Type{T}, x::S) where {T<:AbstractFloat,S<:AbstractFloat}
-    (isfinite(x) && isinteger(x)) || return zero(T), false
-    converted = T(x)
-    (isfinite(converted) && S(converted) == x) || return zero(T), false
-    return converted, true
-end
-
-function _karatsuba_gpu_reconstruct(
-    ::Type{T},
-    low::T,
-    high::T,
-    radix::Int,
-) where {T<:Signed}
-    radix > 0 || return zero(T), false
-    if high > 0 && (high > typemax(T) ÷ radix)
-        return zero(T), false
-    elseif high < 0 && (high < typemin(T) ÷ radix)
-        return zero(T), false
-    end
-    product = high * radix
-    if product > 0 && low > typemax(T) - product
-        return zero(T), false
-    elseif product < 0 && low < typemin(T) - product
-        return zero(T), false
-    end
-    return convert(T, low + product), true
-end
-
-function _karatsuba_gpu_reconstruct(
-    ::Type{T},
-    low::T,
-    high::T,
-    radix::Int,
-) where {T<:Unsigned}
-    radix > 0 || return zero(T), false
-    if high != 0
-        radix <= typemax(T) || return zero(T), false
-        high <= typemax(T) ÷ radix || return zero(T), false
-    end
-    product = high == 0 ? zero(T) : high * T(radix)
-    low <= typemax(T) - product || return zero(T), false
-    return low + product, true
-end
-
-function _karatsuba_gpu_reconstruct(
-    ::Type{T},
-    low::T,
-    high::T,
-    radix::Int,
-) where {T<:AbstractFloat}
-    radix > 0 || return zero(T), false
-    radix_value = T(radix)
-    isfinite(radix_value) && isinteger(radix_value) || return zero(T), false
-    product = radix_value * high
-    isfinite(product) || return zero(T), false
-    product_error = fma(radix_value, high, -product)
-    result = product + low
-    isfinite(result) && isinteger(result) || return zero(T), false
-    sum_virtual = result - product
-    sum_error = (product - (result - sum_virtual)) + (low - sum_virtual)
-    return result, product_error == -sum_error
-end
-
-function _karatsuba_gpu_linear_index(
-    k::Int,
-    dims::Dims{D},
-    source_strides::Dims{D},
-) where {D}
-    remaining = k - 1
-    offset = 1
-    @inbounds for d = 1:D
-        coordinate = rem(remaining, dims[d])
-        remaining = div(remaining, dims[d])
-        offset += coordinate * source_strides[d]
-    end
-    return offset
-end
-
-function _karatsuba_reconstruct_gpu_kernel!(
-    result,
-    valid,
-    low,
-    high,
-    dims,
-    low_strides,
-    high_strides,
-    radix,
-)
-    k = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    if k <= length(result)
-        low_index = _karatsuba_gpu_linear_index(k, dims, low_strides)
-        high_index = _karatsuba_gpu_linear_index(k, dims, high_strides)
-        low_value, low_ok = _karatsuba_gpu_component(eltype(result), low[low_index])
-        high_value, high_ok = _karatsuba_gpu_component(eltype(result), high[high_index])
-        value, reconstruction_ok =
-            _karatsuba_gpu_reconstruct(eltype(result), low_value, high_value, radix)
-        valid[k] = low_ok && high_ok && reconstruction_ok
-        result[k] = valid[k] ? value : zero(eltype(result))
-    end
-    return
-end
-
-function _karatsuba_reconstruct_gpu(
-    ::Type{T},
-    K::KaratsubaArray{S,D,Storage,Plan},
-) where {T,S,D,Storage<:AbstractArray{S,D},Plan<:AbstractArray{S,D}}
-    supported(T) = isbitstype(T) && T <: Union{Integer,AbstractFloat} && sizeof(T) <= 8
-    supported(S) || throw(
-        ArgumentError(
-            "from_karatsuba GPU components support isbits integer or floating types up to 64 bits",
-        ),
-    )
-    supported(T) || throw(
-        ArgumentError(
-            "from_karatsuba GPU output supports isbits integer or floating types up to 64 bits",
-        ),
-    )
-    low_modulus(K) > 0 ||
-        throw(ArgumentError("from_karatsuba requires a positive low_modulus on GPU"))
-    radix = try
-        Int(low_modulus(K))
-    catch
-        throw(
-            ArgumentError(
-                "from_karatsuba GPU reconstruction requires low_modulus to fit in Int",
-            ),
-        )
-    end
-    if T <: AbstractFloat
-        exact_radix = try
-            BigInt(T(radix)) == BigInt(radix)
-        catch
-            false
-        end
-        exact_radix || throw(
-            ArgumentError(
-                "from_karatsuba GPU reconstruction requires low_modulus to be exactly representable in the requested floating type",
-            ),
-        )
-    end
-
-    result = CUDA.CuArray{T,D}(undef, size(K))
-    isempty(result) && return result
-    valid = CUDA.CuArray{Bool}(undef, length(result))
-    low = _karatsuba_gpu_storage(low_part(K))
-    high = _karatsuba_gpu_storage(high_part(K))
-    threads = 256
-    blocks = cld(length(result), threads)
-    @cuda threads=threads blocks=blocks _karatsuba_reconstruct_gpu_kernel!(
-        result,
-        valid,
-        low,
-        high,
-        size(K),
-        _karatsuba_gpu_strides(low_part(K)),
-        _karatsuba_gpu_strides(high_part(K)),
-        radix,
-    )
-    all(valid) || throw(
-        InexactError(
-            :from_karatsuba,
-            T,
-            "GPU components or reconstructed values are not exactly representable",
-        ),
-    )
-    return result
-end
-
-function from_karatsuba(
-    ::Type{T},
-    K::KaratsubaArray{S,D,Storage,Plan},
-) where {T,S,D,Storage<:CuModArray{S,D},Plan<:AbstractArray{S,D}}
-    return _karatsuba_reconstruct_gpu(T, K)::CUDA.CuArray{T,D}
-end
-
-function from_karatsuba(
-    ::Type{T},
-    K::KaratsubaArray{S,D,Storage,Plan},
-) where {T,S,D,Storage<:CUDA.CuArray{S,D},Plan<:AbstractArray{S,D}}
-    return _karatsuba_reconstruct_gpu(T, K)::CUDA.CuArray{T,D}
-end
-
-function _karatsuba_host_array(A::CuModArray)
-    Array(A)
-end
-
-function _karatsuba_component(
-    ::Type{T},
-    values::AbstractArray,
-    source::CuModArray,
-    component_modulus,
-) where {T}
-    return CuModArray{T,ndims(values)}(
-        values;
-        modulus = Int(component_modulus),
-        mod = false,
-    )
-end
-
-function _karatsuba_component(
-    ::Type{T},
-    values::AbstractArray,
-    source::CUDA.CuArray,
-    component_modulus,
-) where {T}
-    return CUDA.CuArray(values)
-end
-
-function _karatsuba_zero_component(
-    ::Type{S},
-    dims::Dims{D},
-    component_modulus::Int,
-) where {T,D,S<:CuModArray{T,D}}
-    return zeros(CuModArray{T,D}, dims...; modulus = component_modulus)
-end
-
-function _karatsuba_zero_component(
-    ::Type{S},
-    dims::Dims{D},
-    ::Int,
-) where {T,D,S<:CuArray{T,D}}
-    isconcretetype(S) || throw(
-        ArgumentError("CuArray zero factories require a concrete component storage type"),
-    )
-    component = CUDA.zeros(T, dims...)
-    typeof(component) === S || throw(
-        ArgumentError(
-            "CUDA.zeros returned $(typeof(component)) for requested component type $S",
-        ),
-    )
-    return component
-end
-
-function _karatsuba_zero_component(
-    ::Type{S},
-    ::Dims{D},
-    ::Int,
-) where {T,D,S<:AbstractArray{T,D}}
-    throw(
-        ArgumentError("Karatsuba zero factories do not support component storage type $S"),
-    )
-end
-function Base.zeros(
-    ::Type{KaratsubaArray{T,2}},
-    rows::Integer,
-    cols::Integer;
-    kwargs...,
-) where {T}
-    return _karatsuba_zeros(T, CuModArray{T,2}, (Int(rows), Int(cols)); kwargs...)
-end
-
-function Base.zeros(::Type{KaratsubaArray{T,1}}, length::Integer; kwargs...) where {T}
-    return _karatsuba_zeros(T, CuModArray{T,1}, (Int(length),); kwargs...)
-end
-function initialize_plan!(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
-    expected_plan_type = _karatsuba_plan_type(S)
-    P === expected_plan_type || throw(
-        ArgumentError(
-            "initialize_plan! requires plan storage type $expected_plan_type, got $P",
-        ),
-    )
-    K.plan = zeros(CuModArray{T,D}, size(low_part(K))...; modulus = Int(low_modulus(K)))
-    return K
-end
-
-import Base: +, -, *
-
-function _karatsuba_zero_component(source, dims::Dims, component_modulus)
-    T = eltype(source)
-    D = length(dims)
-    if source isa CuModArray
-        return zeros(CuModArray{T,D}, dims...; modulus = Int(component_modulus))
-    elseif source isa CuArray
-        return CUDA.zeros(T, dims...)
-    end
-    return Base.zeros(T, dims)
-end
-
-function _karatsuba_output_like(
-    source::KaratsubaArray{T,D,S,P},
-    dims::Dims{DOut},
-) where {T,D,S,P,DOut}
-    data1 = _karatsuba_zero_component(low_part(source), dims, low_modulus(source))
-    data2 = _karatsuba_zero_component(high_part(source), dims, high_modulus(source))
-    return KaratsubaArray(
-        data1,
-        data2;
-        low_modulus = low_modulus(source),
-        high_modulus = high_modulus(source),
-        modulus = modulus(source),
-    )
-end
-
-function +(A::KaratsubaArray, B::KaratsubaArray)
-    K = _karatsuba_output_like(A, size(low_part(A)))
-    add!(K, A, B)
-    K
-end
-
-function -(A::KaratsubaArray, B::KaratsubaArray)
-    K = _karatsuba_output_like(A, size(low_part(A)))
-    sub!(K, A, B)
-end
-
-function *(a::Number, A::KaratsubaArray)
-    K = _karatsuba_output_like(A, size(low_part(A)))
-    scalar_multiply!(K, A, a)
-    K
-end
-
-function *(A::KaratsubaArray, a::Number)
-    a * A
-end
+_karatsuba_output_like(source::KaratsubaArray, dims::Dims) =
+    FFM._karatsuba_output_like(source, dims)
 
 function _karatsuba_product_workspace_like(K::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
     return KaratsubaArray{T,D,S,P}(
@@ -1063,292 +732,7 @@ function *(A::KaratsubaArray, B::KaratsubaArray)
     )
 end
 
-# """
-
-# Works even for multidimensional arrays because CuArrays support linear indexing
-
-# """
-# function karatsuba_add_kernel!(Kplan,Kdata1,Kdata2,Adata1,Adata2,Bdata1,Bdata2,N1,N2)
-#     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-
-#     Kplan[i] = (Adata1[i] + Bdata1[i]) % (2*N1)
-#     Kplan[i] = div(Kplan[i],N1)
-#     Kdata2[i] = (Kplan[i] + Adata2[i]) % (2*N2)
-#     Kdata2[i] = (Kdata2[i] + Bdata2[i]) % (2*N2)
-
-#     Kplan[i] = (Kplan[i] * N1) % (N1^2)
-#     Kplan[i] = (Bdata1[i] - Kplan[i]) % (N1^2)
-#     Kdata1[i] = (Adata1[i] + Kplan[i]) % (N1^2)
-
-#     Kdata1[i] %= N1
-#     Kdata2[i] %= N2
-
-#     return
-# end
-
-function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
-    if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
-        throw(ModulusMismatchError("Matrices must have the same modulus m"))
-    end
-    if (size(low_part(A)) != size(low_part(B))) ||
-       (size(low_part(A)) != (size(low_part(K))))
-        throw(DimensionMismatch("Matrix dimensions must match"))
-    end
-
-    tw = TILE_WIDTH
-
-    totalsize = length(_karatsuba_logical_view(low_part(A)))
-
-    threads = tw
-    if totalsize > 0
-        blocks = cld(totalsize, tw)
-        @cuda threads=threads blocks=blocks karatsuba_add_kernel!(
-            _karatsuba_logical_view(low_part(K)),
-            _karatsuba_logical_view(high_part(K)),
-            _karatsuba_logical_view(low_part(A)),
-            _karatsuba_logical_view(high_part(A)),
-            _karatsuba_logical_view(low_part(B)),
-            _karatsuba_logical_view(high_part(B)),
-            low_modulus(A),
-            high_modulus(A),
-        )
-    end
-
-
-    K
-end
-
-#"""
-#This is a fallback implementation, and shouldn't be used
-#unless the dimension is greater than or equal to 3.
-
-#This is not safe if K == B, but it is safe if K == A.
-#"""
-#function add!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
-#    if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
-#        throw(ModulusMismatchError("Matrices must have the same modulus m"))
-#    end
-#    if (size(low_part(A)) != size(low_part(B))) || (size(low_part(A)) != (size(low_part(K))))
-#        throw(DimensionMismatch("Matrix dimensions must match"))
-#    end
-#    if (A.plan == nothing) || (K.plan == nothing)
-#        throw(ArgumentError("Must initialize plans first before using fallback implementation"))
-#    end
-#    #=
-#    high_part(K) .= mod.(trunc.((low_part(A)+low_part(B))./modulus(A)),high_modulus(A))
-#    low_part(K) .= mod.(low_part(A) + low_part(B) - modulus(A)*high_part(K),low_modulus(A))
-#    high_part(K) .= mod.(high_part(K) + high_part(A) + high_part(B),high_modulus(A))
-#    =#
-
-#    add!(K.plan,low_part(A),low_part(B),2*low_modulus(A))
-#    divide_elements!(K.plan,K.plan,low_modulus(A))
-#    add!(high_part(K),K.plan,high_part(A),2*high_modulus(A))
-#    add!(high_part(K),high_part(K),high_part(B),2*high_modulus(A))
-#    LinearAlgebra.mul!(K.plan,K.plan,low_modulus(A),low_modulus(A)^2)
-#    sub!(K.plan,low_part(B),K.plan,low_modulus(B)^2)
-#    add!(low_part(K),low_part(A),K.plan,low_modulus(A)^2)
-#    #=
-#    LinearAlgebra.mul!(high_part(K),high_part(K),1/modulus(A))
-#    trunc_elements!(high_part(K))
-#    =#
-#    mod_elements!(low_part(K); modulus_override=low_modulus(A))
-#    mod_elements!(high_part(K); modulus_override=high_modulus(A))
-#    #=
-#    add!(low_part(K),low_part(A),low_part(B),2*modulus(A))
-#    add!(high_part(K),high_part(A),high_part(B))
-#    add!(high_part(K),high_part(K),divides(low_part(K),modulus(K)),high_modulus(K))
-#    mod_elements!(low_part(K); modulus_override=low_modulus(K))
-#    =#
-
-#    K
-#end
-
-function sub!(K::KaratsubaArray, A::KaratsubaArray, B::KaratsubaArray)
-    if (modulus(A) != modulus(B)) || (modulus(A) != modulus(K))
-        throw(ModulusMismatchError("Matrices must have the same modulus m"))
-    end
-    if (size(low_part(A)) != size(low_part(B))) ||
-       (size(low_part(A)) != (size(low_part(K))))
-        throw(DimensionMismatch("Matrix dimensions must match"))
-    end
-
-    #=
-    high_part(C) .= mod.(trunc.((low_part(A)-low_part(B))./modulus(A)),high_modulus(A))
-    low_part(C) .= mod.(low_part(A) - low_part(B) - modulus(A)*high_part(C),low_modulus(A))
-    high_part(C) .= mod.(high_part(C) + high_part(A) - high_part(B) - (low_part(A).<low_part(B)),high_modulus(A))
-
-    sub!(high_part(K),low_part(A),low_part(B))
-    LinearAlgebra.mul!(high_part(K),high_part(K),1/modulus(A))
-    trunc_elements!(high_part(K))
-    mod_elements!(high_part(K); modulus_override=high_modulus(A))
-    LinearAlgebra.mul!(low_part(K),low_part(K),modulus(A),modulus(A)^2)
-    sub!(low_part(K),low_part(B),low_part(K))
-    sub!(low_part(K),low_part(A),low_part(K))
-    mod_elements!(low_part(K); modulus_override=low_modulus(A))
-    add!(high_part(K),high_part(K),high_part(A))
-    sub!(high_part(K),high_part(K),high_part(B))
-    sub!(high_part(K),high_part(K),low_part(A).<low_part(B))
-    mod_elements!(high_part(K); modulus_override=high_modulus(A))
-    =#
-    tw = TILE_WIDTH
-
-    totalsize = length(_karatsuba_logical_view(low_part(A)))
-
-    threads = tw
-    if totalsize > 0
-        blocks = cld(totalsize, tw)
-        @cuda threads=threads blocks=blocks karatsuba_sub_kernel!(
-            _karatsuba_logical_view(low_part(K)),
-            _karatsuba_logical_view(high_part(K)),
-            _karatsuba_logical_view(low_part(A)),
-            _karatsuba_logical_view(high_part(A)),
-            _karatsuba_logical_view(low_part(B)),
-            _karatsuba_logical_view(high_part(B)),
-            low_modulus(A),
-            high_modulus(A),
-            modulus(A),
-        )
-    end
-
-    # negate!(K,B)
-    # add!(K,K,A)
-    K
-end
-
-function scalar_multiply!(B::KaratsubaArray, A::KaratsubaArray, s::Number)
-    if modulus(A) != modulus(B)
-        throw(ModulusMismatchError("Matrices must have the same modulus m"))
-    end
-    if size(low_part(A)) != size(low_part(B))
-        throw(DimensionMismatch("Matrix dimensions must match"))
-    end
-
-    # LinearAlgebra.mul!(high_part(B),low_part(A),s,low_modulus(A)^2)
-    # divide_elements!(high_part(B),high_part(B),low_modulus(A))
-    # LinearAlgebra.mul!(low_part(B),high_part(A),s,high_modulus(A))
-    # add!(high_part(B),high_part(B),low_part(B))
-    # LinearAlgebra.mul!(low_part(B),low_part(A),s,low_modulus(A))
-
-    tw = TILE_WIDTH
-
-    totalsize = length(_karatsuba_logical_view(low_part(A)))
-
-    threads = tw
-    if totalsize > 0
-        blocks = cld(totalsize, tw)
-        @cuda threads=threads blocks=blocks karatsuba_scalar_multiply_kernel!(
-            _karatsuba_logical_view(low_part(B)),
-            _karatsuba_logical_view(high_part(B)),
-            _karatsuba_logical_view(low_part(A)),
-            _karatsuba_logical_view(high_part(A)),
-            s,
-            low_modulus(A),
-            high_modulus(A),
-        )
-    end
-
-    #=
-    high_part(B) .= mod.(trunc.((s*low_part(A))/modulus(A)),high_modulus(A))
-    low_part(B) .= mod.(s*low_part(A) - modulus(B)*high_part(B),low_modulus(A))
-    high_part(B) .= mod.(high_part(B) + s*high_part(A),high_modulus(A))
-    =#
-    B
-end
-
-
-
-# function negate!(K::KaratsubaArray, A::KaratsubaArray)
-
-#     tw = TILE_WIDTH
-
-#     totalsize = length(parent(low_part(A)))
-
-#     threads = tw
-#     blocks = totalsize ÷ tw
-
-# @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(parent(low_part(K)),
-#                                                              parent(high_part(K)),
-#                                                              parent(low_part(A)),
-#                                                              parent(high_part(A)),
-#                                                              low_modulus(A),
-#                                                              high_modulus(A),
-#                                                             modulus(A))
-
-
-#     K
-# end
-
-function negate!(K::KaratsubaArray, A::KaratsubaArray)
-    tw = TILE_WIDTH
-
-    totalsize = length(_karatsuba_logical_view(low_part(A)))
-
-    threads = tw
-    if totalsize > 0
-        blocks = cld(totalsize, tw)
-        @cuda threads=threads blocks=blocks karatsuba_negate_kernel!(
-            _karatsuba_logical_view(low_part(K)),
-            _karatsuba_logical_view(high_part(K)),
-            _karatsuba_logical_view(low_part(A)),
-            _karatsuba_logical_view(high_part(A)),
-            low_modulus(A),
-            high_modulus(A),
-            modulus(A),
-        )
-    end
-
-
-
-    #=
-    high_part(K) .= trunc.((modulus(A) .- low_part(A))/modulus(A))
-    low_part(K) .= mod.(modulus(A) - low_part(A) - modulus(A)*high_part(K),low_modulus(A))
-    high_part(K) .= mod.(mod.(high_part(K) + modulus(A) - high_part(A) - 1,modulus(A)),high_modulus(A))
-    =#
-    # mul!(high_part(K),high_part(K),0)
-    # scalar_add!(high_part(K),high_part(K),low_modulus(A),2*low_modulus(A))
-    # sub!(high_part(K),high_part(K),low_part(A),2*low_modulus(A))
-    #=
-    LinearAlgebra.mul!(high_part(K),high_part(K),1/low_modulus(A))
-    trunc_elements!(high_part(K))
-     =#
-    # divide_elements!(high_part(K),high_part(K),low_modulus(A))
-    # LinearAlgebra.mul!(low_part(K),high_part(K),low_modulus(A),modulus(A)^2)
-    # add!(low_part(K),low_part(K),low_part(A),modulus(A)^2)
-    # negate!(low_part(K),low_part(K),low_modulus(A))
-    # mod_elements!(low_part(K); modulus_override=low_modulus(A))
-    # scalar_add!(high_part(K),high_part(K),high_modulus(A),modulus(A)^2)
-    # scalar_sub!(high_part(K),high_part(K),1,modulus(A)^2)
-    # sub!(high_part(K),high_part(K),high_part(A),modulus(A))
-    # mod_elements!(high_part(K); modulus_override=high_modulus(A))
-    K
-end
-
 function divide_elements!(B::CuModArray, A::CuModArray, N::Integer)
     parent(B) .= div.(parent(A), N)
     return A
-end
-
-function Base.copy(A::KaratsubaArray{T,D,S,P}) where {T,D,S,P}
-    compute_copy =
-        () -> begin
-            B = KaratsubaArray{T,D,S,P}(
-                copy(low_part(A)),
-                copy(high_part(A));
-                low_modulus = copy(low_modulus(A)),
-                high_modulus = copy(high_modulus(A)),
-                modulus = modulus(A),
-            )
-            if !(A.plan == nothing)
-                initialize_plan!(B)
-            end
-            B
-        end
-
-    component = low_part(A)
-    component_storage = component isa CuModArray ? parent(component) : component
-    if component_storage isa CUDA.CuArray
-        return CUDA.device!(compute_copy, CUDA.device(component_storage))
-    end
-
-    return compute_copy()
 end
