@@ -72,10 +72,14 @@ const STORAGE_CONTRACT_G = GPUFiniteFieldMatrices
         end
     end
     if GFM_TEST_METAL_LOADED
+        @test G._backend_instance(Val(:metal)) isa Metal.MetalBackend
+        @test G._backend_available(Val(:metal)) === GFM_TEST_METAL_FUNCTIONAL
         @test_throws ArgumentError G._validate_backend_storage(Val(:metal), Float64, 7)
     end
 
     if GFM_TEST_CUDA_LOADED
+        @test G._backend_instance(Val(:cuda)) isa CUDA.CUDABackend
+        @test G._backend_available(Val(:cuda)) === GFM_TEST_CUDA_FUNCTIONAL
         cuda_modulus_error = try
             G._validate_backend_storage(Val(:cuda), Float32, 2^24 + 1)
             nothing
