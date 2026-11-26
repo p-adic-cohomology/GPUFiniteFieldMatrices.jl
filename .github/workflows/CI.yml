@@ -38,12 +38,11 @@ jobs:
 
       - uses: julia-actions/cache@v2
 
-      - name: Instantiate project
-        shell: bash
-        run: |
-          julia --project=. -e '
-            using Pkg
-            Pkg.instantiate()
-          '
+      - name: Verify minimal core environment
+        run: sh test/run-core-environment-smoke.sh
 
-      - uses: julia-actions/julia-runtest@v1
+      - name: Verify fresh package view isolation
+        run: sh test/test-run-pkg-test-isolation.sh
+
+      - name: Run package tests in a fresh project view
+        run: sh test/run-pkg-test.sh

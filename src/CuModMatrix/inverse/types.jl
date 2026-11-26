@@ -160,12 +160,15 @@ Result container for GPU PLUQ:
 - `q`: column permutation vector
 - `rank`: computed rank over `mod N`
 """
-struct PLUQ{T}
-    LU::CuModMatrix{T}
+struct PLUQ{T,A<:GPUModMatrix{T}}
+    LU::A
     p::Vector{Int}
     q::Vector{Int}
     rank::Int
 end
+
+function _pluq_extract_L end
+function _pluq_extract_U end
 
 function Base.getproperty(F::PLUQ, name::Symbol)
     name === :L && return _pluq_extract_L(F)

@@ -163,7 +163,15 @@ dimension up to a multiple of `TILE_WIDTH` and starts with zero padding.
 """
 function similar_with_modulus(A::CuModArray, N::Integer)
     T = eltype(parent(A))
-    D = ndims(parent(A))
-    data = CUDA.zeros(T, _padded_size(size(A))...)
-    return CuModArray{T,D}(data; modulus = N, mod = false, new_size = size(A))
+    dims, logical_dims, validated_modulus = _cuda_factory_preflight(T, size(A), N, size(A))
+    D = ndims(A)
+    return CUDA.device!(CUDA.device(parent(A))) do
+        data = CUDA.zeros(T, _padded_size(dims)...)
+        CuModArray{T,D}(
+            data;
+            modulus = validated_modulus,
+            mod = false,
+            new_size = logical_dims,
+        )
+    end
 end

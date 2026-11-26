@@ -1,0 +1,253 @@
+function Base.:^(A::CuModMatrix, n::Integer)
+    if rows(A) != cols(A)
+        throw(DimensionMismatch("Matrix must be square for power operation"))
+    end
+
+    if n == 0
+        I_mat = Matrix{eltype(parent(A))}(I, rows(A), cols(A))
+        return CuModMatrix(I_mat; modulus = modulus(A))
+    elseif n < 0
+        return inv(A)^(-n)
+    else
+        if n == 1
+            return A
+        elseif n % 2 == 0
+            half_pow = A^(n ÷ 2)
+            return half_pow * half_pow
+        else
+            return A * (A^(n-1))
+        end
+    end
+end
+
+function Base.transpose(A::CuModMatrix)
+    return CuModMatrix(transpose(parent(A)); modulus = modulus(A), new_size = size(A))
+end
+
+rows(A::CuModMatrix) = size(A, 1)
+cols(A::CuModMatrix) = size(A, 2)
+
+unsafe_Array(A::CuModArray) = Array(parent(A))
+
+_is_cuda_storage(::CUDA.CuArray) = true
+_is_cuda_storage(::SubArray{T,D,P}) where {T,D,P<:CUDA.CuArray} = true
+_is_cuda_storage(::Any) = false
+
+_cuda_storage_device(storage::CUDA.CuArray) = CUDA.device(storage)
+_cuda_storage_device(storage::SubArray{T,D,P}) where {T,D,P<:CUDA.CuArray} =
+    CUDA.device(parent(storage))
+
+function _wrap_cuda_slice(A::CuModArray{T,2,M}, values::AbstractArray{T,2}) where {T,M}
+    if _is_cuda_storage(parent(A))
+        host_values = Array(values)
+        return CUDA.device!(_cuda_storage_device(parent(A))) do
+            CuModArray{T,2}(host_values; modulus = modulus(A), mod = false)
+        end
+    end
+
+    storage = FFM.CuStorage{T,2,M,typeof(values)}(values)
+    return GPUModArray{T,2,typeof(storage)}(storage, size(values), modulus(A))
+end
+
+Base.getindex(A::CuModArray{T,2}, I::AbstractArray{Int}, J::AbstractArray{Int}) where {T} =
+    _wrap_cuda_slice(A, _logical_view(parent(A), size(A))[I, J])
+
+Base.getindex(A::CuModArray{T,2}, I::AbstractArray{Int}, j::Int) where {T} =
+    _wrap_cuda_slice(A, reshape(_logical_view(parent(A), size(A))[I, j], length(I), 1))
+
+Base.getindex(A::CuModArray{T,2}, i::Int, J::AbstractArray{Int}) where {T} =
+    _wrap_cuda_slice(A, reshape(_logical_view(parent(A), size(A))[i, J], 1, length(J)))
+
+function _show_cumod_header(io::IO, name::AbstractString, A::CuModArray)
+    print(io, join(size(A), "×"), " ", name, " modulo ", modulus(A))
+end
+
+Base.show(io::IO, A::CuModArray) = _show_cumod_header(io, "CuModArray", A)
+Base.show(io::IO, ::MIME"text/plain", A::CuModArray) = begin
+    _show_cumod_header(io, "CuModArray", A)
+    print(io, '\n')
+    show(io, Array(A))
+end
+
+function _setup_PLUQ(A::CuModMatrix)
+    return pluq(A)
+end
+
+function _is_invertible(F)
+    m = rows(F.LU)
+    n = cols(F.LU)
+    return m == n && F.rank == m
+end
+
+# The documented singular and inverse results are two intentional concrete
+# tuple alternatives; keep their union allowance local to this API method.
+@stable default_mode = "disable" default_union_limit = 2 begin
+    """
+        is_invertible_with_inverse(A::CuModMatrix)
+
+    Checks if a matrix is invertible. If not, returns
+    false and nothing. If it is, returns true and the
+    inverse matrix.
+    """
+    function is_invertible_with_inverse(A::CuModMatrix; debug::Bool = false)
+        F = _setup_PLUQ(A)
+        if !_is_invertible(F)
+            return false, nothing
+        end
+        A_inv = inv(A)
+        if debug
+            println("A")
+            display(A)
+            println("A_inv")
+            display(A_inv)
+            println("A * A_inv")
+            display(A * A_inv)
+        end
+        return true, A_inv
+    end
+end
+
+function inverse_permutation(P::CuDeviceVector{Int,1})
+    # TODO: Pad the perm array
+    P_inv = CuDeviceVector{Int,1}(undef, length(P))
+
+    @cuda threads=TILE_WIDTH blocks=div(length(P), TILE_WIDTH) _inverse_permutation_kernel!(
+        P_inv,
+        P,
+    )
+
+    return P_inv
+end
+
+function _inverse_permutation_kernel!(
+    P_inv::CuDeviceVector{Int,1},
+    P::CuDeviceVector{Int,1},
+)
+    # TODO: Pad the perm array
+    tid = threadIdx().x
+    bid = blockIdx().x
+    row = (bid - 1) * TILE_WIDTH + tid
+    n = length(P)
+
+    if row <= n
+        P_inv[P[row]] = row
+    end
+
+    return
+end
+
+function Base.zeros(
+    ::Type{CuModArray{T,1}},
+    length::Integer;
+    modulus::Integer,
+    new_size = nothing,
+    storage = :default,
+    device = nothing,
+) where {T}
+    dims, logical_dims, N = _cuda_factory_preflight(T, (length,), modulus, new_size)
+    _cuda_storage_mode(storage)
+    padded_entries = _padded_extent(dims[1])
+    return _with_cuda_device(device) do
+        data = CUDA.zeros(T, padded_entries)
+        CuModArray{T,1}(data; modulus = N, mod = false, new_size = logical_dims)
+    end
+end
+
+function Base.zeros(
+    ::Type{CuModArray{T,2}},
+    rows::Integer,
+    cols::Integer;
+    modulus::Integer,
+    new_size = nothing,
+    storage = :default,
+    device = nothing,
+) where {T}
+    dims, logical_dims, N = _cuda_factory_preflight(T, (rows, cols), modulus, new_size)
+    _cuda_storage_mode(storage)
+    padded_rows = _padded_extent(dims[1])
+    padded_cols = _padded_extent(dims[2])
+    return _with_cuda_device(device) do
+        data = CUDA.zeros(T, padded_rows, padded_cols)
+        CuModArray{T,2}(data; modulus = N, mod = false, new_size = logical_dims)
+    end
+end
+
+"""
+    rand(CuModVector{T}, length; modulus)
+    rand(CuModMatrix{T}, rows, cols; modulus)
+
+Creates a random vector or matrix in the finite field modulo `modulus`.
+Only logical entries are sampled; the zero-initialized padding is untouched.
+"""
+function Base.rand(
+    ::Type{CuModArray{T,1}},
+    length::Integer;
+    modulus::Integer,
+    new_size = nothing,
+    storage = :default,
+    device = nothing,
+) where {T}
+    dims, logical_dims, N = _cuda_factory_preflight(T, (length,), modulus, new_size)
+    _cuda_storage_mode(storage)
+    return _with_cuda_device(device) do
+        data = CUDA.zeros(T, _padded_size(dims)...)
+        if !any(iszero, logical_dims)
+            logical_data = CUDA.rand(T, logical_dims...)
+            if T <: AbstractFloat
+                logical_data .= mod.(floor.(logical_data .* N), N)
+            end
+            mod!(logical_data, logical_data, N)
+            copyto!(_logical_view(data, logical_dims), logical_data)
+        end
+        CuModArray{T,1}(data; modulus = N, mod = false, new_size = logical_dims)
+    end
+end
+
+function Base.rand(
+    ::Type{CuModArray{T,2}},
+    rows::Integer,
+    cols::Integer;
+    modulus::Integer,
+    new_size = nothing,
+    storage = :default,
+    device = nothing,
+) where {T}
+    dims, logical_dims, N = _cuda_factory_preflight(T, (rows, cols), modulus, new_size)
+    _cuda_storage_mode(storage)
+    return _with_cuda_device(device) do
+        data = CUDA.zeros(T, _padded_size(dims)...)
+        if !any(iszero, logical_dims)
+            logical_data = CUDA.rand(T, logical_dims...)
+            if T <: AbstractFloat
+                logical_data .= mod.(floor.(logical_data .* N), N)
+            end
+            mod!(logical_data, logical_data, N)
+            copyto!(_logical_view(data, logical_dims), logical_data)
+        end
+        CuModArray{T,2}(data; modulus = N, mod = false, new_size = logical_dims)
+    end
+end
+
+function Base.copyto!(
+    dest::CuModMatrix{T},
+    src::SparseArrays.CHOLMOD.Dense{T},
+) where {T<:Union{Float32,Float64,ComplexF32,ComplexF64}}
+    return copyto!(dest, Matrix(src))
+end
+
+function similar_with_modulus(A::CuModArray{T,D}, new_modulus::Integer) where {T,D}
+    checked_modulus = FFM._elementwise_working_modulus(A, new_modulus)
+    device = CUDA.device(_cuda_root(parent(A)))
+    storage = _with_cuda_device(device) do
+        native = similar(parent(A), T, _padded_size(size(A)))
+        fill!(native, zero(T))
+        native
+    end
+    return FFM._new_modular_wrapper(A, storage, size(A), checked_modulus)
+end
+
+
+function trunc_elements!(A::CuModArray)
+    parent(A) .= trunc.(parent(A))
+    return A
+end

@@ -1,97 +1,69 @@
-"""
-    pluq_extract_l_kernel!(L, LU, n)
-
-Extract explicit lower-triangular factor from packed `LU` into `L`.
-Diagonal entries are set to one.
-"""
-function pluq_extract_l_kernel!(L, LU, n::Int32)
-    i = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    j = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y
-    if i <= n && j <= n
-        if i == j
-            L[i, j] = one(eltype(L))
-        elseif i > j
-            L[i, j] = LU[i, j]
-        else
-            L[i, j] = zero(eltype(L))
-        end
-    end
-    return
+function _inverse_zero_matrix(A::GPUModMatrix{T}, dims::Dims{2}) where {T}
+    dims == size(A) && return similar(A)
+    result = _stripe_result(A, dims, modulus(A))
+    fill!(parent(result), zero(T))
+    return result
 end
 
-"""
-    pluq_extract_u_kernel!(U, LU, n)
-
-Extract explicit upper-triangular factor from packed `LU` into `U`.
-"""
-function pluq_extract_u_kernel!(U, LU, n::Int32)
-    i = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    j = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y
-    if i <= n && j <= n
-        if i <= j
-            U[i, j] = LU[i, j]
-        else
-            U[i, j] = zero(eltype(U))
-        end
-    end
-    return
+function _inverse_device_indices(A, indices)
+    device_indices = similar(_elementwise_native_root(A), Int32, length(indices))
+    copyto!(device_indices, Int32.(indices))
+    return device_indices
 end
 
-"""
-    pluq_apply_paq_kernel!(PAQ, A, p, q, n)
-
-Apply permutations in gather form:
-`PAQ[i,j] = A[p[i], q[j]]`.
-"""
-function pluq_apply_paq_kernel!(PAQ, A, p, q, n::Int32)
-    i = (blockIdx().x - Int32(1)) * blockDim().x + threadIdx().x
-    j = (blockIdx().y - Int32(1)) * blockDim().y + threadIdx().y
-    if i <= n && j <= n
-        PAQ[i, j] = A[p[i], q[j]]
+@kernel inbounds = true function _inverse_extract_kernel!(
+    out,
+    packed,
+    rank,
+    ::Val{Lower},
+) where {Lower}
+    i, j = @index(Global, NTuple)
+    T = eltype(out)
+    value = if Lower
+        i == j ? one(T) : (i > j && j <= rank ? packed[i, j] : zero(T))
+    else
+        i <= rank && i <= j ? packed[i, j] : zero(T)
     end
-    return
+    out[i, j] = value
 end
 
-"""
-    F.L
+function _inverse_extract(F::PLUQ, lower::Val)
+    A = F.LU
+    _inverse_preflight(A, PLUQOptions())
+    m, n = size(A)
+    0 <= F.rank <= min(m, n) || throw(ArgumentError("invalid PLUQ rank"))
+    dims = (m, lower isa Val{true} ? m : n)
+    out = _inverse_zero_matrix(A, dims)
+    if !isempty(out)
+        native = parent(out)
+        _inverse_extract_kernel!(KernelInterface.get_backend(native))(
+            native,
+            parent(A),
+            F.rank,
+            lower;
+            ndrange = dims,
+        )
+    end
+    return out
+end
 
-Materialize explicit `L` on GPU from packed `F.LU`.
-"""
-function _pluq_extract_L(F::PLUQ)
-    n = rows(F.LU)
-    n32 = Int32(n)
-    L = zeros(CuModMatrix{eltype(parent(F.LU))}, n, n; modulus = modulus(F.LU))
-    tx = 16
-    ty = 16
-    @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_extract_l_kernel!(
-        parent(L),
-        parent(F.LU),
-        n32,
+_pluq_extract_L(F::PLUQ) = _inverse_extract(F, Val(true))
+_pluq_extract_U(F::PLUQ) = _inverse_extract(F, Val(false))
+
+@kernel inbounds = true function _inverse_gather_kernel!(out, A, p, q)
+    i, j = @index(Global, NTuple)
+    out[i, j] = A[p[i], q[j]]
+end
+
+function _inverse_gather!(out, source, p, q)
+    (isempty(p) || isempty(q)) && return out
+    dp, dq = _inverse_device_indices(out, p), _inverse_device_indices(out, q)
+    _inverse_gather_kernel!(KernelInterface.get_backend(out))(
+        out,
+        source,
+        dp,
+        dq;
+        ndrange = (length(p), length(q)),
     )
-    return L
-end
-
-"""
-    F.U
-
-Materialize explicit `U` on GPU from packed `F.LU`.
-
-Example:
-```julia
-F = pluq(A)
-U = F.U
-```
-"""
-function _pluq_extract_U(F::PLUQ)
-    n = rows(F.LU)
-    n32 = Int32(n)
-    U = zeros(CuModMatrix{eltype(parent(F.LU))}, n, n; modulus = modulus(F.LU))
-    tx = 16
-    ty = 16
-    @cuda threads=(tx, ty) blocks=(max(1, cld(n, tx)), max(1, cld(n, ty))) pluq_extract_u_kernel!(
-        parent(U),
-        parent(F.LU),
-        n32,
-    )
-    return U
+    return out
 end

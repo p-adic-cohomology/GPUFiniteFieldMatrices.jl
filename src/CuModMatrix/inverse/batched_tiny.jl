@@ -1,357 +1,428 @@
-@inline function _batch_supported_n(n::Int)
-    return n == 4 || n == 8 || n == 16 || n == 32
+_tiny_inverse_size(n) = n in (4, 8, 16, 32)
+
+function _inverse_batch_default_pluq(options)
+    defaults = PLUQOptions()
+    return options.blocksize == defaults.blocksize &&
+           options.basecase == defaults.basecase &&
+           options.pivot_policy == defaults.pivot_policy &&
+           options.lazy_q == defaults.lazy_q &&
+           options.nftb == defaults.nftb &&
+           options.pivot_warp_kernel == defaults.pivot_warp_kernel &&
+           options.trsm_mode == defaults.trsm_mode &&
+           options.trsm_warp_threshold == defaults.trsm_warp_threshold &&
+           options.schur_tile == defaults.schur_tile &&
+           options.schur_transpose_u == defaults.schur_transpose_u &&
+           options.mod_backend == defaults.mod_backend &&
+           !options.autotune
 end
 
-function _pack_square_batch(mats::AbstractVector{<:CuModMatrix}, n::Int, T::DataType)
-    b = length(mats)
-    A = CUDA.zeros(T, n, n, b)
-    for i = 1:b
-        m = mats[i]
-        if rows(m) != n || cols(m) != n
-            throw(DimensionMismatch("all matrices must be $(n)x$(n)"))
-        end
-        A[:, :, i] .= @view parent(m)[1:n, 1:n]
+_inverse_batch_default_augmented(options) =
+    options.inverse_strategy === :augmented && _inverse_batch_default_pluq(options)
+
+function _inverse_batch_inputs(mats, options)
+    Base.require_one_based_indexing(mats)
+    isempty(mats) && return nothing
+    options.batch_streams == 1 || throw(
+        ArgumentError("portable inverse batches support one queue; use batch_streams=1"),
+    )
+    first_A = first(mats)
+    for A in mats
+        _inverse_preflight(A, options)
+        _check_elementwise_backend(first_A, A)
     end
-    return A
+    return nothing
 end
 
-function _unpack_square_batch!(mats::AbstractVector{<:CuModMatrix}, A::CuArray, n::Int)
+_inverse_batch_alias(A, B) = Base.mightalias(parent(A), parent(B))
+
+function _inverse_distinct_matrices(mats)
+    for i in eachindex(mats), j = 1:(i-1)
+        _inverse_batch_alias(mats[i], mats[j]) &&
+            throw(ArgumentError("batch matrices must not alias each other"))
+    end
+    return nothing
+end
+
+function _inverse_batch_homogeneous(mats)
+    isempty(mats) && return nothing
+    T = eltype(first(mats))
+    all(A -> eltype(A) === T, mats) ||
+        throw(ArgumentError("batch matrices must have the same element type"))
+    return nothing
+end
+
+function _inverse_batch_tiny_shape(mats, n)
+    isempty(mats) && return nothing
+    _inverse_batch_homogeneous(mats)
+    N = modulus(first(mats))
+    for A in mats
+        size(A) == (n, n) || throw(DimensionMismatch("all matrices must be $(n)x$(n)"))
+        modulus(A) == N ||
+            throw(ModulusMismatchError("batch matrices must have the same modulus"))
+    end
+    return nothing
+end
+
+function _inverse_batch_destinations(dests, mats; inplace = false)
+    Base.require_one_based_indexing(dests)
+    length(dests) == length(mats) ||
+        throw(DimensionMismatch("destination and input batches must have the same length"))
+    if inplace
+        dests === mats ||
+            throw(ArgumentError("in-place inversion requires the input wrappers"))
+        _inverse_distinct_matrices(mats)
+        return nothing
+    end
+    for (dest, src) in zip(dests, mats)
+        size(dest) == size(src) ||
+            throw(DimensionMismatch("destination must match input shape"))
+        eltype(dest) === eltype(src) ||
+            throw(ArgumentError("destination must match input element type"))
+        modulus(dest) == modulus(src) ||
+            throw(ModulusMismatchError("destination must match input modulus"))
+        _check_elementwise_backend(dest, src)
+    end
+    _inverse_distinct_matrices(dests)
+    for dest in dests, src in mats
+        _inverse_batch_alias(dest, src) &&
+            throw(ArgumentError("destination storage must not alias any input storage"))
+    end
+    return nothing
+end
+
+function _inverse_batch_square_size(mats)
+    isempty(mats) && return nothing
+    n = size(first(mats), 1)
+    return all(A -> size(A) == (n, n), mats) ? n : nothing
+end
+
+_inverse_empty_factors(::AbstractVector{<:GPUModMatrix{T}}) where {T} = PLUQ{T}[]
+_inverse_empty_factors(::AbstractVector) = PLUQ[]
+
+@kernel inbounds = true function _inverse_pack_matrix!(packed, A, batch)
+    i, j = @index(Global, NTuple)
+    packed[i, j, batch] = A[i, j]
+end
+
+@kernel inbounds = true function _inverse_unpack_matrix!(A, packed, batch, offset)
+    i, j = @index(Global, NTuple)
+    A[i, j] = packed[i, j+offset, batch]
+end
+
+function _inverse_pack_matrices(mats, n)
+    native = _elementwise_native_root(parent(first(mats)))
+    packed = similar(native, eltype(native), (n, n, length(mats)))
+    pack = _inverse_pack_matrix!(KernelInterface.get_backend(packed))
     for i in eachindex(mats)
-        parent(mats[i])[1:n, 1:n] .= @view A[:, :, i]
+        pack(packed, parent(mats[i]), i; ndrange = (n, n))
+    end
+    return packed
+end
+
+function _inverse_unpack_matrices!(mats, packed, n, offset)
+    unpack = _inverse_unpack_matrix!(KernelInterface.get_backend(packed))
+    for i in eachindex(mats)
+        unpack(parent(mats[i]), packed, i, offset; ndrange = (n, n))
     end
     return mats
 end
 
-function _tiny_pluq_batched_kernel!(A, pdev, qdev, rdev, n::Int32, N::Int32)
-    bid = Int(blockIdx().x)
-    if bid > size(A, 3) || threadIdx().x != 1
-        return
+@kernel inbounds = true function _inverse_tiny_factor_kernel!(packed, p, q, ranks, n, N)
+    batch = @index(Global, Linear)
+    T = eltype(packed)
+    for i = 1:n
+        p[i, batch] = q[i, batch] = i % Int32
     end
-    for t = 1:n
-        pdev[t, bid] = Int32(t)
-        qdev[t, bid] = Int32(t)
+    for j = 1:n, i = 1:n
+        packed[i, j, batch] = T(_pluq_ka_residue(packed[i, j, batch], N))
     end
     rank = Int32(0)
-    k = Int32(1)
-    while k <= n
-        piv_i = Int32(0)
-        piv_j = Int32(0)
-        j = k
-        while j <= n && piv_i == 0
-            i = k
-            while i <= n
-                if _pluq_mod_t(A[i, j, bid], N) != zero(eltype(A))
-                    piv_i = i
-                    piv_j = j
+    for k = 1:n
+        prow, pcol = 0, 0
+        for j = k:n
+            for i = k:n
+                if !iszero(packed[i, j, batch])
+                    prow, pcol = i, j
                     break
                 end
-                i += 1
             end
-            j += 1
+            prow > 0 && break
         end
-        if piv_i == 0
-            break
-        end
-        if piv_i != k
-            c = Int32(1)
-            while c <= n
-                tmp = A[k, c, bid]
-                A[k, c, bid] = A[piv_i, c, bid]
-                A[piv_i, c, bid] = tmp
-                c += 1
-            end
-            tp = pdev[k, bid]
-            pdev[k, bid] = pdev[piv_i, bid]
-            pdev[piv_i, bid] = tp
-        end
-        if piv_j != k
-            r = Int32(1)
-            while r <= n
-                tmp = A[r, k, bid]
-                A[r, k, bid] = A[r, piv_j, bid]
-                A[r, piv_j, bid] = tmp
-                r += 1
-            end
-            tq = qdev[k, bid]
-            qdev[k, bid] = qdev[piv_j, bid]
-            qdev[piv_j, bid] = tq
-        end
-        invpiv = _pluq_mod_inv_t(A[k, k, bid], N)
-        if invpiv == zero(eltype(A))
-            break
-        end
-        i = k + 1
-        while i <= n
-            A[i, k, bid] = _pluq_mod_mul_t(A[i, k, bid], invpiv, N)
-            i += 1
-        end
-        j = k + 1
-        while j <= n
-            i2 = k + 1
-            while i2 <= n
-                A[i2, j, bid] = _pluq_mod_t(
-                    A[i2, j, bid] - _pluq_mod_mul_t(A[i2, k, bid], A[k, j, bid], N),
-                    N,
-                )
-                i2 += 1
-            end
-            j += 1
-        end
-        rank += 1
-        k += 1
-    end
-    rdev[bid] = rank
-    return
-end
-
-function _tiny_inverse_batched_kernel!(A, invA, ok, n::Int32, N::Int32)
-    bid = Int(blockIdx().x)
-    if bid > size(A, 3) || threadIdx().x != 1
-        return
-    end
-    aug = CuStaticSharedArray(eltype(A), (32, 64))
-    i = Int32(1)
-    while i <= n
-        j = Int32(1)
-        while j <= n
-            aug[i, j] = A[i, j, bid]
-            j += 1
-        end
-        j2 = Int32(1)
-        while j2 <= n
-            aug[i, n+j2] = i == j2 ? one(eltype(A)) : zero(eltype(A))
-            j2 += 1
-        end
-        i += 1
-    end
-    okflag = Int32(1)
-    k = Int32(1)
-    while k <= n
-        prow = Int32(0)
-        i3 = k
-        while i3 <= n
-            if _pluq_mod_t(aug[i3, k], N) != zero(eltype(A))
-                prow = i3
-                break
-            end
-            i3 += 1
-        end
-        if prow == 0
-            okflag = 0
-            break
-        end
+        prow == 0 && break
+        inverse = _pluq_ka_inverse(packed[prow, pcol, batch], N)
+        iszero(inverse) && break
         if prow != k
-            j3 = k
-            while j3 <= 2n
-                tmp = aug[k, j3]
-                aug[k, j3] = aug[prow, j3]
-                aug[prow, j3] = tmp
-                j3 += 1
+            for j = 1:n
+                packed[k, j, batch], packed[prow, j, batch] =
+                    packed[prow, j, batch], packed[k, j, batch]
             end
+            p[k, batch], p[prow, batch] = p[prow, batch], p[k, batch]
         end
-        invpiv = _pluq_mod_inv_t(aug[k, k], N)
-        if invpiv == zero(eltype(A))
-            okflag = 0
-            break
-        end
-        j4 = k
-        while j4 <= 2n
-            aug[k, j4] = _pluq_mod_mul_t(aug[k, j4], invpiv, N)
-            j4 += 1
-        end
-        i4 = Int32(1)
-        while i4 <= n
-            if i4 != k
-                f = _pluq_mod_t(aug[i4, k], N)
-                if f != zero(eltype(A))
-                    j5 = k
-                    while j5 <= 2n
-                        aug[i4, j5] =
-                            _pluq_mod_t(aug[i4, j5] - _pluq_mod_mul_t(f, aug[k, j5], N), N)
-                        j5 += 1
-                    end
-                end
+        if pcol != k
+            for i = 1:n
+                packed[i, k, batch], packed[i, pcol, batch] =
+                    packed[i, pcol, batch], packed[i, k, batch]
             end
-            i4 += 1
+            q[k, batch], q[pcol, batch] = q[pcol, batch], q[k, batch]
         end
-        k += 1
-    end
-    ok[bid] = okflag
-    if okflag == 1
-        i6 = Int32(1)
-        while i6 <= n
-            j6 = Int32(1)
-            while j6 <= n
-                invA[i6, j6, bid] = aug[i6, n+j6]
-                j6 += 1
-            end
-            i6 += 1
+        for i = (k+1):n
+            packed[i, k, batch] =
+                T(rem(_pluq_ka_residue(packed[i, k, batch], N) * inverse, N))
         end
-    end
-    return
-end
-
-function _pluq_batched_tiny!(
-    mats::AbstractVector{<:CuModMatrix},
-    n::Int;
-    options::PLUQOptions = PLUQOptions(),
-)
-    isempty(mats) && return _empty_pluq_batch(eltype(mats))
-    !_batch_supported_n(n) && throw(ArgumentError("supported sizes are 4, 8, 16, 32"))
-    N = modulus(mats[1])
-    _validate_inverse_modulus(options, mats[1])
-    T = eltype(parent(mats[1]))
-    for m in mats
-        if modulus(m) != N || eltype(parent(m)) != T
-            throw(
-                modulus(m) != N ?
-                ModulusMismatchError("batch matrices must have the same modulus") :
-                ArgumentError("batch matrices must have the same element type"),
+        for j = (k+1):n, i = (k+1):n
+            packed[i, j, batch] = T(
+                _pluq_ka_submul(
+                    packed[i, j, batch],
+                    packed[i, k, batch],
+                    packed[k, j, batch],
+                    N,
+                ),
             )
         end
+        rank += Int32(1)
     end
-    A = _pack_square_batch(mats, n, T)
-    b = length(mats)
-    pdev = CUDA.zeros(Int32, n, b)
-    qdev = CUDA.zeros(Int32, n, b)
-    rdev = CUDA.zeros(Int32, b)
-    @cuda threads=32 blocks=b _tiny_pluq_batched_kernel!(
-        A,
-        pdev,
-        qdev,
-        rdev,
-        Int32(n),
-        Int32(N),
-    )
-    _unpack_square_batch!(mats, A, n)
-    p = Array(pdev)
-    q = Array(qdev)
-    r = Array(rdev)
-    out = Vector{PLUQ{T}}(undef, b)
-    for i = 1:b
-        out[i] = PLUQ(mats[i], Int.(p[:, i]), Int.(q[:, i]), Int(r[i]))
-    end
-    return out
+    ranks[batch] = rank
 end
 
-function _allocate_inverse_batched_tiny_destinations(mats::AbstractVector{<:CuModMatrix})
-    isempty(mats) && return CuModMatrix[]
-    T = eltype(parent(first(mats)))
-    out = Vector{CuModMatrix{T}}(undef, length(mats))
-    for i in eachindex(mats)
-        src = mats[i]
-        data = CUDA.zeros(T, size(parent(src), 1), size(parent(src), 2))
-        out[i] = CuModMatrix(data; modulus = modulus(src), new_size = size(src))
+@kernel inbounds = true function _inverse_tiny_augmented_kernel!(aug, source, ok, n, N)
+    batch = @index(Global, Linear)
+    T = eltype(aug)
+    for j = 1:n, i = 1:n
+        aug[i, j, batch] = T(_pluq_ka_residue(source[i, j, batch], N))
+        aug[i, j+n, batch] = T(i == j)
     end
-    return out
-end
-
-function _inverse_batched_tiny!(
-    dests::AbstractVector{<:CuModMatrix},
-    mats::AbstractVector{<:CuModMatrix},
-    n::Int;
-    options::PLUQOptions = PLUQOptions(),
-    inplace::Bool = false,
-    resolved_options::Union{Nothing,PLUQOptions} = nothing,
-)
-    length(dests) == length(mats) ||
-        throw(DimensionMismatch("destination and input batches must have the same length"))
-    isempty(mats) && return dests
-    !_batch_supported_n(n) && throw(ArgumentError("supported sizes are 4, 8, 16, 32"))
-    _validate_inverse_tiny_destinations(dests, mats, n, options; inplace = inplace)
-    opts =
-        isnothing(resolved_options) ? _resolve_options(options, first(mats)) :
-        resolved_options
-    if !_batch_has_default_augmented_options(opts)
-        # Resolve unsupported tiny strategies through the established scalar
-        # path.  Keep every destination untouched until the whole batch succeeds.
-        inverses = _inverse_batched_fallback(mats, options, opts)
-        for i in eachindex(mats)
-            parent(dests[i])[1:n, 1:n] .= @view parent(inverses[i])[1:n, 1:n]
+    full_rank = true
+    for k = 1:n
+        row = k
+        while row <= n && iszero(aug[row, k, batch])
+            row += 1
         end
-        return dests
+        if row > n
+            full_rank = false
+            break
+        end
+        inverse = _pluq_ka_inverse(aug[row, k, batch], N)
+        if iszero(inverse)
+            full_rank = false
+            break
+        end
+        if row != k
+            for j = k:(2n)
+                aug[k, j, batch], aug[row, j, batch] = aug[row, j, batch], aug[k, j, batch]
+            end
+        end
+        for j = k:(2n)
+            aug[k, j, batch] = T(rem(_pluq_ka_residue(aug[k, j, batch], N) * inverse, N))
+        end
+        for i = 1:n
+            i == k && continue
+            multiplier = aug[i, k, batch]
+            for j = k:(2n)
+                aug[i, j, batch] =
+                    T(_pluq_ka_submul(aug[i, j, batch], multiplier, aug[k, j, batch], N))
+            end
+        end
     end
+    ok[batch] = full_rank
+end
 
-    N = modulus(first(mats))
-    T = eltype(parent(first(mats)))
-    A = _pack_square_batch(mats, n, T)
-    invA = CUDA.zeros(T, n, n, length(mats))
-    ok = CUDA.zeros(Int32, length(mats))
-    @cuda threads=32 blocks=length(mats) _tiny_inverse_batched_kernel!(
-        A,
-        invA,
-        ok,
-        Int32(n),
-        Int32(N),
+function _inverse_batch_factor_tiny!(mats, n)
+    packed = _inverse_pack_matrices(mats, n)
+    b = length(mats)
+    p = similar(packed, Int32, (n, b))
+    q = similar(packed, Int32, (n, b))
+    ranks = similar(packed, Int32, b)
+    _inverse_tiny_factor_kernel!(KernelInterface.get_backend(packed))(
+        packed,
+        p,
+        q,
+        ranks,
+        n,
+        modulus(first(mats));
+        ndrange = b,
     )
-    okh = Array(ok)
-    for i in eachindex(mats)
-        okh[i] == 1 || throw(LinearAlgebra.SingularException(0))
+    ph, qh, rh = Array(p), Array(q), Array(ranks)
+    _inverse_unpack_matrices!(mats, packed, n, 0)
+    return [
+        PLUQ(mats[i], Int.(ph[:, i]), Int.(qh[:, i]), Int(rh[i])) for i in eachindex(mats)
+    ]
+end
+
+function _inverse_batch_factor!(mats, options; fixed_size = nothing)
+    _inverse_batch_inputs(mats, options)
+    isempty(mats) && return _inverse_empty_factors(mats)
+    _inverse_batch_homogeneous(mats)
+    _inverse_distinct_matrices(mats)
+    n = isnothing(fixed_size) ? _inverse_batch_square_size(mats) : fixed_size
+    if n !== nothing && _tiny_inverse_size(n)
+        _inverse_batch_tiny_shape(mats, n)
+        _inverse_batch_default_pluq(options) && return _inverse_batch_factor_tiny!(mats, n)
     end
-    for i in eachindex(mats)
-        parent(dests[i])[1:n, 1:n] .= @view invA[:, :, i]
+    return [pluq!(A; options) for A in mats]
+end
+
+"""
+Factor a batch in place and return factorizations wrapping those inputs.
+Metal batches use one queue (`batch_streams=1`).
+"""
+pluq_batched!(mats::AbstractVector{<:GPUModMatrix}; options::PLUQOptions = PLUQOptions()) =
+    _inverse_batch_factor!(mats, options)
+
+"""Factor input copies, preserving all input storage."""
+function pluq_batched(
+    mats::AbstractVector{<:GPUModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+)
+    _inverse_batch_inputs(mats, options)
+    return pluq_batched!(map(copy, mats); options)
+end
+
+"""Factor into distinct destination matrices after validating the whole batch."""
+function pluq_batched!(
+    dests::AbstractVector{<:GPUModMatrix},
+    mats::AbstractVector{<:GPUModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+)
+    _inverse_batch_inputs(mats, options)
+    _inverse_batch_destinations(dests, mats)
+    factors = pluq_batched(mats; options)
+    isempty(factors) && return _inverse_empty_factors(dests)
+    for i in eachindex(dests)
+        copyto!(dests[i], factors[i].LU)
+    end
+    return [
+        PLUQ(dests[i], factors[i].p, factors[i].q, factors[i].rank) for
+        i in eachindex(dests)
+    ]
+end
+
+function pluq_batched_NxN!(
+    mats::AbstractVector{<:GPUModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+)
+    _inverse_batch_square_size(mats) === nothing &&
+        !isempty(mats) &&
+        throw(DimensionMismatch("all matrices must have the same square shape"))
+    return _inverse_batch_factor!(mats, options)
+end
+
+function _inverse_batch_inverse(A, options)
+    m, n = size(A)
+    m == n && return inv(A; options)
+    return m < n ? right_inverse(A; options) : left_inverse(A; options)
+end
+
+function _inverse_batch_tiny!(dests, mats, n, options; inplace = false)
+    _inverse_batch_inputs(mats, options)
+    _inverse_batch_destinations(dests, mats; inplace)
+    isempty(mats) && return dests
+    _inverse_batch_tiny_shape(mats, n)
+    if _inverse_batch_default_augmented(options)
+        packed = _inverse_pack_matrices(mats, n)
+        b = length(mats)
+        aug = similar(packed, eltype(packed), (n, 2n, b))
+        ok = similar(packed, Bool, b)
+        _inverse_tiny_augmented_kernel!(KernelInterface.get_backend(packed))(
+            aug,
+            packed,
+            ok,
+            n,
+            modulus(first(mats));
+            ndrange = b,
+        )
+        all(Array(ok)) || throw(LinearAlgebra.SingularException(0))
+        return _inverse_unpack_matrices!(dests, aug, n, n)
+    end
+    inverses = [_inverse_batch_inverse(A, options) for A in mats]
+    for i in eachindex(dests)
+        copyto!(dests[i], inverses[i])
     end
     return dests
 end
 
 """
-    pluq_batched_4x4!(mats)
+    inverse_batched(mats; options=PLUQOptions())
 
-Run the tiny batched PLUQ factorization for fixed-size square matrices over a
-prime modulus. Variants are available for 4, 8, 16, and 32.
+Allocate inverses of a batch, using one-sided inverses for rectangular inputs.
+The fixed-size augmented path supports 4, 8, 16 and 32. Portable Metal batches
+support one queue (`batch_streams=1`).
 """
-pluq_batched_4x4!(mats::AbstractVector{<:CuModMatrix}) = _pluq_batched_tiny!(mats, 4)
-pluq_batched_8x8!(mats::AbstractVector{<:CuModMatrix}) = _pluq_batched_tiny!(mats, 8)
-pluq_batched_16x16!(mats::AbstractVector{<:CuModMatrix}) = _pluq_batched_tiny!(mats, 16)
-pluq_batched_32x32!(mats::AbstractVector{<:CuModMatrix}) = _pluq_batched_tiny!(mats, 32)
-
-"""
-    inverse_batched_4x4!(mats; options=PLUQOptions())
-    inverse_batched_4x4!(dests, mats; options=PLUQOptions())
-
-Invert 4x4 matrices in place, or write the inverses of `mats` into distinct
-caller-provided `dests`. The in-place form returns `mats`; the destination form
-returns `dests` and preserves `mats`. Destination validation and the singular
-batch check complete before any destination is changed. The 8x8, 16x16, and
-32x32 variants have the same forms. These qualified public names are not
-exported. `batch_streams` applies only when options select the scalar fallback.
-"""
-inverse_batched_4x4!(
-    mats::AbstractVector{<:CuModMatrix};
+function inverse_batched(
+    mats::AbstractVector{<:GPUModMatrix};
     options::PLUQOptions = PLUQOptions(),
-) = _inverse_batched_tiny!(mats, mats, 4; options = options, inplace = true)
-inverse_batched_4x4!(
-    dests::AbstractVector{<:CuModMatrix},
-    mats::AbstractVector{<:CuModMatrix};
+)
+    _inverse_batch_inputs(mats, options)
+    isempty(mats) && return GPUModMatrix[]
+    n = _inverse_batch_square_size(mats)
+    if n !== nothing && _tiny_inverse_size(n)
+        _inverse_batch_tiny_shape(mats, n)
+        if _inverse_batch_default_augmented(options)
+            return _inverse_batch_tiny!(map(similar, mats), mats, n, options)
+        end
+    end
+    return [_inverse_batch_inverse(A, options) for A in mats]
+end
+
+pluq_batched_4x4!(
+    mats::AbstractVector{<:GPUModMatrix};
     options::PLUQOptions = PLUQOptions(),
-) = _inverse_batched_tiny!(dests, mats, 4; options = options)
+) = _inverse_batch_factor!(mats, options; fixed_size = 4)
+
+inverse_batched_4x4!(
+    mats::AbstractVector{<:GPUModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batch_tiny!(mats, mats, 4, options; inplace = true)
+
+inverse_batched_4x4!(
+    dests::AbstractVector{<:GPUModMatrix},
+    mats::AbstractVector{<:GPUModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batch_tiny!(dests, mats, 4, options)
+
+pluq_batched_8x8!(
+    mats::AbstractVector{<:GPUModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batch_factor!(mats, options; fixed_size = 8)
 
 inverse_batched_8x8!(
-    mats::AbstractVector{<:CuModMatrix};
+    mats::AbstractVector{<:GPUModMatrix};
     options::PLUQOptions = PLUQOptions(),
-) = _inverse_batched_tiny!(mats, mats, 8; options = options, inplace = true)
+) = _inverse_batch_tiny!(mats, mats, 8, options; inplace = true)
+
 inverse_batched_8x8!(
-    dests::AbstractVector{<:CuModMatrix},
-    mats::AbstractVector{<:CuModMatrix};
+    dests::AbstractVector{<:GPUModMatrix},
+    mats::AbstractVector{<:GPUModMatrix};
     options::PLUQOptions = PLUQOptions(),
-) = _inverse_batched_tiny!(dests, mats, 8; options = options)
+) = _inverse_batch_tiny!(dests, mats, 8, options)
+
+pluq_batched_16x16!(
+    mats::AbstractVector{<:GPUModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batch_factor!(mats, options; fixed_size = 16)
 
 inverse_batched_16x16!(
-    mats::AbstractVector{<:CuModMatrix};
+    mats::AbstractVector{<:GPUModMatrix};
     options::PLUQOptions = PLUQOptions(),
-) = _inverse_batched_tiny!(mats, mats, 16; options = options, inplace = true)
+) = _inverse_batch_tiny!(mats, mats, 16, options; inplace = true)
+
 inverse_batched_16x16!(
-    dests::AbstractVector{<:CuModMatrix},
-    mats::AbstractVector{<:CuModMatrix};
+    dests::AbstractVector{<:GPUModMatrix},
+    mats::AbstractVector{<:GPUModMatrix};
     options::PLUQOptions = PLUQOptions(),
-) = _inverse_batched_tiny!(dests, mats, 16; options = options)
+) = _inverse_batch_tiny!(dests, mats, 16, options)
+
+pluq_batched_32x32!(
+    mats::AbstractVector{<:GPUModMatrix};
+    options::PLUQOptions = PLUQOptions(),
+) = _inverse_batch_factor!(mats, options; fixed_size = 32)
 
 inverse_batched_32x32!(
-    mats::AbstractVector{<:CuModMatrix};
+    mats::AbstractVector{<:GPUModMatrix};
     options::PLUQOptions = PLUQOptions(),
-) = _inverse_batched_tiny!(mats, mats, 32; options = options, inplace = true)
+) = _inverse_batch_tiny!(mats, mats, 32, options; inplace = true)
+
 inverse_batched_32x32!(
-    dests::AbstractVector{<:CuModMatrix},
-    mats::AbstractVector{<:CuModMatrix};
+    dests::AbstractVector{<:GPUModMatrix},
+    mats::AbstractVector{<:GPUModMatrix};
     options::PLUQOptions = PLUQOptions(),
-) = _inverse_batched_tiny!(dests, mats, 32; options = options)
+) = _inverse_batch_tiny!(dests, mats, 32, options)

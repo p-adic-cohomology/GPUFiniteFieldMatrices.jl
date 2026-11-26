@@ -1,109 +1,96 @@
-"""
-    pluq_blocked_recursive_gpu!(Adata, N, opts, p, q, start, stop, n)
-
-Recursively apply blocked PLUQ on active index interval `[start, stop]`.
-Uses basecase elimination, triangular solves, and Schur updates on GPU.
-
-The recursion implements:
-1. Base/panel PLUQ on the diagonal block
-2. `L11 * U12 = A12` (left TRSM)
-3. `L21 * U11 = A21` (right TRSM)
-4. Schur update `A22 -= L21*U12`
-5. Recurse on the trailing block
-"""
-function pluq_blocked_recursive_gpu!(
-    Adata::CuArray{T,2},
-    N::Int,
-    opts::PLUQOptions,
-    pdev,
-    qdev,
-    dinv,
-    rank_slot,
-    rank_host,
-    start::Int,
-    stop::Int,
-    n::Int,
-) where {T}
-    if start > stop
-        return 0
-    end
-    seglen = stop - start + 1
-    if seglen <= opts.basecase
-        return pluq_panel_fused_gpu!(
-            Adata,
+# The fused panel has already reduced the portion of the Schur complement
+# inside kend. Finish the missing outer solves, then restore that small
+# portion after the ordinary Schur update over the whole trailing rectangle.
+function _pluq_ka_finish_panel!(A, N, opts, start, last, kend, m, n, dinv)
+    depth = last - start + 1
+    use_subgroup =
+        last == kend &&
+        eltype(A) === Float32 &&
+        _storage_backend(A) === Val(:metal) &&
+        (
+            opts.trsm_mode === :warp ||
+            (opts.trsm_mode === :auto && depth <= opts.trsm_warp_threshold)
+        ) &&
+        _ki_trsm_supports_subgroups(KernelInterface.get_backend(A))
+    if use_subgroup
+        _ki_trsm_panel!(
+            A,
             N,
-            pdev,
-            qdev,
-            dinv,
-            rank_slot,
-            rank_host,
             start,
-            stop,
-            n,
+            last,
+            n;
+            side = :left,
+            uplo = :lower,
+            unit_diagonal = true,
         )
+        _ki_trsm_panel!(
+            A,
+            N,
+            start,
+            last,
+            m;
+            side = :right,
+            uplo = :upper,
+            unit_diagonal = false,
+        )
+    else
+        # Partial panels already solved the right-hand sides within kend.
+        _pluq_ka_trsm_left!(A, N, start, last, kend + 1, n)
+        _pluq_ka_trsm_right!(A, N, start, last, kend + 1, m, dinv)
     end
-    b = min(opts.blocksize, seglen)
-    kend = min(start + b - 1, stop)
-    rank = pluq_panel_fused_gpu!(
-        Adata,
-        N,
-        pdev,
-        qdev,
-        dinv,
-        rank_slot,
-        rank_host,
-        start,
-        kend,
-        n,
-    )
-    panel_width = kend - start + 1
-    if rank < panel_width
-        return rank
+    if last == min(m, n) || kend == max(m, n)
+        return A
     end
-    pluq_trsm_left_lower_unit_gpu!(Adata, N, start, kend, stop, options = opts)
-    pluq_trsm_right_upper_gpu!(Adata, N, start, kend, stop, options = opts, dinv = dinv)
-    pluq_schur_update_gpu!(Adata, N, start, kend, stop, options = opts)
-    rank += pluq_blocked_recursive_gpu!(
-        Adata,
-        N,
-        opts,
-        pdev,
-        qdev,
-        dinv,
-        rank_slot,
-        rank_host,
-        kend + 1,
-        stop,
-        n,
-    )
-    return rank
+    if last == kend
+        pluq_schur_update_rect_gpu!(A, N, start, last, m, n; options = opts)
+    else
+        unfinished = (last+1):kend
+        remainder = view(A, unfinished, unfinished)
+        saved = similar(_elementwise_native_root(A), eltype(A), size(remainder))
+        saved .= remainder
+        pluq_schur_update_rect_gpu!(A, N, start, last, m, n; options = opts)
+        remainder .= saved
+    end
+    return A
 end
 
-"""
-    pluq_blocked_gpu!(Adata, N, opts, n)
+function _pluq_ka_blocked!(A, N, m, n, opts, rectangular::Val)
+    _pluq_ka_check_matrix(A, N, m, n)
+    stop = min(m, n)
+    stop == 0 && return pluq_init_perm(m), pluq_init_perm(n), 0
 
-Run recursive blocked PLUQ on `Adata` and return `(p, q, rank)`.
-"""
-function pluq_blocked_gpu!(Adata::CuArray{T,2}, N::Int, opts::PLUQOptions, n::Int) where {T}
-    pdev = CuArray(Int32.(1:n))
-    qdev = CuArray(Int32.(1:n))
-    dinv = CUDA.zeros(T, n)
-    rank_slot = CUDA.zeros(Int32, 1)
-    rank_host = _pluq_host_i32_buffer()
-    rank = pluq_blocked_recursive_gpu!(
-        Adata,
-        N,
-        opts,
-        pdev,
-        qdev,
-        dinv,
-        rank_slot,
-        rank_host,
-        1,
-        n,
-        n,
-    )
-    p = Int.(Array(pdev))
-    q = Int.(Array(qdev))
-    return p, q, rank
+    logical = _logical_view(A, (m, n))
+    _launch_mod_arrays!(logical, logical, N, _PLUQ_KA_GROUP_SIZE)
+    native = _elementwise_native_root(A)
+    p, q = _pluq_ka_device_permutations(A, m, n)
+    dinv = similar(native, eltype(A), stop)
+    slot = similar(native, Int32, 1)
+    host = Vector{Int32}(undef, 1)
+    max_panel = isqrt(Int(_PLUQ_KA_NO_CANDIDATE) - 1)
+    start, rank = 1, 0
+    while start <= stop
+        remaining = stop - start + 1
+        use_basecase = rectangular isa Val{false} && remaining <= opts.basecase
+        depth = use_basecase ? remaining : min(opts.blocksize, remaining)
+        kend = start + min(depth, max_panel) - 1
+        panel_rank =
+            _pluq_ka_panel!(A, N, p, q, dinv, slot, host, start, kend, m, n, rectangular)
+        rank = start + panel_rank - 1
+        if panel_rank > 0
+            _pluq_ka_finish_panel!(A, N, opts, start, rank, kend, m, n, dinv)
+        end
+        if rank < kend
+            # A zero diagonal panel does not imply zero rank outside it.
+            # Continue from the fully updated remainder, with complete pivots.
+            rank =
+                _pluq_ka_complete!(A, N, p, q, slot, host, rank + 1, m, n; options = opts)
+            break
+        end
+        start = kend + 1
+    end
+    return Int.(Array(p)), Int.(Array(q)), rank
+end
+
+function pluq_blocked_gpu!(A::AbstractMatrix, N::Int, opts::PLUQOptions, n::Int)
+    return _pluq_ka_blocked!(A, N, n, n, opts, Val(false))
 end

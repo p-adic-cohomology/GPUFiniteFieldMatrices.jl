@@ -2,6 +2,8 @@ using CUDA
 using BenchmarkTools
 using GPUFiniteFieldMatrices
 
+const CUDAExt = Base.get_extension(GPUFiniteFieldMatrices, :GPUFiniteFieldMatricesCUDAExt)
+
 function find_max_cublas(M::CuMatrix{T}, col::Int, start_row::Int) where {T}
 
     @assert 1 <= col <= size(M, 2) "Column index out of bounds"
@@ -14,11 +16,7 @@ function find_max_cublas(M::CuMatrix{T}, col::Int, start_row::Int) where {T}
     relative_max_idx = CUDA.CuRef{Int64}(0)
 
     # Call cuBLAS iamax to find index of maximum absolute value
-    GPUFiniteFieldMatrices._CUDA_BLAS.iamax(
-        length(col_subrange),
-        col_subrange,
-        relative_max_idx,
-    )
+    CUDAExt._CUDA_BLAS.iamax(length(col_subrange), col_subrange, relative_max_idx)
 
     # Convert to absolute row index
     absolute_row_idx = relative_max_idx[] + start_row - 1
@@ -65,7 +63,7 @@ for i = 10000:10000:10000
 
     # println("isamax wrapper of all elements:")
     # result = CUDA.CuRef{Int64}(0)
-    # @btime GPUFiniteFieldMatrices._CUDA_BLAS.iamax(length($d_A), $d_A, $result)
+    # @btime CUDAExt._CUDA_BLAS.iamax(length($d_A), $d_A, $result)
 
     return
 end

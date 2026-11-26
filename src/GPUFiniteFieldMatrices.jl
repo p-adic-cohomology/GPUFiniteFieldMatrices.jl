@@ -1,76 +1,100 @@
 module GPUFiniteFieldMatrices
 
-using CUDA:
-    CUDA,
-    @cuda,
-    CuArray,
-    CuDeviceVector,
-    CuRef,
-    CuStaticSharedArray,
-    CuStream,
-    blockDim,
-    blockIdx,
-    gridDim,
-    sync_threads,
-    synchronize,
-    threadIdx
-
-# CUDA 6 uses cuBLAS while CUDA 5.11 exposes only CUBLAS, so select the available binding with getfield to avoid resolving CUDA 6's deprecated alias.
-@static if isdefined(CUDA, :cuBLAS)
-    const _CUDA_BLAS = CUDA.cuBLAS
-else
-    const _CUDA_BLAS = getfield(CUDA, :CUBLAS)
-end
-
-using LinearAlgebra: LinearAlgebra, I, mul!, rank
-
-
-using SparseArrays: SparseArrays
-using IterTools: IterTools
-
-# This check keeps return types predictable so the functions below stay fast.
 using DispatchDoctor: @stable
+using LinearAlgebra: LinearAlgebra
+import Random
+using SparseArrays: SparseArrays
+import GPUArrays
+import KernelAbstractions
+import KernelAbstractions: @index, @kernel
+import KernelInterface
 
 const DEBUG = false
 
+function add! end
+function sub! end
+function neg! end
+function scalar_add! end
+function scalar_sub! end
+function elementwise_multiply! end
+function mod_elements! end
+function similar_with_modulus end
+function change_modulus end
+function change_modulus!! end
+function stripe_mul end
+function stripe_mul! end
+function karatsuba_gemv! end
+function scalar_multiply! end
+function negate! end
+function divide_elements! end
+function mul_elementwise! end
+function rscalar_sub! end
+function div! end
+function mod! end
+function pluq end
+function pluq! end
+function inverse_pluq end
+function pluq_batched! end
+function pluq_batched end
+function inverse_batched end
+function pluq_batched_4x4! end
+function pluq_batched_8x8! end
+function pluq_batched_16x16! end
+function pluq_batched_32x32! end
+function pluq_batched_NxN! end
+function inverse_batched_4x4! end
+function inverse_batched_8x8! end
+function inverse_batched_16x16! end
+function inverse_batched_32x32! end
+function is_invertible end
+function is_invertible_with_inverse end
+function right_inverse end
+function left_inverse end
+function identity_matrix end
+function initialize_plan! end
+function upper_triangular_inverse_no_copy end
+function lower_triangular_inverse_no_copy end
+
 @stable default_mode = "disable" begin
+    include("backend/storage.jl")
+    include("backend/selection.jl")
 
     include("CuModMatrix/CuModMatrix.jl")
-
-    include("CuModMatrix/kernel_mul/mat_mul_gpu_direct.jl")
-    include("CuModMatrix/kernel_mul/mat_mul_ops.jl")
-    include("CuModMatrix/kernel_mul/stripe_mul.jl")
-
-    include("KaratsubaMatrix/KaratsubaMatrix.jl")
-    include("KaratsubaMatrix/KaratsubaKernels.jl")
-
-    include("CuModMatrix/kernel_ops/common.jl")
-    include("CuModMatrix/kernel_ops/add_ops.jl")
-    include("CuModMatrix/kernel_ops/sub_ops.jl")
-    include("CuModMatrix/kernel_ops/mul_ops.jl")
-    include("CuModMatrix/kernel_ops/div_ops.jl")
-    include("CuModMatrix/kernel_ops/mod_ops.jl")
-
-    include("CuModMatrix/triangular/triangular_inverse_no_copy.jl")
-    include("CuModMatrix/triangular/substitution_inplace.jl")
+    include("CuModMatrix/host_math.jl")
     include("CuModMatrix/inverse/types.jl")
     include("CuModMatrix/inverse/mod_arith.jl")
     include("CuModMatrix/inverse/perm_vectors.jl")
-    include("CuModMatrix/inverse/basecase_pluq.jl")
-    include("CuModMatrix/inverse/rectangular_pluq.jl")
-    include("CuModMatrix/inverse/trsm.jl")
-    include("CuModMatrix/inverse/schur_update.jl")
-    include("CuModMatrix/inverse/blocked_recursive_pluq.jl")
-    include("CuModMatrix/inverse/extract.jl")
-    include("CuModMatrix/inverse/validation.jl")
-    include("CuModMatrix/inverse/api.jl")
-    include("CuModMatrix/inverse/batched_tiny.jl")
+
+    include("KaratsubaMatrix/KaratsubaMatrix.jl")
     include("base_methods.jl")
+end
 
-end # @stable default_mode = "disable"
+# Device kernels must not contain DispatchDoctor host-side instrumentation.
+include("CuModMatrix/kernel_ops/elementwise.jl")
+include("KaratsubaMatrix/conversion_kernels.jl")
+include("KaratsubaMatrix/elementwise_kernels.jl")
+include("KaratsubaMatrix/device_operations.jl")
+include("KaratsubaMatrix/products.jl")
+include("CuModMatrix/inverse/basecase_pluq.jl")
+include("CuModMatrix/inverse/rectangular_pluq.jl")
+include("CuModMatrix/inverse/trsm.jl")
+include("CuModMatrix/inverse/blocked_recursive_pluq.jl")
+include("CuModMatrix/inverse/subgroups/pivot.jl")
+include("CuModMatrix/inverse/subgroups/trsm.jl")
+include("CuModMatrix/inverse/validation.jl")
+include("CuModMatrix/inverse/extract.jl")
+include("CuModMatrix/inverse/api.jl")
+include("CuModMatrix/inverse/batched_tiny.jl")
 
-# Public API
-export CuModArray, CuModMatrix, CuModVector
+include("CuModMatrix/kernel_mul/stripe_mul.jl")
+include("CuModMatrix/kernel_mul/mat_mul_gpu_direct.jl")
+include("CuModMatrix/kernel_mul/mat_mul_ops.jl")
+include("CuModMatrix/inverse/schur_update.jl")
+include("CuModMatrix/triangular/substitution_inplace.jl")
+include("CuModMatrix/triangular/triangular_inverse_no_copy.jl")
+
+export GPUModArray, GPUModMatrix, GPUModVector, CuModArray, CuModMatrix, CuModVector
+export MtlModArray, MtlModMatrix, MtlModVector
 export KaratsubaArray, KaratsubaMatrix, KaratsubaVector
 export to_karatsuba, from_karatsuba
 export modulus, low_modulus, high_modulus, low_part, high_part
@@ -79,17 +103,15 @@ export pluq, pluq!, is_invertible, is_invertible_with_inverse
 export pluq_batched!, pluq_batched, inverse_batched
 export right_inverse, left_inverse, change_modulus, identity_matrix
 export elementwise_multiply!, scalar_add!, scalar_sub!, mod_elements!
+export default_backend, set_default_backend!, with_backend
 
-public add!, sub!, neg!, zero!
-public zeros, rand, similar_with_modulus, change_modulus!!, mod_inv
-public karatsuba_gemv!
-public inverse_pluq
+public add!, sub!, neg!, zero!, zeros, rand, similar_with_modulus, change_modulus!!, mod_inv
+public initialize_plan!
+public karatsuba_gemv!, inverse_pluq
 public pluq_batched_4x4!, pluq_batched_8x8!, pluq_batched_16x16!, pluq_batched_32x32!
 public inverse_batched_4x4!,
     inverse_batched_8x8!, inverse_batched_16x16!, inverse_batched_32x32!
-public pluq_batched_NxN!
-public upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
-public stripe_mul, stripe_mul!, TILE_WIDTH
-public ModulusMismatchError
+public pluq_batched_NxN!, upper_triangular_inverse_no_copy, lower_triangular_inverse_no_copy
+public stripe_mul, stripe_mul!, TILE_WIDTH, ModulusMismatchError
 
 end

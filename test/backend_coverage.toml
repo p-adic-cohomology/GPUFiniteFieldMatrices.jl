@@ -1,0 +1,194 @@
+schema_version = 1
+stage = "E13 integrated CPU and Metal coverage"
+source_base = "95b997a2803307b49ff76f01e629a3a7ded54f11"
+full_metal_parity = true
+metal_parity_scope = "Documented Metal configurations on Apple M3 Max. Shader arithmetic uses SharedStorage and PrivateStorage with scalar indexing disabled. Float32 MPS products and single-stream Metal batching retain their documented constraints."
+cuda_runtime_status = "CUDA 6.5.1 was installed and reported nonfunctional. CUDA numerical, multidevice, performance and profiling checks require NVIDIA hardware."
+cuda_dispatch_scope = "Shared KernelAbstractions elementwise methods and native cuBLAS products are wired for CUDA. The CUDA extension retains several legacy ordinary PLUQ, inverse and Karatsuba implementations alongside the preserved subgroup kernels."
+measured_default_suite_assertions = 4747
+measured_default_suite_passes = 4747
+measured_default_suite_testsets = 42
+measured_default_suite_source = "sh test/run-pkg-test.sh"
+measured_explicit_metal_suite_assertions = 3853
+measured_metal_containing_testset_assertions = 2943
+measured_explicit_metal_other_assertions = 910
+count_semantics = "Family assertion counts are disjoint top-level testsets from the explicit Metal run. Metal-containing testsets mix device correctness with policy, reference, validation and metadata assertions. Backend skip counts are unavailable run lanes. The suite recorded zero broken or skipped assertions."
+measurement_scope = "Each selected run is reported independently. Default, Metal-only and core runs overlap. Supplemental device checks and import loads are excluded from all package totals."
+
+[[families]]
+name = "Metal modular wrapper and elementwise contracts"
+applies_to = ["metal"]
+status = "tested_on_metal"
+assertion_count = 262
+pass_count = 262
+skip_count = 0
+evidence = "test/metal_storage_test.jl"
+notes = "Construction, views, copy, fill, random factories, exact add/subtract/negate and modular mutation, ragged shapes, aliases and unchanged padding on invalid operations."
+
+[[families]]
+name = "Metal exact Float32 products"
+applies_to = ["metal"]
+status = "tested_on_metal"
+assertion_count = 358
+pass_count = 358
+skip_count = 0
+evidence = "test/metal_products_test.jl"
+notes = "GEMM and GEMV, MPS stripe bounds, empty and ragged products, logical views, private outputs, destination identity and preflight validation."
+
+[[families]]
+name = "Metal ordinary Schur and triangular kernels"
+applies_to = ["metal"]
+status = "tested_on_metal"
+assertion_count = 346
+pass_count = 346
+skip_count = 0
+evidence = "test/metal_ordinary_inverse_test.jl"
+notes = "Tiled products, Schur updates, destination-first solves, structured views and square and wide triangular inverses."
+
+[[families]]
+name = "Metal ordinary PLUQ panels and TRSM"
+applies_to = ["metal"]
+status = "tested_on_metal"
+assertion_count = 444
+pass_count = 444
+skip_count = 0
+evidence = "test/CuModMatrix/inverse/test_ordinary_ka.jl"
+notes = "Ordinary and subgroup-enabled blocked drivers, fused panels, packed triangular solves, empty and rectangular inputs, late and rank-deficient pivots."
+
+[[families]]
+name = "Standalone Metal PLUQ pivots"
+applies_to = ["metal"]
+status = "tested_on_metal"
+assertion_count = 399
+pass_count = 399
+skip_count = 0
+evidence = "test/CuModMatrix/inverse/metal_subgroup_pivot_test.jl"
+notes = "Ballot, shuffle and workgroup choices, measured subgroup width, ragged and empty panels, ties and bounds."
+
+[[families]]
+name = "Metal KI subgroup TRSM"
+applies_to = ["metal"]
+status = "tested_on_metal"
+assertion_count = 234
+pass_count = 234
+skip_count = 0
+evidence = "test/CuModMatrix/inverse/test_metal_subgroup_trsm.jl"
+notes = "Left and right solves, full and partial panel depths, bounded exact work and validation before writes."
+
+[[families]]
+name = "Portable inverse API on Metal"
+applies_to = ["metal"]
+status = "tested_on_metal"
+assertion_count = 174
+pass_count = 174
+skip_count = 0
+evidence = "test/CuModMatrix/inverse/test_portable_inverse_metal.jl"
+notes = "Packed PLUQ and factors, permutations, rank, invertibility, square PLUQ and augmented inverses, and rectangular one-sided inverses."
+
+[[families]]
+name = "Portable tiny batches on Metal"
+applies_to = ["metal"]
+status = "tested_on_metal"
+assertion_count = 290
+pass_count = 290
+skip_count = 0
+evidence = "test/CuModMatrix/inverse/test_portable_inverse_metal.jl"
+notes = "Fixed-size 4, 8, 16 and 32 cases and generic batch routes, destination ownership, duplicates, aliasing, empty and invalid batches."
+
+[[families]]
+name = "Metal Karatsuba storage and elementwise"
+applies_to = ["metal"]
+status = "tested_on_metal"
+assertion_count = 171
+pass_count = 171
+skip_count = 0
+evidence = "test/metal_karatsuba_storage_test.jl"
+notes = "Raw and wrapped components, logical conversion and reconstruction, plans, copy and unary operations, distinct storage and exactness errors."
+
+[[families]]
+name = "Metal Karatsuba products"
+applies_to = ["metal"]
+status = "tested_on_metal"
+assertion_count = 265
+pass_count = 265
+skip_count = 0
+evidence = "test/metal_karatsuba_products_test.jl"
+notes = "GEMM planes and independent stripe budgets, whole-dot GEMV and radix divisibility, empty and ragged products, destination and plan ownership."
+
+[[families]]
+name = "Core, host policy, and package hygiene in the explicit Metal run"
+applies_to = ["core"]
+status = "pass"
+assertion_count = 910
+pass_count = 910
+skip_count = 0
+evidence = "Other testsets in test/runtests.jl"
+notes = "Includes exact integer host references, selection, API and preflight, Aqua and ExplicitImports."
+
+[[families]]
+name = "CUDA hardware coverage"
+applies_to = ["cuda"]
+status = "hardware_deferred"
+assertion_count = 0
+pass_count = 0
+skip_count = 1
+evidence = "test/runtests.jl with CUDA.functional() == false"
+notes = "Default runs exercise CUDA extension imports, host contracts and dispatch metadata. The explicit CUDA request exits before tests on this machine."
+
+[[selected_run_coverage]]
+name = "Default package wrapper"
+selected_backends = ["cuda", "metal"]
+functional_backends = ["metal"]
+assertion_count = 4747
+pass_count = 4747
+testset_count = 42
+zero_assertion_testsets = ["Only requested optional vendor is imported", "CuModMatrix.jl"]
+broken_or_skipped_assertion_count = 0
+metal_family_skip_count = 0
+unavailable_cuda_runs = 1
+
+[[selected_run_coverage]]
+name = "Raw Pkg.test() in a vendor-free initial view"
+selected_backends = ["cuda", "metal"]
+functional_backends = ["metal"]
+assertion_count = 4747
+pass_count = 4747
+testset_count = 42
+zero_assertion_testsets = ["Only requested optional vendor is imported", "CuModMatrix.jl"]
+broken_or_skipped_assertion_count = 0
+metal_family_skip_count = 0
+unavailable_cuda_runs = 1
+
+[[selected_run_coverage]]
+name = "Explicit Metal package wrapper"
+selected_backends = ["metal"]
+functional_backends = ["metal"]
+assertion_count = 3853
+pass_count = 3853
+testset_count = 30
+zero_assertion_testsets = []
+broken_or_skipped_assertion_count = 0
+metal_family_skip_count = 0
+unavailable_cuda_runs = 0
+
+[[selected_run_coverage]]
+name = "Vendor-free core smoke"
+selected_backends = []
+functional_backends = []
+assertion_count = 731
+pass_count = 731
+testset_count = 7
+zero_assertion_testsets = []
+broken_or_skipped_assertion_count = 0
+metal_family_skip_count = 0
+unavailable_cuda_runs = 0
+
+[[selected_run_coverage]]
+name = "Explicit CUDA preflight"
+selected_backends = ["cuda"]
+functional_backends = []
+status = "expected_nonfunctional_backend_error"
+assertion_count = 0
+pass_count = 0
+testset_count = 0
+exit_code = 1

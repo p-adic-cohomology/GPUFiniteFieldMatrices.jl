@@ -1,51 +1,33 @@
 """
-    -(A::CuModArray)
+    -(A::KaratsubaArray)
 
-Return a new array containing the additive inverse of each logical entry of
-`A`, reduced modulo `modulus(A)`. The input must use the established padded
-storage geometry accepted by allocating elementwise operations.
+Return a negated copy of the modular value represented by `A`.
 """
-Base.@propagate_inbounds @inline function Base.:-(A::CuModArray)
-    @boundscheck _check_elementwise_allocating_input(A)
-    return CUDA.device!(CUDA.device(parent(A))) do
-        B = similar_with_modulus(A, modulus(A))
-        neg!(B, A)
-        B
-    end
+function Base.:-(A::KaratsubaArray)
+    result = copy(A)
+    negate!(result, A)
+    return result
 end
 
 """
-    -(A::KaratsubaArray)
+    -(A::CuModArray)
 
-Return a new Karatsuba array containing the additive inverse of `A`. The
-existing copy and `negate!` paths preserve the component and plan conventions.
-GPU-backed components are copied and negated in their input CUDA context;
-other storage keeps the existing generic path.
+Return a new modular array containing the additive inverse of each logical
+entry of `A`.
 """
-function Base.:-(A::KaratsubaArray)
-    compute_negative = () -> begin
-        B = copy(A)
-        negate!(B, A)
-        B
-    end
-
-    component = low_part(A)
-    component_storage = component isa CuModArray ? parent(component) : component
-    if component_storage isa CUDA.CuArray
-        return CUDA.device!(compute_negative, CUDA.device(component_storage))
-    end
-
-    return compute_negative()
+function Base.:-(A::GPUModArray)
+    result = similar_with_modulus(A, modulus(A))
+    neg!(result, A)
+    return result
 end
 
 """
     A == B
 
-Compare the logical entries and stored moduli of two `CuModArray`s. Physical
-padding and backing layouts are ignored. A shape or modulus mismatch returns
-`false` without launching a comparison.
+Compare the logical entries and stored moduli of two `GPUModArray`s. Physical
+padding and backing layouts are ignored.
 """
-function Base.:(==)(A::CuModArray, B::CuModArray)
+function Base.:(==)(A::GPUModArray, B::GPUModArray)
     size(A) == size(B) || return false
     modulus(A) == modulus(B) || return false
     isempty(A) && return true
@@ -61,9 +43,9 @@ LinearAlgebra.rank(F::PLUQ) = getfield(F, :rank)
 """
     LinearAlgebra.rank(A::CuModMatrix; options=PLUQOptions())
 
-Return the rank of `A` over its stored modulus using the existing non-mutating
-PLUQ path and its options.
+Return the rank of `A` over its stored modulus using the nonmutating PLUQ
+path and the supplied options.
 """
-function LinearAlgebra.rank(A::CuModMatrix; options::PLUQOptions = PLUQOptions())
+function LinearAlgebra.rank(A::GPUModMatrix; options::PLUQOptions = PLUQOptions())
     return LinearAlgebra.rank(pluq(A; options = options))
 end
