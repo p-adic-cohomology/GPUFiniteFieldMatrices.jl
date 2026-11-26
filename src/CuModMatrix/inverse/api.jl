@@ -79,6 +79,59 @@ function is_invertible_with_inverse(A::GPUModMatrix; debug::Bool = false)
     return true, result
 end
 
+@kernel inbounds = true function _inverse_determinant_kernel!(out, A, n, N)
+    value = Int64(1)
+    for i = 1:n
+        value = rem(value * _pluq_ka_residue(A[i, i], N), N)
+    end
+    out[1] = value
+end
+
+function _inverse_odd_permutation(p)
+    visited = falses(length(p))
+    odd = false
+    for i in eachindex(p)
+        visited[i] && continue
+        j = p[i]
+        while j != i
+            visited[j] = true
+            odd = !odd
+            j = p[j]
+        end
+        visited[i] = true
+    end
+    return odd
+end
+
+"""Return the determinant modulo the stored modulus, using both permutation signs."""
+function LinearAlgebra.det(F::PLUQ)
+    A = F.LU
+    m, n = size(A)
+    m == n || throw(DimensionMismatch("matrix must be square"))
+    _inverse_preflight(A, PLUQOptions())
+    _inverse_validate_factor(F)
+    F.rank == n || return zero(eltype(A))
+    n == 0 && return one(eltype(A))
+    data = parent(A)
+    value = similar(_elementwise_native_root(data), Int64, 1)
+    N = modulus(A)
+    _inverse_determinant_kernel!(KernelInterface.get_backend(data), 1)(
+        value,
+        data,
+        n,
+        N;
+        ndrange = 1,
+    )
+    d = only(Array(value))
+    odd = _inverse_odd_permutation(F.p) != _inverse_odd_permutation(F.q)
+    return eltype(A)(mod(odd ? -d : d, N))
+end
+
+function LinearAlgebra.det(A::GPUModMatrix; options::PLUQOptions = PLUQOptions())
+    size(A, 1) == size(A, 2) || throw(DimensionMismatch("matrix must be square"))
+    return LinearAlgebra.det(pluq(A; options))
+end
+
 @kernel inbounds = true function _inverse_init_augmented!(aug, source, n, N)
     i, j = @index(Global, NTuple)
     aug[i, j] = if j <= n
