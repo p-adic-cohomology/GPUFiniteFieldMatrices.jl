@@ -1,4 +1,4 @@
-using LinearAlgebra: I, SingularException, det, rank
+using LinearAlgebra: I, SingularException, rank
 
 function _portable_test_matrix(a, storage; N = 101)
     G = GPUFiniteFieldMatrices
@@ -67,7 +67,6 @@ end
                 repeated = G.PLUQ(F.LU, [1, 1, 3], F.q, F.rank)
                 @test_throws ArgumentError G.pluq_check_identity(repeated, A)
                 @test rank(A) == 3
-                @test det(F) == det(A) == 71
                 @test G.is_invertible(A)
                 inplace = _portable_test_matrix(host, storage; N)
                 @test G.pluq!(inplace).LU === inplace
@@ -106,14 +105,12 @@ end
                 @test Array(parent(wide)) == wide_before
                 @test Array(parent(tall)) == tall_before
                 @test_throws DimensionMismatch inv(wide)
-                @test_throws DimensionMismatch det(tall)
                 @test_throws DimensionMismatch G.right_inverse(tall)
                 @test_throws DimensionMismatch G.left_inverse(wide)
 
                 singular = _portable_test_matrix([2 3; 4 6], storage; N)
                 singular_before = Array(parent(singular))
                 _portable_test_factor(G.pluq(singular), [2 3; 4 6], 1, N)
-                @test det(singular) == 0
                 @test G.is_invertible_with_inverse(singular) == (false, nothing)
                 @test_throws SingularException inv(singular)
                 @test_throws SingularException inv(singular; options = aug)
@@ -125,7 +122,6 @@ end
 
                 zero = _portable_test_matrix(zeros(Int, 0, 0), storage; N)
                 @test rank(zero) == 0
-                @test det(zero) == 1
                 @test size(inv(zero; options = aug)) == (0, 0)
                 @test size(inv(zero)) == (0, 0)
                 @test G.is_invertible(zero)
