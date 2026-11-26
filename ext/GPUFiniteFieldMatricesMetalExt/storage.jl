@@ -169,6 +169,21 @@ function _construct_metal_host(
     return _wrap_metal_storage(data, logical_dims, N)
 end
 
+function FFM._construct_modular_array(
+    ::Type{T},
+    values::AbstractArray{S},
+    ::Metal.MtlArray;
+    backend = nothing,
+    modulus::Integer,
+    mod::Bool = true,
+    new_size = nothing,
+    storage = :default,
+    device = nothing,
+) where {T,S}
+    FFM._validate_native_wrap(T, S, backend, :metal)
+    return _wrap_metal_storage(values, new_size, modulus; storage, device)
+end
+
 function (::Type{MtlModArray{T,D}})(
     values::AbstractArray{S,D};
     modulus::Integer,

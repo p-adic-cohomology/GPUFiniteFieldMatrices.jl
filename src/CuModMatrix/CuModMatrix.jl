@@ -125,23 +125,21 @@ function _requested_backend(backend)
     return _check_backend_symbol(backend)
 end
 
-function _constructor_backend(values::AbstractArray, backend)
-    source = _storage_backend(values)
-    if source !== nothing
-        source_backend = _backend_symbol(source)
-        if backend !== nothing && backend !== :auto
-            requested = _requested_backend(backend)
-            requested === source_backend || throw(
-                ArgumentError(
-                    "cannot wrap $source_backend storage with backend=$requested; raw backend storage is wrapped without migration",
-                ),
-            )
-        end
-        return source_backend, true
+function _validate_native_wrap(::Type{T}, ::Type{S}, backend, vendor::Symbol) where {T,S}
+    if backend !== nothing && backend !== :auto
+        requested = _requested_backend(backend)
+        requested === vendor || throw(
+            ArgumentError(
+                "cannot wrap $vendor storage with backend=$requested; raw backend storage is wrapped without migration",
+            ),
+        )
     end
-    selected = _requested_backend(backend)
-    _require_backend(selected)
-    return selected, false
+    T === S || throw(
+        ArgumentError(
+            "raw $vendor storage has element type $S and cannot be converted to $T without copying",
+        ),
+    )
+    return nothing
 end
 
 function _construct_backend_array(
@@ -162,34 +160,20 @@ function _construct_backend_array(
     return MtlModArray{T,D}(values; kwargs...)
 end
 
+function _construct_modular_array(::Type{T}, values::AbstractArray; kwargs...) where {T}
+    return _construct_modular_array(T, values, _elementwise_native_root(values); kwargs...)
+end
+
 function _construct_modular_array(
     ::Type{T},
-    values::AbstractArray{S,D};
+    values::AbstractArray,
+    ::AbstractArray;
     backend = nothing,
-    modulus::Integer,
-    mod::Bool = true,
-    new_size = nothing,
-    storage = :default,
-    device = nothing,
-) where {T,S,D}
-    selected, is_backend_storage = _constructor_backend(values, backend)
-    if is_backend_storage && T !== S
-        throw(
-            ArgumentError(
-                "raw $selected storage has element type $S and cannot be converted to $T without copying",
-            ),
-        )
-    end
-    return _construct_backend_array(
-        Val(selected),
-        T,
-        values;
-        modulus,
-        mod = is_backend_storage ? false : mod,
-        new_size,
-        storage,
-        device,
-    )
+    kwargs...,
+) where {T}
+    selected = _requested_backend(backend)
+    _require_backend(selected)
+    return _construct_backend_array(Val(selected), T, values; kwargs...)
 end
 
 function GPUModArray(

@@ -313,6 +313,20 @@ _metal_exact2(f, left, right, modulus) =
                     @test generic isa G.MtlModMatrix{Float32}
                     @test Metal.device(parent(generic)) == device
                     @test G.default_backend() === :metal
+                    raw = parent(generic)
+                    native_view = transpose(view(raw, 1:2, 1:2))
+                    G.with_backend(:cuda) do
+                        wrapped = G.GPUModMatrix(native_view; modulus = 7)
+                        @test wrapped isa G.MtlModMatrix{Float32}
+                        @test parent(wrapped) === native_view
+                        @test size(wrapped) == size(native_view)
+                    end
+                    @test_throws ArgumentError G.GPUModMatrix(
+                        raw;
+                        modulus = 7,
+                        backend = :cuda,
+                    )
+                    @test_throws ArgumentError G.GPUModMatrix{Float16}(raw; modulus = 7)
                     zeros_array = zeros(
                         G.MtlModMatrix{Float32},
                         2,

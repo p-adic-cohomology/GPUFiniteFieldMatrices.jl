@@ -120,14 +120,13 @@ function _construct_cuda_storage(
     return GPUModArray{T,D,typeof(storage)}(storage, normalized_size, modulus)
 end
 
-function (::Type{CuModArray{T,D}})(
-    array::CUDA.CuArray{T,D,M};
-    modulus::Integer,
-    mod::Bool = false,
-    new_size = nothing,
+function _wrap_cuda_storage(
+    array::AbstractArray{T,D},
+    new_size,
+    modulus::Integer;
     storage = :default,
     device = nothing,
-) where {T,D,M}
+) where {T,D}
     requested_device = _cuda_device_index(device)
     _, dims, N = _cuda_factory_preflight(T, size(array), modulus, new_size)
     _cuda_storage_mode(storage)
@@ -143,25 +142,29 @@ function (::Type{CuModArray{T,D}})(
 end
 
 function (::Type{CuModArray{T,D}})(
-    array::SubArray{T,D,P};
+    array::Union{CUDA.CuArray{T,D},SubArray{T,D,<:CUDA.CuArray}};
     modulus::Integer,
     mod::Bool = false,
     new_size = nothing,
     storage = :default,
     device = nothing,
-) where {T,D,P<:CUDA.CuArray}
-    requested_device = _cuda_device_index(device)
-    _, dims, N = _cuda_factory_preflight(T, size(array), modulus, new_size)
-    _cuda_storage_mode(storage)
-    requested_device === nothing ||
-        requested_device ==
-        KernelInterface.device(KernelInterface.get_backend(array), _cuda_root(array)) ||
-        throw(
-            ArgumentError(
-                "raw CUDA storage belongs to a different device than the requested device",
-            ),
-        )
-    return _construct_cuda_storage(T, array, dims, N)
+) where {T,D}
+    return _wrap_cuda_storage(array, new_size, modulus; storage, device)
+end
+
+function FFM._construct_modular_array(
+    ::Type{T},
+    values::AbstractArray{S},
+    ::CUDA.CuArray;
+    backend = nothing,
+    modulus::Integer,
+    mod::Bool = true,
+    new_size = nothing,
+    storage = :default,
+    device = nothing,
+) where {T,S}
+    FFM._validate_native_wrap(T, S, backend, :cuda)
+    return _wrap_cuda_storage(values, new_size, modulus; storage, device)
 end
 
 function (::Type{CuModArray{T,D}})(
@@ -172,7 +175,7 @@ function (::Type{CuModArray{T,D}})(
     storage = :default,
     device = nothing,
 ) where {T,D,S}
-    requested_device = _cuda_device_index(device)
+    _cuda_device_index(device)
     source_backend = FFM._storage_backend(values)
     if source_backend !== nothing
         source_backend === Val(:cuda) || throw(
@@ -185,19 +188,7 @@ function (::Type{CuModArray{T,D}})(
                 "raw CUDA storage has element type $S and cannot be converted to $T without copying",
             ),
         )
-        _, logical_size, N = _cuda_factory_preflight(T, size(values), modulus, new_size)
-        _cuda_storage_mode(storage)
-        requested_device === nothing ||
-            requested_device == KernelInterface.device(
-                KernelInterface.get_backend(values),
-                _cuda_root(values),
-            ) ||
-            throw(
-                ArgumentError(
-                    "raw CUDA storage belongs to a different device than the requested device",
-                ),
-            )
-        return _construct_cuda_storage(T, values, logical_size, N)
+        return _wrap_cuda_storage(values, new_size, modulus; storage, device)
     end
     _cuda_storage_mode(storage)
     dims, logical_size, N = _cuda_factory_preflight(T, size(values), modulus, new_size)
