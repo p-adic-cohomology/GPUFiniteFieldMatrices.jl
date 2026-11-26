@@ -83,7 +83,7 @@ assertion_count = 174
 pass_count = 174
 skip_count = 0
 evidence = "test/CuModMatrix/inverse/test_portable_inverse_metal.jl"
-notes = "Packed PLUQ and factors, permutations, rank, determinant, invertibility, square PLUQ and augmented inverses, and rectangular one-sided inverses."
+notes = "Packed PLUQ and factors, permutations, rank, invertibility, square PLUQ and augmented inverses, and rectangular one-sided inverses."
 
 [[families]]
 name = "Portable tiny batches on Metal"
