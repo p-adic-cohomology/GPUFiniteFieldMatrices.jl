@@ -1,8 +1,12 @@
 const _DEFAULT_BACKEND = Ref{Symbol}(:auto)
 const _SCOPED_BACKEND = Base.ScopedValues.ScopedValue{Union{Nothing,Symbol}}(nothing)
 
-_backend_available(::Val) = false
 _backend_instance(::Val) = nothing
+
+function _backend_available(backend::Val)
+    instance = _backend_instance(backend)
+    return instance !== nothing && KernelInterface.functional(instance) === true
+end
 
 function _check_backend_symbol(backend::Symbol)
     backend in (:cuda, :metal) ||
@@ -44,13 +48,6 @@ function default_backend()
     selected === :auto || return selected
 
     return _auto_backend(_backend_available(Val(:cuda)), _backend_available(Val(:metal)))
-end
-
-function _backend_object(backend::Symbol = default_backend())
-    _check_backend_symbol(backend)
-    _backend_available(Val(backend)) ||
-        throw(ArgumentError("the selected $backend backend is not loaded and functional"))
-    return _backend_instance(Val(backend))
 end
 
 function _require_backend(backend::Symbol)

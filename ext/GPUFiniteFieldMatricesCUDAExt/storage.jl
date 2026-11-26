@@ -124,10 +124,9 @@ function _wrap_cuda_storage(
     array::AbstractArray{T,D},
     new_size,
     modulus::Integer;
-    storage = :default,
-    device = nothing,
+    storage,
+    requested_device,
 ) where {T,D}
-    requested_device = _cuda_device_index(device)
     _, dims, N = _cuda_factory_preflight(T, size(array), modulus, new_size)
     _cuda_storage_mode(storage)
     requested_device === nothing ||
@@ -149,7 +148,13 @@ function (::Type{CuModArray{T,D}})(
     storage = :default,
     device = nothing,
 ) where {T,D}
-    return _wrap_cuda_storage(array, new_size, modulus; storage, device)
+    return _wrap_cuda_storage(
+        array,
+        new_size,
+        modulus;
+        storage,
+        requested_device = _cuda_device_index(device),
+    )
 end
 
 function FFM._construct_modular_array(
@@ -164,7 +169,13 @@ function FFM._construct_modular_array(
     device = nothing,
 ) where {T,S}
     FFM._validate_native_wrap(T, S, backend, :cuda)
-    return _wrap_cuda_storage(values, new_size, modulus; storage, device)
+    return _wrap_cuda_storage(
+        values,
+        new_size,
+        modulus;
+        storage,
+        requested_device = _cuda_device_index(device),
+    )
 end
 
 function (::Type{CuModArray{T,D}})(
@@ -175,7 +186,7 @@ function (::Type{CuModArray{T,D}})(
     storage = :default,
     device = nothing,
 ) where {T,D,S}
-    _cuda_device_index(device)
+    requested_device = _cuda_device_index(device)
     source_backend = FFM._storage_backend(values)
     if source_backend !== nothing
         source_backend === Val(:cuda) || throw(
@@ -188,7 +199,7 @@ function (::Type{CuModArray{T,D}})(
                 "raw CUDA storage has element type $S and cannot be converted to $T without copying",
             ),
         )
-        return _wrap_cuda_storage(values, new_size, modulus; storage, device)
+        return _wrap_cuda_storage(values, new_size, modulus; storage, requested_device)
     end
     _cuda_storage_mode(storage)
     dims, logical_size, N = _cuda_factory_preflight(T, size(values), modulus, new_size)

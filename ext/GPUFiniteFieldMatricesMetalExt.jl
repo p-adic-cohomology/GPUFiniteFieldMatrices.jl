@@ -5,7 +5,7 @@ import LinearAlgebra
 import LinearAlgebra: I, UniformScaling
 import KernelInterface
 import GPUFiniteFieldMatrices
-import GPUFiniteFieldMatrices: _backend_available, _backend_instance
+import GPUFiniteFieldMatrices: _backend_instance
 import GPUFiniteFieldMatrices: _validate_backend_storage, _validate_storage_modulus
 import GPUFiniteFieldMatrices: _storage_modulus_limit
 import GPUFiniteFieldMatrices: GPUModArray, MtlModArray, MtlModMatrix, MtlModVector
@@ -14,7 +14,6 @@ import GPUFiniteFieldMatrices: identity_matrix, modulus, similar_with_modulus
 const FFM = GPUFiniteFieldMatrices
 const DEFAULT_TYPE = Float32
 
-_backend_available(::Val{:metal}) = Metal.functional()
 _backend_instance(::Val{:metal}) = Metal.MetalBackend()
 
 function _metal_device_index(device)

@@ -10,6 +10,7 @@ using SparseArrays: SparseArrays
 import GPUFiniteFieldMatrices
 import GPUFiniteFieldMatrices: GPUModArray, CuModArray, CuModMatrix, CuModVector
 import GPUFiniteFieldMatrices: KaratsubaArray
+import GPUFiniteFieldMatrices: _backend_instance
 import GPUFiniteFieldMatrices: PLUQ, PLUQOptions, ModulusMismatchError
 import GPUFiniteFieldMatrices: modulus, low_modulus, high_modulus, low_part, high_part
 import GPUFiniteFieldMatrices: sub!, mod!
@@ -43,6 +44,8 @@ import KernelInterface
 const FFM = GPUFiniteFieldMatrices
 const TILE_WIDTH = FFM.TILE_WIDTH
 const DEFAULT_TYPE = Float32
+
+_backend_instance(::Val{:cuda}) = CUDA.CUDABackend()
 
 @static if isdefined(CUDA, :cuBLAS)
     const _CUDA_BLAS = CUDA.cuBLAS
