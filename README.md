@@ -136,7 +136,7 @@ logical zeros after validation. Its default budget can be zero, while an explici
 
 ## Factorization and inverses
 
-Use a prime modulus for PLUQ, rank, determinant, and inversion.
+Use a prime modulus for PLUQ, rank, and inversion.
 `PLUQOptions(check_prime = true)` validates primality before GPU work. The
 inverse APIs require the modulus to fit in `Int32` as well as in the element
 type. Metal `Float32` supports square and rectangular PLUQ, square and
